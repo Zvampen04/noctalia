@@ -10,6 +10,8 @@ struct wl_output;
 struct xdg_popup;
 struct xdg_surface;
 struct zwlr_layer_surface_v1;
+class PopupGrabHost;
+class PopupSurfaceTestAccess;
 
 struct PopupSurfaceConfig {
   std::int32_t anchorX = 0;
@@ -58,9 +60,11 @@ public:
   static void handlePopupRepositioned(void* data, xdg_popup* popup, std::uint32_t token);
 
 private:
+  friend class PopupSurfaceTestAccess;
+
   void destroyRoleObjects();
-  // Decide whether to take xdg_popup_grab vs. enroll in the active focus_grab
-  // host. Sets m_enrolledInGrabHost when we registered with the host.
+  // Decide whether to take xdg_popup_grab or defer enrollment in the active
+  // focus_grab host until the popup has had a chance to map.
   void wireGrab();
   void unenrollFromGrabHost();
 
@@ -74,6 +78,7 @@ private:
   std::int32_t m_configuredX = 0;
   std::int32_t m_configuredY = 0;
   bool m_enrolledInGrabHost = false;
+  PopupGrabHost* m_pendingGrabHost = nullptr;
   // Set false by the destructor. The init roundtrip re-enters event dispatch and can
   // destroy this popup mid-init; a captured copy of this token lets init detect that
   // and avoid touching freed `this`.

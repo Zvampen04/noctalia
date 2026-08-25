@@ -4,8 +4,12 @@
 #include "shell/panel/panel_manager.h"
 #include "tests/test_check.h"
 #include "ui/controls/context_menu_popup.h"
+#include "wayland/hyprland/focus_grab_service.h"
+#include "wayland/hyprland/popup_grab_host.h"
+#include "wayland/popup_surface.h"
 #include "wayland/wayland_connection.h"
 
+#include <cstdint>
 #include <memory>
 
 class ContextMenuPopupTestAccess {
@@ -17,7 +21,39 @@ public:
   static void dismiss(ContextMenuPopup& popup) { popup.deferClose(); }
 };
 
+class WaylandConnectionTestAccess {
+public:
+  static FocusGrabService& installFocusGrabService(WaylandConnection& wayland) {
+    wayland.m_focusGrabService = std::make_unique<FocusGrabService>();
+    return *wayland.m_focusGrabService;
+  }
+};
+
+class PopupSurfaceTestAccess {
+public:
+  static void wireGrab(PopupSurface& popup, wl_surface* surface) {
+    popup.m_surface = surface;
+    popup.wireGrab();
+  }
+
+  static void clearSurface(PopupSurface& popup) { popup.m_surface = nullptr; }
+};
+
 namespace {
+
+  class RecordingPopupGrabHost final : public PopupGrabHost {
+  public:
+    void registerPopupSurface(wl_surface* surface) override {
+      ++registrations;
+      registeredSurface = surface;
+    }
+
+    void unregisterPopupSurface(wl_surface* /*surface*/) override { ++unregistrations; }
+
+    int registrations = 0;
+    int unregistrations = 0;
+    wl_surface* registeredSurface = nullptr;
+  };
 
   class PopupOwningPanel final : public Panel {
   public:
@@ -74,6 +110,29 @@ int main() {
   }
   drainDeferredCalls();
   TEST_CHECK(activations == 1);
+
+  // A Hyprland focus grab only accepts mapped surfaces. PopupSurface wires its
+  // role before the first map, so host enrollment must wait for the next main
+  // loop turn instead of being committed synchronously during initialization.
+  {
+    WaylandConnection popupWayland;
+    auto& focusGrabService = WaylandConnectionTestAccess::installFocusGrabService(popupWayland);
+    RecordingPopupGrabHost grabHost;
+    focusGrabService.setPopupGrabHost(&grabHost);
+
+    PopupSurface popup(popupWayland);
+    auto* fakeSurface = reinterpret_cast<wl_surface*>(static_cast<std::uintptr_t>(1));
+    PopupSurfaceTestAccess::wireGrab(popup, fakeSurface);
+    TEST_CHECK(grabHost.registrations == 0);
+
+    drainDeferredCalls();
+    TEST_CHECK(grabHost.registrations == 1);
+    TEST_CHECK(grabHost.registeredSurface == fakeSurface);
+
+    // Do not let the test double reach the real Wayland destroy path.
+    focusGrabService.setPopupGrabHost(nullptr);
+    PopupSurfaceTestAccess::clearSurface(popup);
+  }
 
   return 0;
 }

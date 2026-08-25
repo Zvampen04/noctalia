@@ -1,5 +1,6 @@
 #include "wayland/popup_surface.h"
 
+#include "core/deferred_call.h"
 #include "core/log.h"
 #include "wayland/hyprland/focus_grab_service.h"
 #include "wayland/hyprland/popup_grab_host.h"
@@ -69,8 +70,33 @@ void PopupSurface::wireGrab() {
     host = svc->popupGrabHost();
   }
   if (host != nullptr && m_surface != nullptr) {
-    host->registerPopupSurface(m_surface);
-    m_enrolledInGrabHost = true;
+    // Hyprland rejects a focus-grab surface until it is mapped. Popup roles are
+    // wired before the initial wl_surface commit, so registering synchronously
+    // here leaves the popup outside the effective whitelist: the first click
+    // clears the panel grab instead of reaching the popup. Enroll on the next
+    // main-loop turn, after the configure round-trip and first map opportunity.
+    m_pendingGrabHost = host;
+    const std::weak_ptr<bool> alive = m_alive;
+    auto* self = this;
+    DeferredCall::callLater([self, alive]() {
+      const auto token = alive.lock();
+      if (token == nullptr || !*token || self->m_surface == nullptr || self->m_pendingGrabHost == nullptr) {
+        return;
+      }
+
+      PopupGrabHost* currentHost = nullptr;
+      if (auto* svc = self->m_connection.focusGrabService(); svc != nullptr) {
+        currentHost = svc->popupGrabHost();
+      }
+      if (currentHost == nullptr || currentHost != self->m_pendingGrabHost) {
+        self->m_pendingGrabHost = nullptr;
+        return;
+      }
+
+      self->m_pendingGrabHost = nullptr;
+      currentHost->registerPopupSurface(self->m_surface);
+      self->m_enrolledInGrabHost = true;
+    });
     return;
   }
   if (m_config.grab && m_config.serial != 0 && m_connection.seat() != nullptr && m_popup != nullptr) {
@@ -79,6 +105,7 @@ void PopupSurface::wireGrab() {
 }
 
 void PopupSurface::unenrollFromGrabHost() {
+  m_pendingGrabHost = nullptr;
   if (!m_enrolledInGrabHost) {
     return;
   }

@@ -57,6 +57,7 @@ class FocusGrabService;
 struct DataControlOps;
 class TextInputService;
 class VirtualKeyboardService;
+class WaylandConnectionTestAccess;
 
 struct WaylandOutput {
   std::uint32_t name = 0;
@@ -287,6 +288,8 @@ public:
   bool recomputeConfiguredScale(WaylandOutput& out);
 
 private:
+  friend class WaylandConnectionTestAccess;
+
   void bindGlobal(wl_registry* registry, std::uint32_t name, const char* interface, std::uint32_t version);
   void bindClipboardService();
   void bindTextInputService();
