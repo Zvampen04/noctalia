@@ -1,6 +1,7 @@
 #pragma once
 
 #include "render/scene/node.h"
+#include "render/core/segment_contour.h"
 #include "shell/tooltip/tooltip_content.h"
 
 #include <array>
@@ -19,6 +20,7 @@ public:
   enum class HitShape : std::uint8_t {
     Rect,
     Circle,
+    Segment,
   };
 
   struct PointerData {
@@ -148,6 +150,13 @@ public:
   void setEnabled(bool enabled);
   [[nodiscard]] bool enabled() const noexcept { return m_enabled; }
   void setHitShape(HitShape shape);
+  void setSegmentHitContour(const SegmentContour& contour);
+  // Uses the painted contour's bounds in this area's local coordinate space.
+  // This lets a padded/shared capsule keep one exact slant while member hit
+  // outsets partition that painted shape.
+  void setSegmentHitContour(
+      const SegmentContour& contour, float shapeX, float shapeY, float shapeWidth, float shapeHeight
+  );
   [[nodiscard]] HitShape hitShape() const noexcept { return m_hitShape; }
 
   // Tooltip
@@ -222,6 +231,12 @@ private:
   bool m_propagateEvents = false;
   bool m_enabled = true;
   HitShape m_hitShape = HitShape::Rect;
+  SegmentContour m_segmentHitContour{};
+  float m_segmentHitX = 0.0F;
+  float m_segmentHitY = 0.0F;
+  float m_segmentHitWidth = 0.0F;
+  float m_segmentHitHeight = 0.0F;
+  bool m_segmentHitHasExplicitBounds = false;
   bool m_hovered = false;
   bool m_pressed = false;
   std::uint32_t m_pressedButton = 0;

@@ -99,6 +99,96 @@ int main() {
 
   {
     InputArea area;
+    area.setSize(40.0F, 20.0F);
+    area.setSegmentHitContour({.kind = SegmentContourKind::Powerline, .depth = 8.0F});
+    ok = expect(Node::hitTest(&area, 20.0F, 10.0F) == &area, "powerline center accepts input") && ok;
+    ok = expect(Node::hitTest(&area, 39.0F, 1.0F) == nullptr, "powerline cut corner rejects input") && ok;
+    area.setHitTestOutset({.right = 10.0F});
+    ok = expect(Node::hitTest(&area, 43.0F, 18.0F) == &area, "powerline outset follows extended ink") && ok;
+  }
+
+  {
+    Node root;
+    root.setSize(52.0F, 20.0F);
+    auto first = std::make_unique<InputArea>();
+    auto* firstPtr = first.get();
+    first->setPosition(8.0F, 0.0F);
+    first->setSize(8.0F, 20.0F);
+    first->setHitTestOutset({.left = 8.0F, .right = 14.0F});
+    first->setSegmentHitContour(
+        {.kind = SegmentContourKind::PowerlineStart, .depth = 8.0F}, -8.0F, 0.0F, 30.0F, 20.0F
+    );
+    auto second = std::make_unique<InputArea>();
+    auto* secondPtr = second.get();
+    second->setPosition(30.0F, 0.0F);
+    second->setSize(8.0F, 20.0F);
+    second->setHitTestOutset({.left = 8.0F, .right = 14.0F});
+    second->setSegmentHitContour(
+        {.kind = SegmentContourKind::PowerlineEnd, .depth = 8.0F}, -8.0F, 0.0F, 30.0F, 20.0F
+    );
+    root.addChild(std::move(first));
+    root.addChild(std::move(second));
+    ok = expect(Node::hitTest(&root, 24.0F, 1.0F) == secondPtr, "upper shared slope belongs to following segment") && ok;
+    ok = expect(Node::hitTest(&root, 24.0F, 19.0F) == firstPtr, "lower shared slope belongs to preceding segment") && ok;
+    ok = expect(Node::hitTest(&root, 21.0F, 1.0F) == firstPtr, "leading segment retains upper tip") && ok;
+    ok = expect(Node::hitTest(&root, 31.0F, 19.0F) == secondPtr, "following segment retains lower body") && ok;
+  }
+
+  {
+    Node root;
+    root.setSize(20.0F, 52.0F);
+    auto first = std::make_unique<InputArea>();
+    auto* firstPtr = first.get();
+    first->setPosition(0.0F, 8.0F);
+    first->setSize(20.0F, 8.0F);
+    first->setHitTestOutset({.top = 8.0F, .bottom = 14.0F});
+    first->setSegmentHitContour(
+        {.kind = SegmentContourKind::PowerlineStart, .depth = 8.0F, .vertical = true}, 0.0F, -8.0F, 20.0F, 30.0F
+    );
+    auto second = std::make_unique<InputArea>();
+    auto* secondPtr = second.get();
+    second->setPosition(0.0F, 30.0F);
+    second->setSize(20.0F, 8.0F);
+    second->setHitTestOutset({.top = 8.0F, .bottom = 14.0F});
+    second->setSegmentHitContour(
+        {.kind = SegmentContourKind::PowerlineEnd, .depth = 8.0F, .vertical = true}, 0.0F, -8.0F, 20.0F, 30.0F
+    );
+    root.addChild(std::move(first));
+    root.addChild(std::move(second));
+    ok = expect(Node::hitTest(&root, 1.0F, 24.0F) == secondPtr, "left vertical slope belongs to following segment") && ok;
+    ok = expect(Node::hitTest(&root, 19.0F, 24.0F) == firstPtr, "right vertical slope belongs to preceding segment") && ok;
+  }
+
+  {
+    Node root;
+    root.setSize(40.0F, 20.0F);
+    auto first = std::make_unique<InputArea>();
+    auto* firstPtr = first.get();
+    first->setPosition(8.0F, 0.0F);
+    first->setSize(8.0F, 20.0F);
+    first->setHitTestOutset({.left = 8.0F, .right = 4.0F});
+    first->setSegmentHitContour(
+        {.kind = SegmentContourKind::Powerline, .depth = 8.0F}, -8.0F, 0.0F, 40.0F, 20.0F
+    );
+    auto second = std::make_unique<InputArea>();
+    auto* secondPtr = second.get();
+    second->setPosition(28.0F, 0.0F);
+    second->setSize(8.0F, 20.0F);
+    second->setHitTestOutset({.left = 8.0F, .right = 4.0F});
+    second->setSegmentHitContour(
+        {.kind = SegmentContourKind::Powerline, .depth = 8.0F}, -28.0F, 0.0F, 40.0F, 20.0F
+    );
+    root.addChild(std::move(first));
+    root.addChild(std::move(second));
+    ok = expect(Node::hitTest(&root, 19.0F, 10.0F) == firstPtr, "first group member owns its retained slice") && ok;
+    ok = expect(Node::hitTest(&root, 21.0F, 10.0F) == secondPtr, "second group member owns its retained slice") && ok;
+    // A miss on both group members falls back to their rectangular parent.
+    ok = expect(Node::hitTest(&root, 1.0F, 19.0F) == &root, "leading painted cut falls back to the parent") && ok;
+    ok = expect(Node::hitTest(&root, 39.0F, 1.0F) == &root, "trailing painted cut falls back to the parent") && ok;
+  }
+
+  {
+    InputArea area;
     area.setSize(20.0F, 20.0F);
 
     int cancellations = 0;

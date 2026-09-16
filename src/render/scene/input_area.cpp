@@ -98,6 +98,23 @@ bool InputArea::acceptsButton(std::uint32_t button) const noexcept {
 void InputArea::setPropagateEvents(bool propagate) { m_propagateEvents = propagate; }
 void InputArea::setEnabled(bool enabled) { m_enabled = enabled; }
 void InputArea::setHitShape(HitShape shape) { m_hitShape = shape; }
+void InputArea::setSegmentHitContour(const SegmentContour& contour) {
+  m_segmentHitContour = contour;
+  m_segmentHitHasExplicitBounds = false;
+  m_hitShape = contour.kind == SegmentContourKind::None ? HitShape::Rect : HitShape::Segment;
+}
+
+void InputArea::setSegmentHitContour(
+    const SegmentContour& contour, float shapeX, float shapeY, float shapeWidth, float shapeHeight
+) {
+  m_segmentHitContour = contour;
+  m_segmentHitX = shapeX;
+  m_segmentHitY = shapeY;
+  m_segmentHitWidth = std::max(0.0F, shapeWidth);
+  m_segmentHitHeight = std::max(0.0F, shapeHeight);
+  m_segmentHitHasExplicitBounds = true;
+  m_hitShape = contour.kind == SegmentContourKind::None ? HitShape::Rect : HitShape::Segment;
+}
 
 bool InputArea::containsLocalPoint(float localX, float localY, bool includeHitOutset) const {
   if (m_hitShape == HitShape::Rect) {
@@ -105,6 +122,17 @@ bool InputArea::containsLocalPoint(float localX, float localY, bool includeHitOu
   }
 
   const HitTestOutset outset = includeHitOutset ? hitTestOutset() : HitTestOutset{};
+  if (m_hitShape == HitShape::Segment) {
+    if (localX < -outset.left || localX >= width() + outset.right
+        || localY < -outset.top || localY >= height() + outset.bottom) return false;
+    const float shapeX = m_segmentHitHasExplicitBounds ? m_segmentHitX : -outset.left;
+    const float shapeY = m_segmentHitHasExplicitBounds ? m_segmentHitY : -outset.top;
+    const float shapeWidth = m_segmentHitHasExplicitBounds ? m_segmentHitWidth : width() + outset.left + outset.right;
+    const float shapeHeight = m_segmentHitHasExplicitBounds ? m_segmentHitHeight : height() + outset.top + outset.bottom;
+    return segment_contour::contains(
+        shapeWidth, shapeHeight, localX - shapeX, localY - shapeY, m_segmentHitContour
+    );
+  }
   const float centerX = width() * 0.5F;
   const float centerY = height() * 0.5F;
   const float baseRadius = std::min(width(), height()) * 0.5F;
