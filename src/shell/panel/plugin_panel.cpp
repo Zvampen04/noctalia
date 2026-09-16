@@ -7,6 +7,7 @@
 #include "render/scene/node.h"
 #include "scripting/plugin_runtime_context.h"
 #include "shell/panel/panel_manager.h"
+#include "shell/wallpaper/panel/wallpaper_source_switch.h"
 #include "ui/builders.h"
 #include "ui/controls/context_menu_popup.h"
 #include "ui/controls/flex.h"
@@ -166,6 +167,11 @@ void PluginPanel::create() {
           },
       })
   );
+
+  if (m_entryId == wallpaper::kWallhavenPanel) {
+    flex->setGap(Style::spaceSm * contentScale());
+    flex->insertChildAt(0, wallpaper::sourceSwitch(true, contentScale()));
+  }
 
   setRoot(std::move(flex));
   m_treeDirty = true;

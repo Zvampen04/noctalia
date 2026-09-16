@@ -12,6 +12,7 @@
 #include "render/scene/input_area.h"
 #include "shell/panel/panel_manager.h"
 #include "shell/tooltip/tooltip_manager.h"
+#include "shell/wallpaper/panel/wallpaper_source_switch.h"
 #include "shell/wallpaper/panel/wallpaper_tile.h"
 #include "shell/wallpaper/wallpaper_paths.h"
 #include "theme/builtin_palettes.h"
@@ -399,6 +400,12 @@ void WallpaperPanel::create() {
       .align = FlexAlign::Stretch,
       .gap = Style::spaceSm * scale,
   });
+
+  if (m_config != nullptr
+      && std::ranges::find(m_config->config().plugins.enabled, "noctalia/wallhaven")
+          != m_config->config().plugins.enabled.end()) {
+    root->addChild(wallpaper::sourceSwitch(false, scale));
+  }
 
   auto toolbar = ui::row({
       .out = &m_toolbar,
