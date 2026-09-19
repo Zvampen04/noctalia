@@ -80,6 +80,12 @@ When AccountsService is available, Noctalia also writes the selected avatar to `
 
 The shortcut buttons are configured separately; see [Control Center shortcuts](/noctalia/control-center/shortcuts/).
 
+Home shows its compact media card according to `control_center.media.home_visibility`. In automatic mode, an enabled
+bar media widget suppresses the duplicate Home card; disabling or removing that bar widget lets the Home card return.
+Shortcut actions and their right-click destinations are listed in the shortcuts guide. Unsupported capabilities stay
+disabled or absent instead of presenting a control that cannot change state—for example, Monitor has no write control
+without a writable brightness device.
+
 Set `show_session_button = false` under `[control_center]` to hide the session-actions button in the Home tab header. This does not affect Home shortcuts configured with `type = "session"` or session widgets on the bar.
 
 ## Media
@@ -135,6 +141,12 @@ Weather configuration is documented under [Weather](/noctalia/services/weather/)
 ## Calendar
 
 The Calendar tab shows the month view and events from configured calendar accounts. Calendar accounts and sync behavior are documented under [Calendar](/noctalia/services/calendar/).
+
+On the compact Home calendar, wheel anywhere across the full week strip to move one week at a time. Click a day number
+to open the month view with that date selected; the selected month follows the clicked date even when the week crossed a
+month boundary. In the month view, wheel over the calendar card to move one month, click a day or its event dots to
+select it, and click the date heading to return to today. Event dots and the event list use the same shared calendar
+snapshot, including vdir changes detected while the panel is closed.
 
 Right-click a day to launch the application registered for the `text/calendar` MIME type. The Calendar panel closes
 after a successful launch.

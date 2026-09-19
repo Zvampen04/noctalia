@@ -55,6 +55,13 @@ play_sound      = true
 - `history_retention_hours = 0` (default) keeps notification history entries forever. Set to a positive integer (1–8760) to automatically remove entries older than that many hours from control-center history. Active on-screen toasts are never removed. Configure in **Settings → Notifications → History**.
 - `max_visible = 0` (default) fills all available vertical screen space with notification toasts. Set to a positive integer (1–20) to limit how many toasts are visible at once; excess toasts are queued off-screen and promoted when slots free up. Configure in **Settings → Notifications → Toasts**.
 
+When `[osd.activity]` routes notifications into a bar section or attached activity card, the same DND and filter result
+still decides whether the notification is eligible. The shared presenter shows one activity at a time: critical
+notifications preempt volume/brightness activity, which preempts normal and low-urgency notifications. Hover pauses the
+remaining timeout. Left-click invokes the default action when present and otherwise opens notification history;
+right-click dismisses it. If the configured bar or section is unavailable, the notification uses the standalone
+fallback without leaving a duplicate embedded card behind.
+
 ## Filtering
 
 Notifications can be filtered before toasts and sounds. External Freedesktop notifications can also be kept out of control-center history. Internal shell/plugin toasts use the same toast/sound filters, but they are never written to history (the save-history flag does not apply to them).

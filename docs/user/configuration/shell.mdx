@@ -18,6 +18,13 @@ sidebar:
 
 Global UI settings that apply across all shell surfaces.
 
+Settings keeps common choices in **Basic** and exposes target-specific values in **Advanced**. Basic theme and motion
+choices update the shared defaults. Advanced bar, section, widget, popup, and Control Center material overrides remain
+explicit and keep winning until their individual **Reset** or **Inherit** action removes them. Hiding Advanced settings
+does not discard those overrides. The Basic **Animation Speed** slider uses `0` as **Off**: this writes
+`shell.animation.enabled = false` while retaining the last positive speed. Selecting any positive stop writes the
+speed and re-enables motion together; the first positive stop persists as the schema minimum `0.1`.
+
 ```toml
 [storage]
 key_source = "secret-service" # secret-service | file
@@ -416,6 +423,12 @@ card opens the matching Audio or Brightness controls. For notifications, left-cl
 exists and otherwise opens notification history; right-click dismisses it. Hovering any routed activity pauses its
 transient timeout, and leaving resumes the remaining time. Section presentation uses the named section's existing
 bounds rather than opening a separate hover panel.
+
+The activity broker keeps one visible owner. Critical notifications take precedence over volume or brightness
+activity; device activity takes precedence over normal and low-urgency notifications. An interrupted item resumes if
+its remaining timeout is still valid. Do Not Disturb suppresses notifications whose policy is **Respect**; a matching
+notification filter with `bypass_dnd = true` remains eligible. If an embedded section disappears, Noctalia withdraws
+that presenter before using the standalone fallback, so the section and popup are not shown together.
 
 Each supported kind can override any part of the base route. Empty fields inherit the base value:
 

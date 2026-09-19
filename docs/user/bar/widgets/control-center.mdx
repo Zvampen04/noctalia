@@ -12,9 +12,27 @@ Opens the control center panel on click.
 | `glyph` | string | `"noctalia"` | Bar glyph name: Noctalia alias, Tabler icon name, or `U+` / `0x` codepoint |
 | `custom_image` | string | `""` | Path to a custom image displayed instead of the glyph. Leave empty to use the glyph |
 | `custom_image_colorize` | bool | `false` | When `true`, tint the custom image with the widget **Color** setting (same as the glyph fallback) |
+| `icon_source` | string | `"static"` | Glyph source: `static`, live `wifi`, or `system_updates` state |
+| `ring` | bool | `false` | Draw a progress ring around the icon |
+| `ring_source` | string | `"battery"` | Ring metric: `battery`, `ram`, `cpu`, or `gpu` |
+| `icon_size` | int | `0` | Explicit icon size in pixels (`0` uses the normal widget size) |
+
+The status source does not change the widget's actions: left-click still opens Control Center → Home, and inherited or
+explicit [widget actions](/noctalia/bar/actions/) still apply. `system_updates` watches update state only when the glyph
+is actually used; a `custom_image` has no update glyph to change. RAM, CPU, and GPU rings use the shared system monitor
+service, while the battery ring uses UPower. An unavailable metric is shown as empty rather than changing the click
+target.
 
 ```toml
 [widget.control-center]
 custom_image = "/path/to/image.png"
 custom_image_colorize = true
+```
+
+```toml
+[widget.control-center-status]
+type = "control-center"
+icon_source = "system_updates"
+ring = true
+ring_source = "ram"
 ```

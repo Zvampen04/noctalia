@@ -87,6 +87,44 @@ Multiple `[bar.*]` entries are supported - each is independently configured and 
 `reserve_space = true`, and the compositor still owns the final exclusive-zone arrangement. Names omitted from `order`
 are appended after the listed names.
 
+## Named sections and stable widget placements
+
+The legacy `start`, `center`, and `end` lists remain supported. For layouts with more groups, use any number of named
+sections. A section has a stable `id`, its own widget order and actions, and explicit anchor/alignment/offset fields:
+
+```toml
+[[bar.default.section]]
+id = "project"
+widgets = ["launcher", "workspaces"]
+anchor = "start"       # start | center | end
+alignment = "start"    # start | center | end
+layout_role = "start"  # free | start | center | end
+
+[[bar.default.section]]
+id = "status"
+widgets = ["network", "volume", "control-center"]
+anchor = "end"
+alignment = "end"
+layout_role = "end"
+```
+
+`layout_role = "free"` keeps the section's explicit geometry. A start/center/end role participates in the bar's
+alignment policy; several sections may share one role and retain their configured order and spacing. Per-monitor
+overrides may replace the section list for an output.
+
+The Advanced editor gives every placed widget a persistent identity separate from its type or display name. Reordering
+or moving a placement retains that identity; duplicating it creates a new one. The internal token is never shown as the
+module label. This lets two instances of the same widget keep different material, foreground, and custom-effect
+overrides after reorder or reload.
+
+Material resolution runs from theme and semantic role through bar, named section, then widget placement. **Inherit** or
+**Reset** removes only the selected field and reveals the broader value. Presets include the native flat, plateau,
+optical, and illustrated materials. Advanced may also import a bounded custom background-effect file for a supported
+target. It changes the rounded background plane, while Noctalia retains clipping, border, opacity, hit area, and
+foreground content. The file uses Noctalia's fragment-function subset rather than arbitrary GLSL. Fixed Quick Settings
+controls and persistent shortcut tiles are individual targets; dynamic Audio device/application rows and arbitrary
+nested plugin controls inherit their containing surface.
+
 ### Dead zone actions
 
 The **dead zone** is the bar margin outside the start/center/end widget sections - typically the inset created by `margin_ends`. It takes the same bindings bar widgets do, under `[bar.<name>.dead_zone.actions]`:
