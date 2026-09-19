@@ -354,6 +354,11 @@ namespace settings {
         paths.push_back(entry.path);
         if (!selectSetting->linkedPath.empty()) paths.push_back(selectSetting->linkedPath);
         actions->addChild(makeGroupedResetButton(paths));
+      } else if (const auto* sliderSetting = std::get_if<SliderSetting>(&entry.control);
+                 sliderSetting != nullptr && !sliderSetting->linkedPaths.empty()) {
+        auto paths = sliderSetting->linkedPaths;
+        paths.push_back(entry.path);
+        actions->addChild(makeGroupedResetButton(std::move(paths)));
       } else {
         actions->addChild(makeResetButton(entry.path));
       }
@@ -585,6 +590,7 @@ namespace settings {
   std::unique_ptr<Flex> SettingsControlFactory::makeSlider(
       double value, double minValue, double maxValue, double step, std::vector<std::string> path, bool integerValue,
       std::function<std::vector<std::pair<std::vector<std::string>, ConfigOverrideValue>>(double)> linkedCommit,
+      std::function<std::vector<std::pair<std::vector<std::string>, ConfigOverrideValue>>(double)> groupedCommit,
       std::string valueSuffix, SliderSetting::InvertSlot invertSlot, bool invertEnabled
   ) {
     auto& ctx = m_ctx;
@@ -633,10 +639,14 @@ namespace settings {
     });
     valueInputPtr->setValue(formatSliderValue(sliderPtr->value(), integerValue));
 
-    // Helper: commit either via single setOverride or as an atomic batch when linkedCommit
-    // returns extra overrides (cross-field constraints).
+    // groupedCommit replaces the primary write; linkedCommit augments it. The former
+    // supports display-only sentinels, while the latter handles cross-field constraints.
     const auto commit = [setOverride = ctx.setOverride, setOverrides = ctx.setOverrides, path, integerValue,
-                         linkedCommit](double v) {
+                         linkedCommit, groupedCommit](double v) {
+      if (groupedCommit) {
+        setOverrides(groupedCommit(v));
+        return;
+      }
       ConfigOverrideValue primary =
           integerValue ? ConfigOverrideValue{static_cast<std::int64_t>(std::lround(v))} : ConfigOverrideValue{v};
       if (linkedCommit) {

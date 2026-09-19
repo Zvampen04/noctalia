@@ -139,6 +139,11 @@ namespace settings {
     InvertSlot invertSlot = InvertSlot::None;
     bool invertEnabled = true; // only meaningful when invertSlot == Toggle
     std::string valueSuffix;
+    std::vector<std::vector<std::string>> linkedPaths;
+    // When set, replaces the primary-path write with one atomic batch. This lets
+    // a displayed sentinel map to valid persisted values without widening the schema.
+    std::function<std::vector<std::pair<std::vector<std::string>, ConfigOverrideValue>>(double committedValue)>
+        groupedCommit;
     // Optional: when set, called with the user's just-committed value and returns extra overrides
     // to commit atomically alongside it. Use for cross-field constraints (e.g. linked sliders).
     std::function<std::vector<std::pair<std::vector<std::string>, ConfigOverrideValue>>(double committedValue)>

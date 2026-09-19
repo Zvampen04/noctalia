@@ -944,10 +944,26 @@ namespace settings {
             curve.paths[i], coordinate, "bezier coordinates numeric curve", true));
       }
     }
+    SliderSetting animationSpeed{
+        cfg.shell.animation.enabled ? cfg.shell.animation.speed : 0.0F,
+        0.0F, noctalia::config::schema::kAnimationSpeedRange.max.value_or(4.0F),
+        noctalia::config::schema::kAnimationSpeedRange.step.value_or(0.05F), false};
+    animationSpeed.linkedPaths = {{"shell", "animation", "enabled"}};
+    animationSpeed.groupedCommit = [](double value) {
+      if (value <= 0.0) {
+        return std::vector<std::pair<std::vector<std::string>, ConfigOverrideValue>>{
+            {{"shell", "animation", "enabled"}, false}};
+      }
+      const double validSpeed = std::max(
+          value, static_cast<double>(noctalia::config::schema::kAnimationSpeedRange.min.value_or(0.1F)));
+      return std::vector<std::pair<std::vector<std::string>, ConfigOverrideValue>>{
+          {{"shell", "animation", "speed"}, validSpeed},
+          {{"shell", "animation", "enabled"}, true}};
+    };
     entries.push_back(makeEntry(
         SettingsSection::Appearance, "motion", tr("settings.schema.appearance.animation-speed.label"),
         tr("settings.schema.appearance.animation-speed.description"), {"shell", "animation", "speed"},
-        sliderFor(cfg.shell.animation.speed, noctalia::config::schema::kAnimationSpeedRange, false), "motion"
+        std::move(animationSpeed), "motion off global"
     ));
     entries.push_back(makeEntry(
         SettingsSection::Appearance, "borders", tr("settings.schema.appearance.button-borders.label"),

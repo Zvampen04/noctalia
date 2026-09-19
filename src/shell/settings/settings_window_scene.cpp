@@ -2108,6 +2108,9 @@ std::vector<std::vector<std::string>> SettingsWindow::currentPageResetPaths() co
     if (const auto* range = std::get_if<settings::RangeSliderSetting>(&entry.control)) {
       appendIfOverridden(range->highPath);
     }
+    if (const auto* slider = std::get_if<settings::SliderSetting>(&entry.control)) {
+      for (const auto& path : slider->linkedPaths) appendIfOverridden(path);
+    }
     if (const auto* select = std::get_if<settings::SelectSetting>(&entry.control)) {
       appendIfOverridden(select->linkedPath);
       for (const auto& path : select->linkedPaths) appendIfOverridden(path);

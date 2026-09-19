@@ -50,7 +50,7 @@ screen_filter_regex = ""             # screen-sharing app names to ignore in pri
 
 [shell.animation]
 enabled = true
-speed   = 1.0                       # 0.5 = 2× slower, 2.0 = 2× faster
+speed   = 1.0                       # Basic slider 0 maps to enabled=false and retains this positive value
 
 [shell.shadow]
 direction = "down"                  # center, up, down, left, right, up_left, up_right, down_left, down_right

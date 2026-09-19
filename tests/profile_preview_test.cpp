@@ -789,6 +789,26 @@ max = 4.0
   const std::vector<std::string> ownerSpeedPath{"plugin_settings", "test/motion", "speed"};
   const auto resolved = settings::pluginSettingRoute(service.config(), nativePath);
   check(resolved && resolved->path == ownerPath && resolved->value, "Native boolean did not resolve its active owner");
+  {
+    auto entries = settings::buildSettingsRegistry(service.config(), nullptr, nullptr);
+    const auto speedEntry = std::ranges::find_if(entries, [&](const auto& row) {
+      return row.path == nativeSpeedPath;
+    });
+    check(speedEntry != entries.end(), "Owned animation speed slider missing");
+    const auto& speed = std::get<settings::SliderSetting>(speedEntry->control);
+
+    auto offWrites = speed.groupedCommit(0.0);
+    check(settings::routePluginSettingWrites(service.config(), offWrites)
+            && offWrites == std::vector<std::pair<std::vector<std::string>, ConfigOverrideValue>>{
+                {ownerPath, false}},
+        "Speed 0 did not route through the compositor animation owner as disabled");
+
+    auto onWrites = speed.groupedCommit(1.5);
+    check(settings::routePluginSettingWrites(service.config(), onWrites)
+            && onWrites == std::vector<std::pair<std::vector<std::string>, ConfigOverrideValue>>{
+                {ownerSpeedPath, 1.5}, {ownerPath, true}},
+        "Positive speed did not route speed plus enabled through the compositor owner");
+  }
   const auto motion = [&] {
     auto entries = settings::buildSettingsRegistry(service.config(), nullptr, nullptr);
     settings::applyPluginSettingRoutes(service.config(), entries);
@@ -1477,6 +1497,47 @@ void durableCommitReceipt() {
   check(status(service).at("last_commit") == expected, "Cancel replaced the successful Save receipt");
 }
 
+void animationSpeedZeroRepresentation() {
+  Config cfg;
+  cfg.shell.animation.enabled = false;
+  cfg.shell.animation.speed = 1.75F;
+
+  const auto speedSlider = [](const Config& current) {
+    auto entries = settings::buildSettingsRegistry(current, nullptr, nullptr);
+    const auto entry = std::ranges::find_if(entries, [](const auto& row) {
+      return row.path == std::vector<std::string>{"shell", "animation", "speed"};
+    });
+    check(entry != entries.end(), "Animation speed slider is missing");
+    return std::get<settings::SliderSetting>(entry->control);
+  };
+
+  auto slider = speedSlider(cfg);
+  check(slider.value == 0.0 && slider.minValue == 0.0,
+      "Disabled animation config did not reload as visible speed 0");
+  check(slider.linkedPaths == std::vector<std::vector<std::string>>{{"shell", "animation", "enabled"}},
+      "Animation speed reset does not include the enabled representation");
+
+  auto writes = slider.groupedCommit(0.0);
+  check(writes == std::vector<std::pair<std::vector<std::string>, ConfigOverrideValue>>{
+      {{"shell", "animation", "enabled"}, false}},
+      "Speed 0 did not map exclusively to the existing disabled representation");
+  check(cfg.shell.animation.speed == 1.75F, "Displaying speed 0 destroyed the retained positive speed");
+
+  writes = slider.groupedCommit(2.25);
+  check(writes == std::vector<std::pair<std::vector<std::string>, ConfigOverrideValue>>{
+      {{"shell", "animation", "speed"}, 2.25},
+      {{"shell", "animation", "enabled"}, true}},
+      "Positive animation speed did not atomically persist speed and re-enable motion");
+
+  writes = slider.groupedCommit(0.05);
+  check(std::get<double>(writes.front().second) == 0.1,
+      "The first positive slider step escaped the persisted schema range");
+
+  cfg.shell.animation.enabled = true;
+  slider = speedSlider(cfg);
+  check(slider.value == 1.75, "Re-enabled animation config did not restore its retained positive speed");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1506,6 +1567,7 @@ int main(int argc, char** argv) {
            {"design token mutation validation", designTokenMutationValidation},
            {"corner-power profile and Input focus", cornerPowerProfileAndInputFocus},
            {"owned animation routing", ownedAnimationRouting},
+           {"animation speed zero representation", animationSpeedZeroRepresentation},
            {"deferred settings mutation lifetime", deferredSettingsMutationLifetime},
            {"exact material plane and appearance registry", exactMaterialPlaneAndSnapshotTransport},
            {"lock widget appearance ownership/transport", lockWidgetAppearanceOwnershipAndTransport},

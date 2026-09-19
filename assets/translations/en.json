@@ -1801,8 +1801,8 @@
       },
       "appearance": {
         "animation-speed": {
-          "description": "Speed multiplier for all animations",
-          "label": "Animation Speed"
+          "description": "Speed multiplier for all animations; 0 turns animations off",
+          "label": "Animation Speed (0 = Off)"
         },
         "animations": {
           "description": "Enable or disable UI animations",

@@ -208,6 +208,11 @@ namespace settings {
     if (const auto* range = std::get_if<RangeSliderSetting>(&entry.control)) {
       return configService.hasEffectiveOverride(range->highPath);
     }
+    if (const auto* slider = std::get_if<SliderSetting>(&entry.control)) {
+      return std::ranges::any_of(slider->linkedPaths, [&](const auto& path) {
+        return configService.hasEffectiveOverride(path);
+      });
+    }
     if (const auto* select = std::get_if<SelectSetting>(&entry.control)) {
       if (!select->linkedPath.empty() && configService.hasEffectiveOverride(select->linkedPath)) return true;
       return std::ranges::any_of(select->linkedPaths, [&](const auto& path) {
