@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="noctalia_material_v1">
+  <copyright>Copyright © 2026 Noctalia contributors. MIT license; see ../LICENSE.</copyright>
+  <interface name="noctalia_material_manager_v1" version="2">
+    <description summary="double-buffered optical material scenes">
+      A scene describes only its owning wl_surface. It never grants access to
+      other clients, textures, screenshots, global theme settings, or lock content.
+      The compositor may omit optical rendering during session lock and snapshots.
+    </description>
+    <request name="destroy" type="destructor"/>
+    <request name="get_surface">
+      <arg name="id" type="new_id" interface="noctalia_material_surface_v1"/>
+      <arg name="surface" type="object" interface="wl_surface"/>
+    </request>
+  </interface>
+  <interface name="noctalia_material_surface_v1" version="2">
+    <description summary="atomic logical material plane geometry">
+      At most one object may exist per wl_surface. set_scene replaces pending
+      scene state; the last valid pending scene becomes current with wl_surface
+      commit. An empty plane list clears effects. Destruction clears effects.
+      Payload is the bounded little-endian v5 codec in scene_descriptor.h:
+      at most 65536 bytes and 64 planes. All coordinates are logical surface
+      coordinates. Per-plane affine transform, clipping, radii, continuous corner power (2 to 10), concave corner
+      flags, material parameters, palette tint, opacity and semantic IDs are
+      explicit. Foreground pixels are composited after the optical planes.
+      Parent planes group ordinary controls. Explicit independent controls may
+      publish nested optical planes; each carries its optional rounded paint mask. Rejected payloads leave current and pending state intact.
+      Optical lens radius and mapping affect sampling only; painted radii,
+      mask coverage and input geometry remain independently owned.
+    </description>
+    <request name="destroy" type="destructor"/>
+    <request name="set_scene">
+      <description summary="bounded inline scene">Payload must not exceed 4080 bytes, including for version 1 clients.</description>
+      <arg name="serial" type="uint"/>
+      <arg name="payload" type="array"/>
+    </request>
+    <event name="applied"><arg name="serial" type="uint"/></event>
+    <event name="rejected">
+      <arg name="serial" type="uint"/><arg name="reason" type="uint"/>
+    </event>
+    <request name="set_scene_chunk" since="2">
+      <description summary="bounded atomic scene upload">
+        Each nonempty chunk has at most 3072 bytes. Total size is 1 to 65536.
+        Offset zero starts or replaces the single upload for this object.
+        Subsequent chunks must have the same serial and total size and exactly
+        the next byte offset. Invalid chunks discard the upload and emit rejected,
+        preserving valid pending/current state. Only a complete, valid descriptor
+        replaces pending state. A surface commit discards any incomplete upload.
+        set_scene also discards an incomplete upload. Surface destruction releases
+        upload state. The descriptor format remains v5; interface version does
+        not negotiate descriptor versions.
+      </description>
+      <arg name="serial" type="uint"/>
+      <arg name="total_size" type="uint"/>
+      <arg name="offset" type="uint"/>
+      <arg name="payload" type="array"/>
+    </request>
+    <enum name="reject_reason">
+      <entry name="invalid_descriptor" value="1"/>
+      <entry name="surface_gone" value="2"/>
+    </enum>
+  </interface>
+</protocol>

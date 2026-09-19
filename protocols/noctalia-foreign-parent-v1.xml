@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="noctalia_foreign_parent_v1">
+  <copyright>Copyright © 2026 Noctalia contributors. MIT license; see ../LICENSE.</copyright>
+  <interface name="noctalia_foreign_parent_manager_v1" version="1">
+    <description summary="authenticated portal X11 transient parents">
+      This protocol associates a native portal dialog with the requesting
+      application's X11 window. It grants no general parent, focus, or window
+      management authority. The compositor authenticates the Wayland peer as
+      the current Noctalia portal backend and checks the original broker-supplied
+      unique bus sender against authoritative XRes ownership of the parent.
+      Clients must not attach the child's initial buffer before the ready event.
+      Unsupported or unprovable sandbox/proxy ownership is rejected.
+    </description>
+    <enum name="error"><entry name="resource_limit" value="0" summary="too many outstanding parent leases"/></enum>
+    <request name="destroy" type="destructor"/>
+    <request name="get_x11_parent">
+      <arg name="id" type="new_id" interface="noctalia_foreign_parent_v1"/>
+      <arg name="child" type="object" interface="wl_surface"/>
+      <arg name="parent_xid" type="uint"/>
+      <arg name="request_sender" type="string" summary="original unique bus sender from authenticated broker request"/>
+      <arg name="modal" type="uint" summary="zero or one"/>
+    </request>
+  </interface>
+  <interface name="noctalia_foreign_parent_v1" version="1">
+    <description summary="bounded association lifetime">
+      Exactly one lease may exist per child wl_surface. The child must belong
+      to this client and be an unmapped xdg_toplevel. Ownership validation is
+      asynchronous and bounded; ready precedes mapping. Rejection, parent loss,
+      or child destruction makes the lease inert. Destroying the lease clears
+      only its own association and modal input restriction. Clients close the
+      dialog on rejection or parent_lost. The parent window is never closed.
+    </description>
+    <request name="destroy" type="destructor"/>
+    <event name="ready"/>
+    <event name="rejected"><arg name="reason" type="uint"/></event>
+    <event name="parent_lost"/>
+    <enum name="reject_reason">
+      <entry name="invalid_request" value="1"/>
+      <entry name="unverified_owner" value="2"/>
+      <entry name="unavailable" value="3"/>
+      <entry name="timeout" value="4"/>
+    </enum>
+  </interface>
+</protocol>

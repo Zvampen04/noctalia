@@ -28,12 +28,16 @@
     {
       overlays.default = final: prev: {
         noctalia = final.callPackage ./nix/package.nix { };
+        noctalia-protocols = final.callPackage ./nix/protocols.nix { };
+        noctalia-material-core = final.callPackage ./nix/material-core.nix { };
       };
 
       packages = forEachSystem (
         { pkgs, ... }:
         rec {
           default = pkgs.callPackage ./nix/package.nix { };
+          protocols = pkgs.callPackage ./nix/protocols.nix { };
+          material-core = pkgs.callPackage ./nix/material-core.nix { };
           # DEPRECATED: identical to `default`; kept for compat, warns on use.
           cuda = warn "noctalia: the `.#cuda` package output is deprecated and now identical to `.#default` (autoAddDriverRunpath is always applied); switch to `.#default`. This alias will be removed in the future." default;
         }
