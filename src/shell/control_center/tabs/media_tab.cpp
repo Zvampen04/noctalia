@@ -1,4 +1,8 @@
+#include "time/time_format.h"
 #include "shell/control_center/tabs/media_tab.h"
+#include "shell/control_center/control_center_width.h"
+
+#include "render/animation/motion_service.h"
 
 #include "config/config_service.h"
 #include "core/deferred_call.h"
@@ -11,11 +15,13 @@
 #include "render/core/renderer.h"
 #include "render/scene/node.h"
 #include "shell/control_center/tab.h"
+#include "shell/media_launcher_geometry.h"
 #include "shell/panel/panel_manager.h"
 #include "ui/builders.h"
 #include "ui/controls/context_menu.h"
 #include "ui/controls/context_menu_popup.h"
 #include "ui/visuals/audio_visualizer.h"
+#include "ui/visuals/fancy_audio_visualizer.h"
 
 #include <algorithm>
 #include <chrono>
@@ -40,9 +46,9 @@ namespace {
   constexpr float kMediaUnit = 36.0F;
 
   constexpr float kArtworkSize = kMediaUnit * 6;
-  constexpr float kMediaNowCardMinHeight = kMediaUnit * 11 + Style::spaceSm * 2;
-  constexpr float kMediaControlsHeight = kMediaUnit + Style::spaceXs;
-  constexpr float kMediaPlayPauseHeight = kMediaUnit + Style::spaceSm;
+  const auto kMediaNowCardMinHeight = []() -> float { return kMediaUnit * 11 + Style::spaceSm * 2; };
+  const auto kMediaControlsHeight = []() -> float { return kMediaUnit + Style::spaceXs; };
+  const auto kMediaPlayPauseHeight = []() -> float { return kMediaUnit + Style::spaceSm; };
   constexpr float kMediaArtworkMinHeight = kMediaUnit * 4;
   constexpr auto kNoActivePlayerGrace = std::chrono::milliseconds(2000);
   constexpr auto kTransientPositionRegressionWindow = std::chrono::milliseconds(1500);
@@ -77,7 +83,11 @@ MediaTab::MediaTab(
     : m_mpris(mpris), m_httpClient(httpClient), m_spectrum(spectrum), m_config(config), m_wayland(wayland),
       m_renderContext(renderContext) {}
 
-MediaTab::~MediaTab() { m_aliveGuard.reset(); }
+MediaTab::~MediaTab() {
+  m_motionConnection.disconnect();
+  if (m_spectrum && m_spectrumListenerId) m_spectrum->removeChangeListener(m_spectrumListenerId);
+  m_aliveGuard.reset();
+}
 
 void MediaTab::openPlayerMenu() {
   if (m_playerMenuPopup == nullptr || m_mpris == nullptr || m_playerMenuButton == nullptr) {
@@ -160,6 +170,7 @@ void MediaTab::openPlayerMenu() {
               PopupSurfaceParent{
                   .layerSurface = parentCtx->layerSurface,
                   .output = parentCtx->output,
+                  .materialSurface = std::string(anchor->materialSurfaceName()),
               },
           .pointerParentSurface = parentCtx->surface,
       }
@@ -187,13 +198,13 @@ std::unique_ptr<Flex> MediaTab::create() {
   auto nowCard = ui::column({
       .out = &m_nowCard,
       .gap = Style::spaceMd * scale,
-      .minHeight = kMediaNowCardMinHeight * scale,
+      .minHeight = kMediaNowCardMinHeight() * scale,
       .flexGrow = 1.0F,
       .configure = [scale, opacity = panelCardOpacity()](Flex& card) { applySectionCardStyle(card, scale, opacity); },
   });
 
   auto nowHeader = ui::row(
-      {.align = FlexAlign::Center,
+      {.out = &m_nowHeader, .align = FlexAlign::Center,
        .justify = FlexJustify::SpaceBetween,
        .gap = Style::spaceSm * scale,
        .minHeight = Style::controlHeightSm * scale},
@@ -227,6 +238,16 @@ std::unique_ptr<Flex> MediaTab::create() {
       })
   );
   nowCard->addChild(std::move(nowHeader));
+  nowCard->addChild(ui::button({
+      .out = &m_equalizerButton,
+      .text = "Audio equalizer",
+      .variant = ButtonVariant::Ghost,
+      .onClick = [guard = std::weak_ptr<void>(m_aliveGuard)] {
+        DeferredCall::callLater([guard] {
+          if (!guard.expired()) PanelManager::instance().openPanel("control-center", {.context = "audio"});
+        });
+      },
+  }));
 
   auto mediaStack = ui::column({
       .out = &m_mediaStack,
@@ -249,7 +270,7 @@ std::unique_ptr<Flex> MediaTab::create() {
 
   mediaStack->addChild(
       ui::column(
-          {.align = FlexAlign::Stretch, .gap = Style::spaceSm * scale},
+          {.out = &m_metadata, .align = FlexAlign::Stretch, .gap = Style::spaceSm * scale},
           ui::label({
               .out = &m_trackTitle,
               .text = i18n::tr("control-center.media.nothing-playing"),
@@ -310,6 +331,7 @@ std::unique_ptr<Flex> MediaTab::create() {
   );
 
   auto controls = ui::row({
+      .out = &m_controls,
       .align = FlexAlign::Center,
       .gap = Style::spaceMd * scale,
   });
@@ -319,8 +341,8 @@ std::unique_ptr<Flex> MediaTab::create() {
           .out = &m_repeatButton,
           .glyph = "repeat",
           .variant = ButtonVariant::Ghost,
-          .minWidth = kMediaControlsHeight * scale,
-          .minHeight = kMediaControlsHeight * scale,
+          .minWidth = kMediaControlsHeight() * scale,
+          .minHeight = kMediaControlsHeight() * scale,
           .padding = Style::spaceSm * scale,
           .radius = Style::scaledRadiusLg(scale),
           .onClick = [this]() {
@@ -343,8 +365,8 @@ std::unique_ptr<Flex> MediaTab::create() {
           .out = &m_prevButton,
           .glyph = "media-prev",
           .variant = ButtonVariant::Ghost,
-          .minWidth = kMediaControlsHeight * scale,
-          .minHeight = kMediaControlsHeight * scale,
+          .minWidth = kMediaControlsHeight() * scale,
+          .minHeight = kMediaControlsHeight() * scale,
           .padding = Style::spaceSm * scale,
           .radius = Style::scaledRadiusLg(scale),
           .onClick = [this]() {
@@ -365,8 +387,8 @@ std::unique_ptr<Flex> MediaTab::create() {
           .out = &m_playPauseButton,
           .glyph = "media-play",
           .variant = ButtonVariant::Primary,
-          .minWidth = kMediaPlayPauseHeight * scale,
-          .minHeight = kMediaPlayPauseHeight * scale,
+          .minWidth = kMediaPlayPauseHeight() * scale,
+          .minHeight = kMediaPlayPauseHeight() * scale,
           .padding = Style::spaceSm * scale,
           .radius = Style::scaledRadiusLg(scale),
           .onClick = [this]() {
@@ -387,8 +409,8 @@ std::unique_ptr<Flex> MediaTab::create() {
           .out = &m_nextButton,
           .glyph = "media-next",
           .variant = ButtonVariant::Ghost,
-          .minWidth = kMediaControlsHeight * scale,
-          .minHeight = kMediaControlsHeight * scale,
+          .minWidth = kMediaControlsHeight() * scale,
+          .minHeight = kMediaControlsHeight() * scale,
           .padding = Style::spaceSm * scale,
           .radius = Style::scaledRadiusLg(scale),
           .onClick = [this]() {
@@ -409,8 +431,8 @@ std::unique_ptr<Flex> MediaTab::create() {
           .out = &m_shuffleButton,
           .glyph = "shuffle",
           .variant = ButtonVariant::Ghost,
-          .minWidth = kMediaControlsHeight * scale,
-          .minHeight = kMediaControlsHeight * scale,
+          .minWidth = kMediaControlsHeight() * scale,
+          .minHeight = kMediaControlsHeight() * scale,
           .padding = Style::spaceSm * scale,
           .radius = Style::scaledRadiusLg(scale),
           .onClick = [this]() {
@@ -428,7 +450,7 @@ std::unique_ptr<Flex> MediaTab::create() {
   );
 
   auto controlsRow = ui::row({
-      .align = FlexAlign::Center,
+      .out = &m_controlsRow, .align = FlexAlign::Center,
       .justify = FlexJustify::Center,
       .gap = 0.0F,
       .fillWidth = true,
@@ -436,6 +458,23 @@ std::unique_ptr<Flex> MediaTab::create() {
   controlsRow->addChild(std::move(controls));
   mediaStack->addChild(std::move(controlsRow));
 
+  if (m_config && m_config->config().controlCenter.media.layout == MediaLayout::Compact) {
+    auto backdrop = ui::image({.out = &m_artBackdrop, .fit = ImageFit::Stretch,
+        .radius = 22.0F * scale});
+    backdrop->setParticipatesInLayout(false);
+    backdrop->setHitTestVisible(false);
+    backdrop->setZIndex(-1);
+    backdrop->setOpacity(m_config->config().controlCenter.media.backdropOpacity);
+    nowCard->addChild(std::move(backdrop));
+    m_metadata->addChild(ui::label({.out = &m_trackSource, .text = "",
+        .fontSize = 10.F * scale, .color = colorSpecFromRole(ColorRole::OnSurfaceVariant)}));
+    mediaStack->addChild(ui::label({.out = &m_elapsedLabel, .text = "0:00",
+        .fontSize = 10.0F * scale, .color = colorSpecFromRole(ColorRole::OnSurfaceVariant),
+        .participatesInLayout = false}));
+    mediaStack->addChild(ui::label({.out = &m_durationLabel, .text = "0:00",
+        .fontSize = 10.0F * scale, .color = colorSpecFromRole(ColorRole::OnSurfaceVariant),
+        .participatesInLayout = false}));
+  }
   nowCard->addChild(std::move(mediaStack));
   mediaColumn->addChild(std::move(nowCard));
 
@@ -468,6 +507,14 @@ std::unique_ptr<Flex> MediaTab::create() {
   visualizerSpectrum->setFlexGrow(1.0F);
   m_visualizerSpectrum = visualizerSpectrum.get();
   visualizerBody->addChild(std::move(visualizerSpectrum));
+  auto radial = std::make_unique<FancyAudioVisualizer>();
+  radial->setVisualizationMode(FancyAudioVisualizerMode::BarsRings);
+  radial->setPrimaryColor(colorSpecFromRole(ColorRole::Secondary));
+  radial->setSecondaryColor(colorSpecFromRole(ColorRole::Tertiary));
+  radial->setRotationSpeed(0.0F);
+  radial->setTime(0.0F);
+  m_visualizerRadial = radial.get();
+  visualizerBody->addChild(std::move(radial));
   visualizerColumn->addChild(std::move(visualizerBody));
   tab->addChild(std::move(mediaColumn));
   tab->addChild(std::move(visualizerColumn));
@@ -493,7 +540,130 @@ std::unique_ptr<Flex> MediaTab::create() {
     });
   }
 
+  m_motionConnection = MotionService::instance().changed().connect([this] {
+    syncComposition();
+    if (m_active) {
+      PanelManager::instance().requestUpdateOnly();
+      PanelManager::instance().requestRedraw();
+    }
+  });
+  syncComposition();
   return tab;
+}
+
+void MediaTab::syncComposition() {
+  const auto cfg = m_config ? m_config->config().controlCenter.media : ControlCenterConfig::MediaConfig{};
+  const bool compact = cfg.layout == MediaLayout::Compact;
+  const bool stacked = cfg.layout == MediaLayout::Stacked;
+  if (m_nowHeader) { m_nowHeader->setVisible(!compact); m_nowHeader->setParticipatesInLayout(!compact); }
+  for (auto* button : {m_repeatButton, m_shuffleButton}) {
+    if (button) { button->setVisible(!compact); button->setParticipatesInLayout(!compact); }
+  }
+  const bool motion = MotionService::instance().enabled();
+  const bool showVisualizer = !compact && motion && cfg.visualizer != MediaVisualizer::Off;
+  if (m_rootLayout) m_rootLayout->setDirection(stacked ? FlexDirection::Vertical : FlexDirection::Horizontal);
+  if (m_nowCard) m_nowCard->setMinHeight(stacked || compact ? 0.0F : kMediaNowCardMinHeight() * contentScale());
+  if (m_mediaColumn) m_mediaColumn->setFlexGrow(stacked ? 3.0F : 4.0F);
+  if (m_visualizerColumn) {
+    m_visualizerColumn->setFlexGrow(stacked ? 1.0F : 2.0F);
+    m_visualizerColumn->setVisible(showVisualizer);
+    m_visualizerColumn->setParticipatesInLayout(showVisualizer);
+  }
+  if (m_visualizerSpectrum) {
+    m_visualizerSpectrum->setVisible(motion && cfg.visualizer == MediaVisualizer::Bars);
+    m_visualizerSpectrum->setParticipatesInLayout(motion && cfg.visualizer == MediaVisualizer::Bars);
+  }
+  if (m_visualizerRadial) {
+    const bool fancy = cfg.visualizer == MediaVisualizer::Radial || cfg.visualizer == MediaVisualizer::Wave;
+    m_visualizerRadial->setVisualizationMode(cfg.visualizer == MediaVisualizer::Wave
+        ? FancyAudioVisualizerMode::Wave : FancyAudioVisualizerMode::BarsRings);
+    m_visualizerRadial->setVisible(motion && fancy);
+    m_visualizerRadial->setParticipatesInLayout(motion && fancy);
+  }
+  if (m_equalizerButton) {
+    m_equalizerButton->setVisible(cfg.equalizerAccess);
+    m_equalizerButton->setParticipatesInLayout(cfg.equalizerAccess);
+  }
+  syncSpectrumSubscription();
+}
+
+void MediaTab::syncSpectrumSubscription() {
+  if (!m_spectrum) return;
+  const auto mode = m_config ? m_config->config().controlCenter.media.visualizer : MediaVisualizer::Bars;
+  const bool wanted = m_active && m_rootLayout && MotionService::instance().enabled() && mode != MediaVisualizer::Off;
+  if (wanted && !m_spectrumListenerId) {
+    m_spectrumListenerId = m_spectrum->addChangeListener(kVisualizerBandCount, [this] {
+      if (!m_active || !MotionService::instance().enabled()) return;
+      PanelManager::instance().requestUpdateOnly();
+      PanelManager::instance().requestRedraw();
+      const auto currentMode = m_config ? m_config->config().controlCenter.media.visualizer : MediaVisualizer::Bars;
+      if (currentMode == MediaVisualizer::Bars && !m_spectrum->idle()) PanelManager::instance().requestFrameTick();
+    });
+  } else if (!wanted && m_spectrumListenerId) {
+    m_spectrum->removeChangeListener(m_spectrumListenerId);
+    m_spectrumListenerId = 0;
+  }
+}
+
+void MediaTab::layoutCompact(Renderer& renderer, float width, float height) {
+  const float s = contentScale();
+  m_rootLayout->setSize(width, height);
+  m_nowCard->setPadding((m_compactMini ? 10.0F : 16.0F) * s);
+  m_nowCard->setRadius(22.0F * s);
+  m_nowCard->setGap(0.0F);
+  m_rootLayout->layout(renderer);
+  const float w = std::max(1.0F, m_nowCard->width() - (m_compactMini ? 20.0F : 32.0F) * s);
+  const float h = std::max(1.0F, m_nowCard->height() - (m_compactMini ? 20.0F : 32.0F) * s);
+  const auto cfg = m_config->config().controlCenter.media;
+  const float art = std::min({static_cast<float>(cfg.artworkSize > 0 ? cfg.artworkSize : 116) * s, w * .36F, h});
+  const float textX = m_compactMini ? 0.0F : art + 18.0F * s;
+  m_artworkRow->setVisible(!m_compactMini);
+  m_trackAlbum->setVisible(!m_compactMini);
+  const float textW = std::max(1.0F, w - textX);
+  m_mediaStack->setSize(w, h);
+  for (const auto& child : m_mediaStack->children()) child->setParticipatesInLayout(false);
+  m_artworkRow->setPosition(0, 0);
+  m_artworkRow->setSize(art, art);
+  m_artwork->setSize(art, art);
+  m_artwork->setRadius(10.0F * s);
+  m_artworkRow->layout(renderer);
+  m_metadata->setPosition(textX, 0);
+  m_metadata->setSize(textW, 72.0F * s);
+  m_metadata->setGap(3.0F * s);
+  m_trackTitle->setFontSize((m_compactMini ? 16.0F : 20.0F) * s);
+  m_trackTitle->setFontWeight(FontWeight::Medium);
+  m_trackArtist->setFontSize(12.F * s); m_trackAlbum->setFontSize(10.F * s);
+  m_trackAlbum->setParticipatesInLayout(!m_compactMini);
+  if (m_trackSource) { m_trackSource->setVisible(!m_compactMini); m_trackSource->setParticipatesInLayout(!m_compactMini); m_trackSource->setMaxWidth(textW); m_trackSource->setMaxLines(1); }
+  for (auto* label : {m_trackTitle, m_trackArtist, m_trackAlbum}) {
+    label->setMaxWidth(textW); label->setMaxLines(1);
+  }
+  m_metadata->layout(renderer);
+  const float seekY = m_compactMini ? h - 16.0F * s : std::max(72.0F * s, h - 73.0F * s);
+  m_progressSlider->setPosition(textX, seekY);
+  m_progressSlider->setSize(textW, 18.0F * s);
+  m_progressSlider->setControlHeight(18.0F * s);
+  m_progressSlider->setTrackHeight(4.0F * s);
+  m_progressSlider->setThumbSize(6.0F * s);
+  m_progressSlider->layout(renderer);
+  const float controlsWidth = m_compactMini ? textW : std::min(textW, 170.0F * s);
+  m_controlsRow->setPosition(w - controlsWidth, h - (m_compactMini ? 52.0F : 40.0F) * s);
+  m_controlsRow->setSize(controlsWidth, (m_compactMini ? 36.0F : 40.0F) * s);
+  m_controls->setGap((m_compactMini ? 24.0F : 20.0F) * s);
+  for (auto* b : {m_prevButton, m_playPauseButton, m_nextButton}) {
+    const float side = (b == m_playPauseButton ? (m_compactMini ? 38.0F : 40.0F) : 24.0F) * s;
+    b->setMinWidth(side); b->setMaxWidth(side); b->setMinHeight(side); b->setMaxHeight(side);
+    b->setControlHeight(side); b->setGlyphSize(18.0F * s); b->setPadding(0, 0); b->setRadius(side / 2);
+  }
+  m_controlsRow->layout(renderer);
+  if (m_artBackdrop) { m_artBackdrop->setPosition(0, 0); m_artBackdrop->setSize(m_nowCard->width(), m_nowCard->height()); }
+  if (m_elapsedLabel) m_elapsedLabel->setVisible(!m_compactMini);
+  if (m_durationLabel) m_durationLabel->setVisible(!m_compactMini);
+  if (m_elapsedLabel) { m_elapsedLabel->setPosition(textX, seekY + 16.0F * s); m_elapsedLabel->layout(renderer); }
+  if (m_durationLabel) {
+    m_durationLabel->layout(renderer);
+    m_durationLabel->setPosition(w - m_durationLabel->width(), seekY + 16.0F * s);
+  }
 }
 
 void MediaTab::doLayout(Renderer& renderer, float contentWidth, float bodyHeight) {
@@ -502,6 +672,9 @@ void MediaTab::doLayout(Renderer& renderer, float contentWidth, float bodyHeight
   }
 
   const float scale = contentScale();
+  syncComposition();
+  const auto cfg = m_config ? m_config->config().controlCenter.media : ControlCenterConfig::MediaConfig{};
+  if (cfg.layout == MediaLayout::Compact) { layoutCompact(renderer, contentWidth, bodyHeight); return; }
   m_rootLayout->setSize(contentWidth, bodyHeight);
   m_rootLayout->layout(renderer);
 
@@ -518,26 +691,34 @@ void MediaTab::doLayout(Renderer& renderer, float contentWidth, float bodyHeight
   }
 
   if (m_artwork != nullptr) {
-    const float sideButtonSize = kMediaControlsHeight * scale;
-    const float playPauseButtonSize = kMediaPlayPauseHeight * scale;
-    const float sideGlyphSize = Style::fontSizeTitle * scale;
-    const float playPauseGlyphSize = (Style::fontSizeTitle + Style::spaceXs) * scale;
+    const auto controlsLayout = control_center_width::fittedMediaControls(mediaWidth,
+        kMediaControlsHeight() * scale, kMediaPlayPauseHeight() * scale, Style::spaceMd * scale);
+    const float sideButtonSize = controlsLayout.sideButton;
+    const float playPauseButtonSize = controlsLayout.playPauseButton;
+    const float sideGlyphSize = Style::fontSizeTitle * scale * controlsLayout.scale;
+    const float playPauseGlyphSize = (Style::fontSizeTitle + Style::spaceXs) * scale * controlsLayout.scale;
+    const float buttonPadding = Style::spaceSm * scale * controlsLayout.scale;
+    if (m_controls != nullptr) m_controls->setGap(controlsLayout.gap);
 
     for (auto* button : {m_repeatButton, m_prevButton, m_nextButton, m_shuffleButton}) {
       if (button != nullptr) {
         button->setMinWidth(sideButtonSize);
+        button->setMaxWidth(sideButtonSize);
         button->setMinHeight(sideButtonSize);
+        button->setMaxHeight(sideButtonSize);
         button->setGlyphSize(sideGlyphSize);
-        button->setPadding(Style::spaceSm * scale, Style::spaceSm * scale);
-        button->setRadius(Style::scaledRadiusLg(scale));
+        button->setPadding(buttonPadding, buttonPadding);
+        button->setRadius(std::min(Style::scaledRadiusLg(scale), sideButtonSize * 0.5F));
       }
     }
     if (m_playPauseButton != nullptr) {
       m_playPauseButton->setMinWidth(playPauseButtonSize);
+      m_playPauseButton->setMaxWidth(playPauseButtonSize);
       m_playPauseButton->setMinHeight(playPauseButtonSize);
+      m_playPauseButton->setMaxHeight(playPauseButtonSize);
       m_playPauseButton->setGlyphSize(playPauseGlyphSize);
-      m_playPauseButton->setPadding(Style::spaceSm * scale, Style::spaceSm * scale);
-      m_playPauseButton->setRadius(Style::scaledRadiusLg(scale));
+      m_playPauseButton->setPadding(buttonPadding, buttonPadding);
+      m_playPauseButton->setRadius(std::min(Style::scaledRadiusLg(scale), playPauseButtonSize * 0.5F));
     }
   }
 
@@ -560,11 +741,11 @@ void MediaTab::doLayout(Renderer& renderer, float contentWidth, float bodyHeight
     const float artWidth =
         std::max(1.0F, m_artworkRow->width() - (m_artworkRow->paddingLeft() + m_artworkRow->paddingRight()));
     const float artHeight = std::max(
-        kMediaArtworkMinHeight * scale,
+        cfg.layout == MediaLayout::Split && cfg.artworkSize == 0 ? kMediaArtworkMinHeight * scale : 1.0F,
         m_artworkRow->height() - (m_artworkRow->paddingTop() + m_artworkRow->paddingBottom())
     );
     // Media art is always presented as a square (album-art convention).
-    const float side = std::min(artWidth, artHeight);
+    const float side = shell::composition::artworkSide(artWidth, artHeight, static_cast<float>(cfg.artworkSize) * scale);
     m_artwork->setSize(side, side);
     m_artwork->setRadius(Style::scaledRadiusXl(scale));
     m_mediaStack->layout(renderer);
@@ -580,11 +761,18 @@ void MediaTab::doLayout(Renderer& renderer, float contentWidth, float bodyHeight
     const float spectrumWidth = std::max(1.0F, bodyWidth);
     const float spectrumHeight = std::max(1.0F, bodyHeightAvail);
     m_visualizerSpectrum->setSize(spectrumWidth, spectrumHeight);
+    if (m_visualizerRadial) {
+      const float side = std::min(spectrumWidth, spectrumHeight);
+      m_visualizerRadial->setSize(side, side);
+      m_visualizerBody->setAlign(FlexAlign::Center);
+      m_visualizerBody->setJustify(FlexJustify::Center);
+    }
     m_visualizerBody->layout(renderer);
   }
 }
 
 void MediaTab::doUpdate(Renderer& renderer) {
+  syncComposition();
   if (!m_active) {
     m_progressTimer.stop();
     return;
@@ -595,6 +783,9 @@ void MediaTab::doUpdate(Renderer& renderer) {
     }
   }
 
+  if (m_visualizerRadial && m_visualizerRadial->visible() && m_spectrum && m_spectrumListenerId) {
+    m_visualizerRadial->setValues(renderer.textureManager(), m_spectrum->values(m_spectrumListenerId));
+  }
   const auto active = m_mpris != nullptr ? m_mpris->activePlayer() : std::nullopt;
   const auto now = std::chrono::steady_clock::now();
   const bool hasPendingSeek = m_pendingSeekUs >= 0 && now < m_pendingSeekUntil;
@@ -619,6 +810,8 @@ void MediaTab::doUpdate(Renderer& renderer) {
 }
 
 void MediaTab::onFrameTick(float deltaMs) {
+  const auto mode = m_config ? m_config->config().controlCenter.media.visualizer : MediaVisualizer::Bars;
+  if (!MotionService::instance().enabled() || mode != MediaVisualizer::Bars) return;
   if (!m_active) {
     return;
   }
@@ -636,19 +829,7 @@ void MediaTab::onFrameTick(float deltaMs) {
 void MediaTab::setActive(bool active) {
   const bool becameActive = active && !m_active;
   m_active = active;
-  if (m_spectrum != nullptr) {
-    if (active && m_spectrumListenerId == 0) {
-      m_spectrumListenerId = m_spectrum->addChangeListener(kVisualizerBandCount, [this]() {
-        if (!m_active || m_spectrum->idle()) {
-          return;
-        }
-        PanelManager::instance().requestFrameTick();
-      });
-    } else if (!active && m_spectrumListenerId != 0) {
-      m_spectrum->removeChangeListener(m_spectrumListenerId);
-      m_spectrumListenerId = 0;
-    }
-  }
+  syncComposition();
   if (!active) {
     m_progressTimer.stop();
     m_positionSampleAt = {};
@@ -663,6 +844,7 @@ void MediaTab::setActive(bool active) {
 }
 
 void MediaTab::onClose() {
+  m_motionConnection.disconnect();
   m_progressTimer.stop();
   if (m_spectrum != nullptr) {
     if (m_spectrumListenerId != 0) {
@@ -671,11 +853,19 @@ void MediaTab::onClose() {
     }
   }
   m_active = false;
+  m_nowHeader = nullptr;
+  m_metadata = nullptr;
+  m_controlsRow = nullptr;
+  m_artBackdrop = nullptr;
+  m_elapsedLabel = nullptr;
+  m_durationLabel = nullptr;
   m_rootLayout = nullptr;
   m_mediaColumn = nullptr;
   m_visualizerColumn = nullptr;
   m_visualizerBody = nullptr;
   m_visualizerSpectrum = nullptr;
+  m_visualizerRadial = nullptr;
+  m_equalizerButton = nullptr;
   m_artwork = nullptr;
   m_artworkRow = nullptr;
   m_nowCard = nullptr;
@@ -689,6 +879,7 @@ void MediaTab::onClose() {
   m_trackTitle = nullptr;
   m_trackArtist = nullptr;
   m_trackAlbum = nullptr;
+  m_trackSource = nullptr;
   m_progressSlider = nullptr;
   m_prevButton = nullptr;
   m_playPauseButton = nullptr;
@@ -719,6 +910,7 @@ bool MediaTab::dismissTransientUi() {
 }
 
 void MediaTab::clearArt(Renderer& renderer) {
+  if (m_artBackdrop) m_artBackdrop->clear(renderer);
   if (m_artwork != nullptr) {
     m_artwork->clear(renderer);
   }
@@ -880,11 +1072,12 @@ void MediaTab::refresh(Renderer& renderer) {
       m_pendingSeekUs = -1;
     }
 
+    if (m_trackSource) m_trackSource->setText(player.identity);
     m_trackTitle->setText(player.title.empty() ? player.identity : player.title);
     m_trackArtist->setText(joinArtists(player.artists).empty() ? player.identity : joinArtists(player.artists));
     if (m_trackAlbum != nullptr) {
       m_trackAlbum->setText(player.album);
-      m_trackAlbum->setVisible(!player.album.empty());
+      m_trackAlbum->setVisible(!m_compactMini && !player.album.empty());
     }
 
     const std::string resolvedArtUrl = effectiveArtUrl(player);
@@ -909,6 +1102,7 @@ void MediaTab::refresh(Renderer& renderer) {
       } else {
         kLog.debug(R"(artwork loaded url="{}" path="{}")", resolvedArtUrl, artPath);
         loaded = true;
+        if (m_artBackdrop) (void)m_artBackdrop->setSourceFile(renderer, artPath, 8, true, true);
       }
 
       // Only lock this URL once we actually have an image.
@@ -943,9 +1137,19 @@ void MediaTab::refresh(Renderer& renderer) {
       m_progressSlider->setValue(nextValue);
     }
     m_syncingProgress = false;
+    if (m_elapsedLabel) m_elapsedLabel->setText(formatClockTime(displayPositionUs / 1000000));
+    if (m_durationLabel) m_durationLabel->setText(formatClockTime(trackLengthUs / 1000000));
 
     m_playPauseButton->setGlyph(playPauseGlyph(player.playbackStatus));
     m_playPauseButton->setVariant(ButtonVariant::Primary);
+    if (m_config && m_config->config().controlCenter.media.layout == MediaLayout::Compact) {
+      Button::ButtonPalette colors;
+      colors.normal = {colorSpecFromRole(ColorRole::Primary, .12F), clearColorSpec(), colorSpecFromRole(ColorRole::OnSurface)};
+      colors.hover = {colorSpecFromRole(ColorRole::Primary, .22F), clearColorSpec(), colorSpecFromRole(ColorRole::OnSurface)};
+      colors.pressed = {colorSpecFromRole(ColorRole::Primary, .32F), clearColorSpec(), colorSpecFromRole(ColorRole::OnSurface)};
+      colors.disabled = {clearColorSpec(), clearColorSpec(), colorSpecFromRole(ColorRole::OnSurfaceVariant, .5F)};
+      m_playPauseButton->setCustomPalette(colors);
+    }
     if (m_prevButton != nullptr) {
       m_prevButton->setEnabled(player.canGoPrevious);
     }
@@ -975,6 +1179,9 @@ void MediaTab::refresh(Renderer& renderer) {
   m_positionSampleAt = {};
   m_trackTitle->setText(i18n::tr("control-center.media.nothing-playing"));
   m_trackArtist->setText(i18n::tr("control-center.media.start-playback"));
+  if (m_trackSource) m_trackSource->setText("");
+  if (m_elapsedLabel) m_elapsedLabel->setText("0:00");
+  if (m_durationLabel) m_durationLabel->setText("0:00");
   if (m_trackAlbum != nullptr) {
     m_trackAlbum->setText("");
     m_trackAlbum->setVisible(false);

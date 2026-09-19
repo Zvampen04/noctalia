@@ -31,9 +31,9 @@ namespace {
     return !workspace.occupied && !workspace.active && !workspace.urgent;
   }
 
-  constexpr float kWorkspaceGap = Style::spaceXs;
-  constexpr float kWorkspacePillDefaultHeight = Style::baseGlyphSize;
-  constexpr float kWorkspaceAnimDurationMs = static_cast<float>(Style::animNormal);
+  const auto kWorkspaceGap = []() -> float { return Style::spaceXs; };
+  const auto kWorkspacePillDefaultHeight = []() -> float { return Style::baseGlyphSize; };
+  const auto kWorkspaceAnimDurationMs = []() -> float { return static_cast<float>(Style::animNormal); };
 
   [[nodiscard]] constexpr float workspaceLabelFontSize(bool minimal) {
     return minimal ? Style::fontSizeBody : Style::fontSizeMini;
@@ -444,9 +444,9 @@ void WorkspacesWidget::rebuild(Renderer& renderer) {
     }
   }
 
-  const float gap = kWorkspaceGap * m_contentScale;
+  const float gap = kWorkspaceGap() * m_contentScale;
   const float labelFontSize = workspaceLabelFontSize(isMinimal()) * fontScale();
-  const float pillHeight = std::round(kWorkspacePillDefaultHeight * m_contentScale * m_pillScale);
+  const float pillHeight = std::round(kWorkspacePillDefaultHeight() * m_contentScale * m_pillScale);
   // Active and inactive labels share the configured weight: a heavier weight selects a different
   // face whose digits sit at a different height.
   const FontWeight configuredFontWeight = labelFontWeight();
@@ -836,7 +836,7 @@ void WorkspacesWidget::recalculateItemMetrics(
 ) {
   const std::string label = workspaceLabel(workspace, displayIndex);
   const float labelFontSize = workspaceLabelFontSize(isMinimal()) * fontScale();
-  const float pillHeight = std::round(kWorkspacePillDefaultHeight * m_contentScale * m_pillScale);
+  const float pillHeight = std::round(kWorkspacePillDefaultHeight() * m_contentScale * m_pillScale);
   const float baseSize = std::round(pillHeight);
   const float padding = isMinimal() ? (Style::spaceXs * m_contentScale) : (baseSize * 0.6F);
   const FontWeight configuredFontWeight = labelFontWeight();
@@ -1000,7 +1000,7 @@ void WorkspacesWidget::startAnimation() {
   requestFrameTick();
   requestRedraw();
   m_animId = mgr->animate(
-      0.0F, 1.0F, kWorkspaceAnimDurationMs, Easing::EaseOutCubic,
+      0.0F, 1.0F, kWorkspaceAnimDurationMs(), Easing::EaseOutCubic,
       [this](float t) {
         for (auto& item : m_items) {
           item.currentWidth = std::lerp(item.fromWidth, item.targetWidth, t);
@@ -1116,6 +1116,7 @@ void WorkspacesWidget::applyItemLayout(Item& it) {
       it.indicator->setPosition(dotX, dotY);
       it.indicator->setFrameSize(dotSize, dotSize);
       it.indicator->setRadius(dotSize * 0.5F);
+      it.indicator->setCornerPower(2.0F);
     } else {
       it.indicator->setPosition(0.0F, 0.0F);
       it.indicator->setFrameSize(itemW, itemH);
@@ -1268,7 +1269,7 @@ float WorkspacesWidget::focusedPillIconSize() const noexcept {
 }
 
 float WorkspacesWidget::focusedPillDotSize() const noexcept {
-  const float pillHeight = std::round(kWorkspacePillDefaultHeight * m_contentScale * m_pillScale);
+  const float pillHeight = std::round(kWorkspacePillDefaultHeight() * m_contentScale * m_pillScale);
   return std::max(4.0F * m_contentScale, std::round(pillHeight * 0.28F));
 }
 

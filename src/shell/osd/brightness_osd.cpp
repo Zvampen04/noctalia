@@ -16,13 +16,14 @@ namespace {
     return "brightness-high";
   }
 
-  OsdContent makeBrightnessContent(float brightness) {
+  OsdContent makeBrightnessContent(float brightness, std::function<void(float)> setProgress = {}) {
     const int percent = static_cast<int>(std::round(std::max(0.0F, brightness) * 100.0F));
     return OsdContent{
         .kind = OsdKind::Brightness,
         .icon = brightnessIconName(brightness),
         .value = std::to_string(percent) + "%",
         .progress = std::clamp(brightness, 0.0F, 1.0F),
+        .setProgress = std::move(setProgress),
     };
   }
 
@@ -104,7 +105,10 @@ void BrightnessOsd::onBrightnessChanged(const BrightnessService& service) {
   }
 
   if (m_overlay != nullptr) {
-    m_overlay->show(makeBrightnessContent(changed->brightness));
+    auto setProgress = [service = m_service, displayId = changed->id](float value) {
+      if (service != nullptr) service->setBrightness(displayId, value);
+    };
+    m_overlay->show(makeBrightnessContent(changed->brightness, std::move(setProgress)));
   }
 }
 
@@ -112,5 +116,8 @@ void BrightnessOsd::showValue(float brightness) {
   if (m_overlay == nullptr) {
     return;
   }
-  m_overlay->show(makeBrightnessContent(brightness));
+  auto setProgress = [service = m_service](float value) {
+    if (service != nullptr) service->setAllBrightness(value);
+  };
+  m_overlay->show(makeBrightnessContent(brightness, std::move(setProgress)));
 }

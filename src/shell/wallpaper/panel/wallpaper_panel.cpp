@@ -55,7 +55,7 @@ namespace {
   constexpr float kMinTileWidth = 180.0F;
   constexpr float kMonitorSelectMinWidth = 136.0F;
   constexpr float kFavoriteSelectMinWidth = 168.0F;
-  constexpr float kFavoritesMetaRowGap = Style::spaceSm;
+  const auto kFavoritesMetaRowGap = []() -> float { return Style::spaceSm; };
   constexpr float kTileAspect = 0.78F; // height / width, leaves room for label under widescreen thumb
 
   [[nodiscard]] std::size_t themeModeSegmentIndex(ThemeMode mode) {
@@ -601,7 +601,7 @@ void WallpaperPanel::create() {
   auto favoritesOptions = ui::row({
       .out = &m_favoritesOptionsColumn,
       .align = FlexAlign::Center,
-      .gap = kFavoritesMetaRowGap * scale,
+      .gap = kFavoritesMetaRowGap() * scale,
       .fillWidth = true,
   });
 

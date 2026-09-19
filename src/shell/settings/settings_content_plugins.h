@@ -4,10 +4,12 @@
 #include "scripting/plugin_manager.h"
 
 #include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 class Flex;
@@ -20,6 +22,7 @@ namespace scripting {
 namespace settings {
 
   class SettingsControlFactory;
+  struct SettingEntry;
 
   // Data + actions for the Plugins settings section. Populated by SettingsWindow
   // from the PluginManager; the section is fully custom (no registry entries).
@@ -67,12 +70,31 @@ namespace settings {
   // Render the Plugins section into `content` when ctx.selectedSection == "plugins".
   void addSettingsPlugins(Flex& content, SettingsPluginsContext ctx);
 
+  struct PluginSettingsTab {
+    std::string id, pluginId, value, label, glyph, nativeSection;
+    bool presetManaged = false;
+  };
+  [[nodiscard]] std::vector<PluginSettingsTab> pluginSettingsTabs(const Config& cfg);
+  std::vector<std::string> presetNativeSections(const Config& cfg);
+  void addPresetActions(Flex& body, const Config& cfg, SettingsControlFactory& factory,
+                        std::string_view section, float scale);
+  bool pluginOwnsSetting(const Config& cfg, const std::vector<std::string>& path);
+
+  struct PluginSettingRoute { std::vector<std::string> path; bool value = false; };
+  [[nodiscard]] std::optional<PluginSettingRoute> pluginSettingRoute(const Config& cfg, const std::vector<std::string>& path);
+  // UI-only routing; the backend's acknowledged native mirror bypasses this adapter.
+  bool routePluginSettingWrites(const Config& cfg,
+      std::vector<std::pair<std::vector<std::string>, ConfigOverrideValue>>& writes);
+  void routePluginSettingResets(const Config& cfg, std::vector<std::vector<std::string>>& paths);
+  void applyPluginSettingRoutes(const Config& cfg, std::vector<SettingEntry>& entries);
+
+
   // True when the plugin exposes anything the settings editor can show.
   [[nodiscard]] bool pluginHasSettings(const scripting::PluginManifest& manifest);
 
-  void buildPluginSettingsEditor(
+  bool buildPluginSettingsEditor(
       Flex& body, const Config& cfg, SettingsControlFactory& factory, const std::string& pluginId,
-      const scripting::PluginManifest& manifest, bool showAdvanced, float scale
+      const scripting::PluginManifest& manifest, bool showAdvanced, float scale, std::string_view tab = {}
   );
 
 } // namespace settings

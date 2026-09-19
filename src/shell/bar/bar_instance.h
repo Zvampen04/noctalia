@@ -6,11 +6,13 @@
 #include "render/scene/input_dispatcher.h"
 #include "render/scene/node.h"
 #include "shell/bar/widget.h"
+#include "shell/bar/bar_island_morph_geometry.h"
 #include "shell/panel/attached_panel_context.h"
 #include "ui/signal.h"
 #include "wayland/layer_surface.h"
 
 #include <cstdint>
+#include <array>
 #include <memory>
 #include <optional>
 #include <unordered_map>
@@ -18,7 +20,11 @@
 
 class Box;
 class Flex;
+class Glyph;
+class Label;
 class Node;
+class ProgressBar;
+class Slider;
 
 struct BarCapsuleRun {
   Node* shell = nullptr;
@@ -42,6 +48,30 @@ struct BarCapsuleRun {
   float accordionProgress = 0.0F; // 0 = collapsed, 1 = fully expanded
 };
 
+struct DynamicBarSection {
+  BarSectionConfig config;
+  Node* slot = nullptr;
+  Flex* content = nullptr;
+  Box* background = nullptr;
+  Box* inputEnvelope = nullptr;
+  Box* shadow = nullptr;
+  std::vector<std::unique_ptr<Widget>> widgets;
+  std::vector<BarCapsuleRun> capsuleRuns;
+  noctalia::bar::WidgetActionBindings bindings;
+  AttachedPanelSource compactSource;
+  AttachedPanelSource hoverSource;
+  InputArea* activityRoot = nullptr;
+  Box* activityBackground = nullptr;
+  Node* activityContent = nullptr;
+  Glyph* activityGlyph = nullptr;
+  Label* activityTitle = nullptr;
+  Label* activityValue = nullptr;
+  ProgressBar* activityProgress = nullptr;
+  Slider* activitySlider = nullptr;
+  bool activityMotionEnabled = false;
+  std::uint64_t activitySerial = 0;
+};
+
 struct BarInstance {
   std::uint32_t outputName = 0;
   wl_output* output = nullptr;
@@ -63,6 +93,7 @@ struct BarInstance {
   // Gestures for the parts of the bar no widget covers. The sink is never mounted in the scene; it
   // is used only for its scroll-detent accumulator, so dead-zone scrolling quantizes like a widget.
   noctalia::bar::WidgetActionBindings deadZoneBindings;
+  std::array<noctalia::bar::WidgetActionBindings, 3> laneBindings;
   InputArea deadZoneAxisSink;
   float hideOpacity = 1.0F;
   // bar-hide/toggle IPC on non-autohide bars: release compositor exclusive zone until bar-show (v4 isVisible=false).
@@ -78,6 +109,9 @@ struct BarInstance {
 
   // Bar background, shadow, and layout sections (start/center/end along main axis)
   Box* bg = nullptr;
+  // Retained lane surfaces; toggling section backgrounds does not replace widget trees.
+  std::array<Box*, 3> sectionBackgrounds{};
+  std::array<Box*, 3> sectionShadows{};
   Box* shadow = nullptr;
   Node* shadowLeftClip = nullptr;
   Node* shadowRightClip = nullptr;
@@ -100,6 +134,7 @@ struct BarInstance {
   std::vector<BarCapsuleRun> startCapsuleRuns;
   std::vector<BarCapsuleRun> centerCapsuleRuns;
   std::vector<BarCapsuleRun> endCapsuleRuns;
+  std::vector<DynamicBarSection> dynamicSections;
 
   // Maps each widget's root node to its Widget so hover-change events resolve to the owning widget.
   std::unordered_map<const Node*, Widget*> widgetByRoot;
@@ -107,4 +142,9 @@ struct BarInstance {
 
   Signal<>::ScopedConnection paletteConn;
   std::optional<AttachedPanelGeometry> attachedPanelGeometry;
+  // Output of the current attached-panel reflow, in contentClip-local main-axis
+  // coordinates. Paint, blur and input consume the same retained extents.
+  std::array<AttachedPanelSource, 3> compactPanelSources{};
+  std::array<AttachedPanelSource, 3> hoveredPanelSources{};
+  std::optional<std::array<bar_island_morph::Extent, 3>> islandMorphExtents;
 };

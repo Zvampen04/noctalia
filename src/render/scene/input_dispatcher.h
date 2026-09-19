@@ -57,6 +57,7 @@ public:
   [[nodiscard]] TabFocusSnapshot captureTabFocus() const;
   void restoreTabFocus(TabFocusSnapshot snapshot);
   [[nodiscard]] bool cycleTabFocus(bool reverse);
+  [[nodiscard]] bool moveSpatialFocus(int dx, int dy);
   [[nodiscard]] bool cycleTabFocusInSubtree(Node* subtree, bool reverse);
   [[nodiscard]] InputArea* inputAreaAt(float x, float y);
   [[nodiscard]] InputArea* firstTabFocusUnder(Node* subtree) const;

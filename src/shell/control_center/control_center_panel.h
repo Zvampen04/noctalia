@@ -84,11 +84,12 @@ public:
   void onClose() override;
   [[nodiscard]] bool dismissTransientUi() override;
   [[nodiscard]] bool isContextActive(std::string_view context) const override;
+  [[nodiscard]] std::string_view activeContext() const noexcept override { return tabKey(m_activeTab); }
   [[nodiscard]] bool handleGlobalKey(std::uint32_t sym, std::uint32_t modifiers, bool pressed, bool preedit) override;
   [[nodiscard]] bool deferExternalRefresh() const override;
   [[nodiscard]] bool deferPointerRelayout() const override;
   [[nodiscard]] float preferredWidth() const override;
-  [[nodiscard]] float preferredHeight() const override { return scaled(520.0F); }
+  [[nodiscard]] float preferredHeight() const override;
   [[nodiscard]] PanelPlacement panelPlacement() const noexcept override;
   [[nodiscard]] bool showsSidebar() const noexcept { return m_showSidebar; }
 
@@ -145,7 +146,7 @@ private:
   void updateTabChrome(TabId tab);
   void applyTabContainerVisibility(TabId activeTab);
   void layoutTabContainers(float bodyWidth, float bodyHeight);
-  void layoutFullSidebarWidth(Renderer& renderer);
+  void layoutFullSidebarWidth(Renderer& renderer, float panelWidth);
   void resetTabContainerTransforms();
   void startTabTransition(TabId from, TabId to);
   void finishTabTransition();
@@ -164,6 +165,8 @@ private:
 
   // Tab instances (long-lived, survive panel open/close cycles)
   std::array<std::unique_ptr<Tab>, kTabCount> m_tabs;
+  std::unique_ptr<Tab> m_alternateHome;
+  bool m_usingCompactHome = false;
 
   // Panel UI structure (rebuilt each create(), nulled in onClose())
   Flex* m_rootLayout = nullptr;

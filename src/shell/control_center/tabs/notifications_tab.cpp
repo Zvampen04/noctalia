@@ -48,7 +48,7 @@ namespace {
     const float baseRadius = Style::radiusMd * (iconSize / kHistoryIconReferenceSize);
     return std::min(iconSize * 0.5F, Style::scaledRadius(baseRadius, localScale));
   }
-  constexpr float kNotificationActionButtonSize = Style::controlHeightSm;
+  const auto kNotificationActionButtonSize = []() -> float { return Style::controlHeightSm; };
 
   std::string historyActionLabel(std::string_view actionKey, std::string_view actionLabel) {
     if (!StringUtils::isBlank(actionLabel)) {
@@ -252,7 +252,7 @@ namespace {
 
     const float iconPx = kHistoryIconSize * scale;
     const float iconColumn = iconPx + Style::spaceSm * scale;
-    const float actionButtonSize = kNotificationActionButtonSize * scale;
+    const float actionButtonSize = kNotificationActionButtonSize() * scale;
     const float actionButtonsGap = Style::spaceXs * scale;
     const float headerActionsWidth =
         actionButtonSize + (metrics.canExpand ? (actionButtonsGap + actionButtonSize) : 0.0F);
@@ -481,8 +481,8 @@ namespace {
           .glyph = std::string(glyph),
           .glyphSize = Style::fontSizeBody * scale,
           .variant = ButtonVariant::Ghost,
-          .minWidth = kNotificationActionButtonSize * scale,
-          .minHeight = kNotificationActionButtonSize * scale,
+          .minWidth = kNotificationActionButtonSize() * scale,
+          .minHeight = kNotificationActionButtonSize() * scale,
           .padding = Style::spaceXs * scale,
           .radius = Style::scaledRadiusMd(scale),
       });
@@ -735,6 +735,13 @@ std::unique_ptr<Flex> NotificationsTab::create() {
       )
   );
 
+  if (m_embedded) {
+    m_filter->setVisible(false); m_filter->setParticipatesInLayout(false);
+    m_emptyCard->setAlign(FlexAlign::Start); m_emptyCard->setPadding(0.F); m_emptyCard->clearFill(); m_emptyCard->clearBorder();
+    m_emptyTitle->setFontWeight(FontWeight::Normal); m_emptyTitle->setFontSize(12.F * scale);
+    m_emptyTitle->setColor(colorSpecFromRole(ColorRole::OnSurfaceVariant));
+    m_emptyBody->setVisible(false); m_emptyBody->setParticipatesInLayout(false);
+  }
   return tab;
 }
 

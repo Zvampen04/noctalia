@@ -4,6 +4,8 @@
 
 namespace noctalia::config {
 
+  inline constexpr std::int64_t kControlCenterMinimumWidth = 320;
+
   inline constexpr std::int64_t kClipboardHistoryMinEntries = 10;
   inline constexpr std::int64_t kClipboardHistoryDefaultEntries = 100;
   inline constexpr std::int64_t kClipboardHistoryMaxEntries = 10000;

@@ -134,6 +134,7 @@ private:
   void samplingLoop();
   void logDetectedSources();
   void releaseGpuReaders();
+  void wakeSamplingLoop();
 
   struct MemData {
     std::uint64_t totalKb{0};
@@ -180,8 +181,6 @@ private:
 
   mutable std::mutex m_configMutex;
   SystemConfig::MonitorConfig m_pollConfig;
-  std::chrono::steady_clock::duration m_historyInterval{std::chrono::seconds(1)};
-
   mutable std::mutex m_statsMutex;
   SystemStats m_latest;
   std::array<SystemStats, kHistorySize> m_history{};

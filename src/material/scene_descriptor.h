@@ -1,14 +1,16 @@
 #pragma once
+#include "custom_effect_resource.h"
 #include "material.h"
+#include <algorithm>
 #include <bit>
 #include <string>
 #include <string_view>
 #include <vector>
 
 namespace noctalia::material {
-// v5 wire coordinates are logical wl_surface coordinates, before output scale,
+// v5/v6/v7 wire coordinates are logical wl_surface coordinates, before output scale,
 // output transform and canvas projection. No handles, PIDs or device pixels.
-inline constexpr std::uint32_t kSceneVersion = 5;
+inline constexpr std::uint32_t kLegacySceneVersion = 5, kSceneVersion = 6, kLeasedSceneVersion = 7;
 inline constexpr std::size_t kMaxSceneBytes = 65536, kMaxScenePlanes = 64;
 struct SceneRect {
   float x = 0, y = 0, width = 0, height = 0;
@@ -19,6 +21,14 @@ struct SceneRoundedClip {
   float radius=0;
   float cornerPower=2;
   bool operator==(const SceneRoundedClip&) const = default;
+};
+struct SceneCustomEffect {
+  CustomEffectTransportDigest transportDigest{};
+  std::uint32_t abi = kCustomEffectAbi;
+  float sampleRadius = 0;
+  std::array<std::array<float,4>,8> parameters{};
+  bool staged = true;
+  bool operator==(const SceneCustomEffect&) const = default;
 };
 struct ScenePlane {
   std::uint32_t group = 0;
@@ -34,11 +44,15 @@ struct ScenePlane {
   std::array<float, 4> tint{0, 0, 0, 1};
   float opacity = 1;
   Parameters parameters;
+  std::optional<SceneCustomEffect> customEffect;
   bool operator==(const ScenePlane&) const = default;
 };
 struct SceneDescriptor {
   float width = 0, height = 0;
   std::vector<ScenePlane> planes;
+  // Codec v7 only. Zero is a staged/native descriptor; a nonzero token names
+  // one granted surface lease. Tokens never authorize older codec versions.
+  std::uint32_t leaseToken = 0;
   bool operator==(const SceneDescriptor&) const = default;
 };
 inline bool sceneIdentifier(std::string_view id) {
@@ -74,6 +88,13 @@ inline bool validateScene(const SceneDescriptor& scene) {
     for (float n : p.insets) if (!range(n, 0, 32768)) return false;
     for (float n : p.tint) if (!range(n, 0, 1)) return false;
     if (static_cast<unsigned>(p.parameters.primitive) > 3) return false;
+    if (p.customEffect) {
+      const auto& effect=*p.customEffect;
+      if (effect.abi!=kCustomEffectAbi || !range(effect.sampleRadius,0,256)
+          || effect.transportDigest==CustomEffectTransportDigest{}) return false;
+      for(const auto& vector : effect.parameters) for(float n : vector)
+        if (!range(n,-1024,1024)) return false;
+    }
 #define MATERIAL_FIELD(member, key, initial, low, high, step, label, group) \
     if (!range(p.parameters.member, std::string_view(#member) == "lighting.direction.z" ? 0.001F : low, high)) return false;
 #include "fields.def"
@@ -86,6 +107,7 @@ struct Writer {
   std::vector<std::uint8_t> data;
   void integer(std::uint32_t n) { for (unsigned i = 0; i < 4; ++i) data.push_back(static_cast<std::uint8_t>(n >> (i * 8))); }
   void number(float n) { integer(std::bit_cast<std::uint32_t>(n)); }
+  void raw(std::span<const std::uint8_t> bytes) { data.insert(data.end(),bytes.begin(),bytes.end()); }
   void string(std::string_view s) { integer(static_cast<std::uint32_t>(s.size())); data.insert(data.end(), s.begin(), s.end()); }
 };
 struct Reader {
@@ -99,6 +121,11 @@ struct Reader {
     return n;
   }
   float number() { return std::bit_cast<float>(integer()); }
+  template<std::size_t N> std::array<std::uint8_t,N> raw() {
+    std::array<std::uint8_t,N> value{};
+    if(offset+N>data.size()) {good=false;return value;}
+    std::copy_n(data.begin()+offset,N,value.begin());offset+=N;return value;
+  }
   std::string string() {
     const auto count = integer();
     if (!good || count > 64 || offset + count > data.size()) { good = false; return {}; }
@@ -108,13 +135,33 @@ struct Reader {
   }
 };
 } // namespace scene_wire
-inline std::vector<std::uint8_t> encodeScene(const SceneDescriptor& scene) {
-  if (!validateScene(scene)) return {};
+inline std::optional<std::uint32_t> sceneWireVersion(std::span<const std::uint8_t> bytes) {
+  if (bytes.size() < 8 || bytes.size() > kMaxSceneBytes) return std::nullopt;
+  scene_wire::Reader r{bytes};
+  if (r.integer() != 0x4d53434e) return std::nullopt;
+  const auto version = r.integer();
+  if (!r.good || (version != kLegacySceneVersion && version != kSceneVersion
+      && version != kLeasedSceneVersion)) return std::nullopt;
+  return version;
+}
+// Automatic mode preserves v5 for scenes without custom effects. A v3 sender
+// explicitly requests v6 for staged/active effect handshakes.
+inline std::vector<std::uint8_t> encodeScene(const SceneDescriptor& scene,std::uint32_t version=0) {
+  if(!version) {
+    version=kLegacySceneVersion;
+    for(const auto& plane:scene.planes) if(plane.customEffect){version=kSceneVersion;break;}
+  }
+  if (!validateScene(scene) || (version != kLegacySceneVersion && version != kSceneVersion
+      && version != kLeasedSceneVersion)) return {};
+  if (version == kLegacySceneVersion)
+    for (const auto& plane : scene.planes) if (plane.customEffect) return {};
+  if (version < kLeasedSceneVersion && scene.leaseToken != 0) return {};
   scene_wire::Writer w;
   w.integer(0x4d53434e); // NCSM in little-endian byte order
-  w.integer(kSceneVersion);
+  w.integer(version);
   w.number(scene.width); w.number(scene.height);
   w.integer(static_cast<std::uint32_t>(scene.planes.size()));
+  if (version >= kLeasedSceneVersion) w.integer(scene.leaseToken);
   for (const auto& p : scene.planes) {
     w.integer(p.group); w.string(p.role); w.string(p.surface);
     w.number(p.width); w.number(p.height);
@@ -135,6 +182,14 @@ inline std::vector<std::uint8_t> encodeScene(const SceneDescriptor& scene) {
 #include "fields.def"
 #undef MATERIAL_FIELD
     w.integer(p.parameters.illustration.seed);
+    if(version>=kSceneVersion) {
+      w.integer(p.customEffect.has_value());
+      if(p.customEffect) {
+        const auto& effect=*p.customEffect;w.raw(effect.transportDigest);w.integer(effect.abi);w.number(effect.sampleRadius);
+        for(const auto& vector : effect.parameters) for(float n : vector) w.number(n);
+        w.integer(effect.staged);
+      }
+    }
   }
   return w.data.size() <= kMaxSceneBytes ? std::move(w.data) : std::vector<std::uint8_t>{};
 }
@@ -142,10 +197,14 @@ inline std::vector<std::uint8_t> encodeScene(const SceneDescriptor& scene) {
 inline std::optional<SceneDescriptor> decodeScene(std::span<const std::uint8_t> bytes) {
   if (bytes.size() > kMaxSceneBytes) return std::nullopt;
   scene_wire::Reader r{bytes};
-  if (r.integer() != 0x4d53434e || r.integer() != kSceneVersion) return std::nullopt;
+  if (r.integer() != 0x4d53434e) return std::nullopt;
+  const auto version=r.integer();
+  if (version != kLegacySceneVersion && version != kSceneVersion && version != kLeasedSceneVersion)
+    return std::nullopt;
   SceneDescriptor scene;
   scene.width = r.number(); scene.height = r.number();
   const auto count = r.integer();
+  if (version >= kLeasedSceneVersion) scene.leaseToken = r.integer();
   if (!r.good || count > kMaxScenePlanes) return std::nullopt;
   for (std::uint32_t i = 0; i < count && r.good; ++i) {
     ScenePlane p;
@@ -169,6 +228,14 @@ inline std::optional<SceneDescriptor> decodeScene(std::span<const std::uint8_t> 
 #include "fields.def"
 #undef MATERIAL_FIELD
     p.parameters.illustration.seed = r.integer();
+    if(version>=kSceneVersion) {
+      const auto hasEffect=r.integer();if(hasEffect>1) return std::nullopt;
+      if(hasEffect) {
+        SceneCustomEffect effect;effect.transportDigest=r.raw<kCustomEffectTransportDigestBytes>();effect.abi=r.integer();effect.sampleRadius=r.number();
+        for(auto& vector : effect.parameters) for(float& n : vector) n=r.number();
+        const auto staged=r.integer();if(staged>1) return std::nullopt;effect.staged=staged;p.customEffect=effect;
+      }
+    }
     scene.planes.push_back(std::move(p));
   }
   if (!r.good || r.offset != bytes.size() || !validateScene(scene)) return std::nullopt;

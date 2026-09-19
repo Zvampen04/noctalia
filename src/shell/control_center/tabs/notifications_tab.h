@@ -25,12 +25,14 @@ class NotificationsTab : public Tab {
 public:
   NotificationsTab(NotificationManager* notifications, CompositorPlatform* platform);
   ~NotificationsTab() override;
+  void setEmbedded(bool embedded) noexcept { m_embedded = embedded; }
 
   std::unique_ptr<Flex> create() override;
   std::unique_ptr<Flex> createHeaderActions() override;
   void onClose() override;
 
 private:
+  bool m_embedded = false;
   void onPanelCardOpacityChanged(float opacity) override;
   friend class NotificationHistoryAdapter;
 

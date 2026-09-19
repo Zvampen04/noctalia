@@ -8,6 +8,7 @@
 #include "render/render_target.h"
 
 #include <GLES2/gl2.h>
+#include <algorithm>
 #include <array>
 #include <charconv>
 #include <chrono>
@@ -401,6 +402,7 @@ void GlesRenderBackend::endFrame(RenderTarget& target) {
     // context loss is detected separately via graphicsResetStatus(). Skip this
     // frame instead of killing the shell.
     kLog.warn("eglSwapBuffers failed ({}); skipping frame", eglErrorDetail(eglGetError()));
+    dispatchCustomEffectStatusChanges();
     return;
   }
   const float ms = elapsedSince(swapStart);
@@ -408,6 +410,18 @@ void GlesRenderBackend::endFrame(RenderTarget& target) {
       ms, "eglSwapBuffers took {:.1F}ms ({}x{} logical, {}x{} buffer)", ms, target.logicalWidth(),
       target.logicalHeight(), target.bufferWidth(), target.bufferHeight()
   );
+  dispatchCustomEffectStatusChanges();
+}
+
+void GlesRenderBackend::dispatchCustomEffectStatusChanges() {
+  auto pending=std::move(m_pendingCustomEffectStatus);m_pendingCustomEffectStatus.clear();
+  if(!m_customEffectStatusChanged)return;
+  const auto callback=m_customEffectStatusChanged;
+  for(const auto& stableId:pending) {
+    try{callback(stableId);}catch(const std::exception& error){
+      kLog.warn("custom effect status callback failed: {}",error.what());
+    }
+  }
 }
 
 RenderGraphicsResetStatus GlesRenderBackend::graphicsResetStatus() {
@@ -584,7 +598,63 @@ void GlesRenderBackend::drawRect(
     const Mat3& transform
 ) {
   m_rectProgram.ensureInitialized();
+  m_customEffects.collectUnused();
+  std::optional<CustomEffectCompileStatus> statusBefore;
+  std::string customStableId;
+  if(style.customBackground&&style.customBackground->asset) {
+    customStableId=style.customBackground->asset->stableId;statusBefore=m_customEffects.status(customStableId);
+    if (m_customEffectConsumerSurface != 0) m_frameCustomEffectConsumers.insert(customStableId);
+  }
+  const bool customDrawn=style.customBackground
+      && m_customEffects.draw(surfaceWidth, surfaceHeight, width, height, style, transform);
+  if(!customStableId.empty()) {
+    const auto statusAfter=m_customEffects.status(customStableId);
+    if(statusBefore!=statusAfter && std::ranges::find(m_pendingCustomEffectStatus,customStableId)==m_pendingCustomEffectStatus.end())
+      m_pendingCustomEffectStatus.push_back(customStableId);
+  }
+  if (customDrawn) {
+    // The custom function replaces only the body. The ordinary renderer keeps
+    // borders and contour layers above it; foreground children are separate nodes.
+    auto outline = style;
+    outline.customBackground.reset();
+    outline.fillMode = FillMode::None;
+    outline.fill.a = 0.0F;
+    outline.material.reset();
+    outline.materialPlane = false;
+    outline.liquidGlass = false;
+    if (outline.borderWidth > 0.0F || std::ranges::any_of(
+            outline.contourBorderLayers, [](const auto& layer) { return layer.width > 0.0F; }))
+      m_rectProgram.draw(surfaceWidth, surfaceHeight, width, height, outline, transform);
+    return;
+  }
   m_rectProgram.draw(surfaceWidth, surfaceHeight, width, height, style, transform);
+}
+
+void GlesRenderBackend::beginCustomEffectConsumerFrame(const void* surfaceOwner) {
+  m_customEffectConsumerSurface = reinterpret_cast<CustomEffectConsumers::SurfaceId>(surfaceOwner);
+  m_frameCustomEffectConsumers.clear();
+}
+
+void GlesRenderBackend::endCustomEffectConsumerFrame() {
+  if (m_customEffectConsumerSurface == 0) return;
+  for (const auto& stableId :
+       m_customEffectConsumers.update(m_customEffectConsumerSurface, std::move(m_frameCustomEffectConsumers)))
+    m_customEffects.release(stableId);
+  // The frame context is current here, so last-consumer GPU deletion does not
+  // wait for an unrelated future rectangle draw.
+  m_customEffects.collectUnused();
+  m_customEffectConsumerSurface = 0;
+  m_frameCustomEffectConsumers.clear();
+}
+
+void GlesRenderBackend::removeCustomEffectConsumerSurface(const void* surfaceOwner) {
+  const auto surface = reinterpret_cast<CustomEffectConsumers::SurfaceId>(surfaceOwner);
+  if (surface == 0) return;
+  for (const auto& stableId : m_customEffectConsumers.remove(surface)) m_customEffects.release(stableId);
+  if (m_customEffectConsumerSurface == surface) {
+    m_customEffectConsumerSurface = 0;
+    m_frameCustomEffectConsumers.clear();
+  }
 }
 
 void GlesRenderBackend::drawImage(const RenderImageDraw& draw) {
@@ -752,6 +822,7 @@ void GlesRenderBackend::resolveGraphicsResetStatusProc() {
 }
 
 void GlesRenderBackend::destroyGpuObjects() {
+  m_customEffects.destroy();
   m_rectProgram.destroy();
   m_imageProgram.destroy();
   m_glyphProgram.destroy();
@@ -771,6 +842,7 @@ void GlesRenderBackend::destroyGpuObjects() {
 }
 
 void GlesRenderBackend::abandonGpuObjects() noexcept {
+  m_customEffects.abandon();
   m_rectProgram.abandon();
   m_imageProgram.abandon();
   m_glyphProgram.abandon();

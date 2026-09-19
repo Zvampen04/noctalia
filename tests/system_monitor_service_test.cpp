@@ -53,6 +53,37 @@ namespace {
     expect(stats.sampledAtWall <= std::chrono::system_clock::now(), "sample wall time should not be in the future");
   }
 
+  void testGpuConsumerCadence() {
+    SystemConfig::MonitorConfig config;
+    config.enabled = false; // Pure scheduling check: do not start readers or touch hardware.
+    config.cpuPollSeconds = 2.0F;
+    config.gpuPollSeconds = 1.0F;
+    config.memoryPollSeconds = 0.0F;
+    config.networkPollSeconds = 0.0F;
+    config.diskPollSeconds = 0.0F;
+    SystemMonitorService monitor(config);
+
+    expect(monitor.historySampleInterval() == std::chrono::seconds(2),
+           "zero GPU consumers should not select the GPU cadence");
+    monitor.retainGpuUsage();
+    expect(monitor.historySampleInterval() == std::chrono::seconds(1),
+           "the first GPU consumer should select the configured GPU cadence");
+    monitor.retainGpuUsage();
+    monitor.releaseGpuUsage();
+    expect(monitor.historySampleInterval() == std::chrono::seconds(1),
+           "one sibling GPU consumer should keep the GPU cadence selected");
+    monitor.releaseGpuUsage();
+    expect(monitor.historySampleInterval() == std::chrono::seconds(2),
+           "the last GPU release should restore the non-GPU cadence");
+
+    config.gpuPollSeconds = 0.0F;
+    monitor.applyConfig(config);
+    monitor.retainGpuUsage();
+    expect(monitor.historySampleInterval() == std::chrono::seconds(2),
+           "a retained disabled GPU metric should not select a cadence");
+    monitor.releaseGpuUsage();
+  }
+
 } // namespace
 
 int main() {
@@ -66,5 +97,6 @@ int main() {
   SystemMonitorService monitor(config);
   testDiskSnapshot(monitor);
   testSampleTimestamp(monitor);
+  testGpuConsumerCadence();
   return g_failures == 0 ? 0 : 1;
 }

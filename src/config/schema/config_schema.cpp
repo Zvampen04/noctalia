@@ -9,11 +9,13 @@
 #include "notification/notification_filter.h"
 #include "scripting/plugin_id.h"
 #include "util/file_utils.h"
+#include "ui/material_overrides.h"
 
 #include <algorithm>
 #include <filesystem>
 #include <format>
 #include <stdexcept>
+#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -61,6 +63,35 @@ namespace noctalia::config::schema {
     return s;
   }
 
+  const Schema<ActivityRouteOverrideConfig>& activityRouteOverrideSchema() {
+    static const Schema<ActivityRouteOverrideConfig> s = {
+        field(&ActivityRouteOverrideConfig::presentation, "presentation"),
+        field(&ActivityRouteOverrideConfig::bar, "bar"),
+        field(&ActivityRouteOverrideConfig::section, "section"),
+        field(&ActivityRouteOverrideConfig::output, "output"),
+        field(&ActivityRouteOverrideConfig::placement, "placement"),
+        field(&ActivityRouteOverrideConfig::motion, "motion"),
+        field(&ActivityRouteOverrideConfig::material, "material"),
+    };
+    return s;
+  }
+
+  const Schema<OsdActivityConfig>& osdActivitySchema() {
+    static const Schema<OsdActivityConfig> s = {
+        field(&OsdActivityConfig::presentation, "presentation"),
+        field(&OsdActivityConfig::bar, "bar"),
+        field(&OsdActivityConfig::section, "section"),
+        field(&OsdActivityConfig::output, "output"),
+        field(&OsdActivityConfig::placement, "placement"),
+        field(&OsdActivityConfig::motion, "motion"),
+        field(&OsdActivityConfig::material, "material"),
+        subTable(&OsdActivityConfig::volume, "volume", activityRouteOverrideSchema()),
+        subTable(&OsdActivityConfig::brightness, "brightness", activityRouteOverrideSchema()),
+        subTable(&OsdActivityConfig::notification, "notification", activityRouteOverrideSchema()),
+    };
+    return s;
+  }
+
   const Schema<OsdConfig>& osdSchema() {
     static const Schema<OsdConfig> s = {
         field(&OsdConfig::enabled, "enabled"),
@@ -74,6 +105,7 @@ namespace noctalia::config::schema {
         field(&OsdConfig::offsetY, "offset_y", Range<std::int64_t>{0, std::nullopt}),
         field(&OsdConfig::monitors, "monitors"),
         subTable(&OsdConfig::kinds, "kinds", osdKindsSchema()),
+        subTable(&OsdConfig::activity, "activity", osdActivitySchema()),
     };
     return s;
   }
@@ -467,14 +499,39 @@ namespace noctalia::config::schema {
 
   namespace {
     const Schema<ShortcutConfig>& shortcutSchema() {
-      static const Schema<ShortcutConfig> s = {field(&ShortcutConfig::type, "type")};
+      static const Schema<ShortcutConfig> s = {
+          field(&ShortcutConfig::type, "type"),
+          field(&ShortcutConfig::id, "id"),
+          finalize<ShortcutConfig>([](ShortcutConfig& shortcut, std::string_view path, Diagnostics& diag) {
+            if (shortcut.id && !Style::validMaterialTarget(*shortcut.id))
+              diag.error(joinPath(path, "id"), "shortcut id must be a stable identifier");
+          }),
+      };
       return s;
     }
 
     const Schema<ControlCenterConfig::CalendarTabConfig>& calendarTabSchema() {
       static const Schema<ControlCenterConfig::CalendarTabConfig> s = {
+          field(&ControlCenterConfig::CalendarTabConfig::centerToday, "center_today"),
+          field(&ControlCenterConfig::CalendarTabConfig::fadeEdges, "fade_edges"),
+          field(&ControlCenterConfig::CalendarTabConfig::weekStrip, "week_strip"),
+          field(&ControlCenterConfig::CalendarTabConfig::width, "width", kControlCenterCompactDimensionRange),
+          field(&ControlCenterConfig::CalendarTabConfig::height, "height", kControlCenterCompactDimensionRange),
           field(&ControlCenterConfig::CalendarTabConfig::showEventsCard, "show_events_card"),
           field(&ControlCenterConfig::CalendarTabConfig::showWeekNumbers, "show_week_numbers"),
+      };
+      return s;
+    }
+    const Schema<ControlCenterConfig::MediaConfig>& mediaTabSchema() {
+      static const Schema<ControlCenterConfig::MediaConfig> s = {
+          enumField(&ControlCenterConfig::MediaConfig::homeVisibility, "home_visibility", kControlCenterMediaHomeVisibilities),
+          field(&ControlCenterConfig::MediaConfig::width, "width", kControlCenterCompactDimensionRange),
+          field(&ControlCenterConfig::MediaConfig::height, "height", kControlCenterCompactDimensionRange),
+          enumField(&ControlCenterConfig::MediaConfig::layout, "layout", kMediaLayouts),
+          field(&ControlCenterConfig::MediaConfig::backdropOpacity, "backdrop_opacity", Range<float>{0.F, 1.F, .01F}),
+          field(&ControlCenterConfig::MediaConfig::artworkSize, "artwork_size", kMediaArtworkSizeRange),
+          enumField(&ControlCenterConfig::MediaConfig::visualizer, "visualizer", kMediaVisualizers),
+          field(&ControlCenterConfig::MediaConfig::equalizerAccess, "equalizer_access"),
       };
       return s;
     }
@@ -485,14 +542,25 @@ namespace noctalia::config::schema {
         enumField(&ControlCenterConfig::sidebarMode, "sidebar", kControlCenterSidebarModes),
         enumField(&ControlCenterConfig::sidebarSectionMode, "sidebar_section", kControlCenterSidebarModes),
         field(&ControlCenterConfig::width, "width", kControlCenterWidthRange),
+        field(&ControlCenterConfig::compactSections, "compact_sections"),
+        field(&ControlCenterConfig::compactHeight, "compact_height", kControlCenterCompactDimensionRange),
+        field(&ControlCenterConfig::literalWidth, "literal_width"),
         field(&ControlCenterConfig::showShortcutLabels, "show_shortcut_labels"),
         field(&ControlCenterConfig::showSessionButton, "show_session_button"),
         field(&ControlCenterConfig::hiddenTabs, "hidden_tabs"),
         subTable(&ControlCenterConfig::calendarTab, "calendar", calendarTabSchema()),
+        subTable(&ControlCenterConfig::media, "media", mediaTabSchema()),
         arrayOf<ControlCenterConfig, ShortcutConfig>(
             &ControlCenterConfig::shortcuts, "shortcuts", shortcutSchema(),
             [](const ShortcutConfig& sc) { return !sc.type.empty(); }
         ),
+        finalize<ControlCenterConfig>([](ControlCenterConfig& config, std::string_view path, Diagnostics& diag) {
+          std::unordered_set<std::string> ids;
+          for (const auto& shortcut : config.shortcuts) {
+            if (shortcut.id && !ids.insert(*shortcut.id).second)
+              diag.error(joinPath(path, "shortcuts"), "shortcut ids must be unique");
+          }
+        }),
     };
     return s;
   }
@@ -1256,6 +1324,43 @@ namespace noctalia::config::schema {
       static const Schema<ShellConfig::AnimationConfig> s = {
           field(&ShellConfig::AnimationConfig::enabled, "enabled"),
           field(&ShellConfig::AnimationConfig::speed, "speed", kAnimationSpeedRange),
+          custom<ShellConfig::AnimationConfig>("style",
+              [](const toml::table& tbl, ShellConfig::AnimationConfig& out, std::string_view path, Diagnostics& diag) {
+                if (!tbl.contains("style")) return;
+                const auto text = tbl["style"].value<std::string>();
+                const auto value = text ? parseMotionStyle(*text) : std::nullopt;
+                if (value) out.style = *value;
+                else diag.error(joinPath(path, "style"), "Expected native, expressive, linear or custom");
+              },
+              [](toml::table& tbl, const ShellConfig::AnimationConfig& in) {
+                constexpr std::string_view names[]{"native", "expressive", "linear", "custom"};
+                tbl.insert_or_assign("style", std::string(names[static_cast<std::size_t>(in.style)]));
+              }),
+          field(&ShellConfig::AnimationConfig::curveX1, "curve_x1", kUnitRange),
+          field(&ShellConfig::AnimationConfig::curveY1, "curve_y1", Range<float>{-2.0F, 2.0F}),
+          field(&ShellConfig::AnimationConfig::curveX2, "curve_x2", kUnitRange),
+          field(&ShellConfig::AnimationConfig::curveY2, "curve_y2", Range<float>{-2.0F, 2.0F}),
+      };
+      return s;
+    }
+
+    const Schema<CaretSettings>& shellCaretSchema() {
+      static const Schema<CaretSettings> s = {
+          custom<CaretSettings>("shape",
+              [](const toml::table& tbl, CaretSettings& out, std::string_view path, Diagnostics& diag) {
+                if (!tbl.contains("shape")) return;
+                const auto text = tbl["shape"].value<std::string>();
+                const auto value = text ? parseCaretShape(*text) : std::nullopt;
+                if (value) out.shape = *value;
+                else diag.error(joinPath(path, "shape"), "Expected bar, block or underline");
+              },
+              [](toml::table& tbl, const CaretSettings& in) {
+                tbl.insert_or_assign("shape", std::string(caretShapeName(in.shape)));
+              }),
+          field(&CaretSettings::widthPx, "width_px", Range<float>{1.0F, 8.0F}),
+          field(&CaretSettings::blink, "blink"),
+          field(&CaretSettings::blinkIntervalMs, "blink_interval_ms", Range<float>{100.0F, 2000.0F}),
+          field(&CaretSettings::motionMs, "motion_ms", Range<float>{0.0F, 400.0F}),
       };
       return s;
     }
@@ -1311,6 +1416,12 @@ namespace noctalia::config::schema {
 
     const Schema<ShellConfig::PanelConfig>& shellPanelSchema() {
       static const Schema<ShellConfig::PanelConfig> s = {
+          field(&ShellConfig::PanelConfig::attachedMorph, "attached_morph"),
+          field(&ShellConfig::PanelConfig::attachedStartWidth, "attached_start_width", Range<float>{0.0F, 1.0F}),
+          field(&ShellConfig::PanelConfig::attachedCornerGrowth, "attached_corner_growth", Range<float>{0.1F, 2.0F}),
+          field(&ShellConfig::PanelConfig::attachedContentTravel, "attached_content_travel", Range<float>{0.0F, 1.0F}),
+          field(&ShellConfig::PanelConfig::attachedDurationMs, "attached_duration_ms", Range<float>{0.0F, 2000.0F}),
+          field(&ShellConfig::PanelConfig::quickSettingsEnabled, "quick_settings_enabled"),
           enumField(&ShellConfig::PanelConfig::transparencyMode, "transparency_mode", kPanelTransparencyModes),
           field(&ShellConfig::PanelConfig::borders, "borders"),
           field(&ShellConfig::PanelConfig::shadow, "shadow"),
@@ -1363,6 +1474,10 @@ namespace noctalia::config::schema {
 
     const Schema<ShellConfig::LauncherConfig>& shellLauncherSchema() {
       static const Schema<ShellConfig::LauncherConfig> s = {
+          field(&ShellConfig::LauncherConfig::width, "width", kLauncherWidthRange),
+          field(&ShellConfig::LauncherConfig::height, "height", kLauncherHeightRange),
+          field(&ShellConfig::LauncherConfig::gridColumns, "grid_columns", kLauncherGridColumnsRange),
+          field(&ShellConfig::LauncherConfig::visibleRows, "visible_rows", kLauncherVisibleRowsRange),
           field(&ShellConfig::LauncherConfig::categories, "categories"),
           field(&ShellConfig::LauncherConfig::showIcons, "show_icons"),
           field(&ShellConfig::LauncherConfig::showAppOriginIndicator, "show_app_origin_indicator"),
@@ -1426,7 +1541,6 @@ namespace noctalia::config::schema {
           field(&ShellConfig::ScreenshotConfig::rememberLastRegion, "remember_last_region"),
           field(&ShellConfig::ScreenshotConfig::showCursor, "show_cursor"),
           field(&ShellConfig::ScreenshotConfig::annotate, "annotate"),
-          field(&ShellConfig::ScreenshotConfig::closeOnCopy, "close_on_copy"),
           field(&ShellConfig::ScreenshotConfig::pipeToCommand, "pipe_to_command"),
           field(&ShellConfig::ScreenshotConfig::pipeCommand, "pipe_command"),
           field(&ShellConfig::ScreenshotConfig::directory, "directory"),
@@ -1535,8 +1649,343 @@ namespace noctalia::config::schema {
     }
   } // namespace
 
+  namespace {
+    Field<Style::MaterialSettings> materialSettingField(
+        float Style::MaterialSettings::* member, std::string_view key, Range<float> range) {
+      auto result = field(member, key, std::optional{range});
+      if (key == "optical_plane" || key == "lens_mapping") {
+        // These scalars encode discrete choices. Validate the original double
+        // before conversion so near-integer fractions cannot round in.
+        result.read = [member, key](const toml::table& tbl, Style::MaterialSettings& out,
+                                    std::string_view parentPath, Diagnostics& diag) {
+          if (!tbl.contains(key)) return;
+          const auto value = finiteDouble(tbl[key]);
+          if (!value || !noctalia::material::validScalarValue(key, *value)) {
+            diag.error(std::string(parentPath) + "." + std::string(key),
+                key == "lens_mapping" ? "Lens mapping must be exactly 0 (edge lens) or 1 (radial lens)"
+                    : "Optical plane must be exactly -1 (semantic default), 0 (inherit parent) or 1 (independent)");
+            return;
+          }
+          out.*member = static_cast<float>(*value);
+        };
+      }
+      return result;
+    }
+
+    const Schema<Style::MaterialSettings>& materialSettingsSchema() {
+      static const Schema<Style::MaterialSettings> s = {
+#define MATERIAL_FIELD(member, key, initial, low, high, step, label, group) \
+          materialSettingField(&Style::MaterialSettings::key, #key, Range<float>{low, high, step}),
+#include "material/fields.def"
+#undef MATERIAL_FIELD
+      };
+      return s;
+    }
+
+    Field<ShellConfig> materialOverridesField() {
+      return custom<ShellConfig>(
+          "material_overrides",
+          [](const toml::table& tbl, ShellConfig& out, std::string_view parentPath, Diagnostics& diag) {
+            const auto* all = tbl["material_overrides"].as_table();
+            if (!all) {
+              if (tbl.contains("material_overrides"))
+                diag.error(std::string(parentPath) + ".material_overrides", "Material overrides must be a table");
+              return;
+            }
+            for (const auto& [scopeKey, scopeNode] : *all) {
+              const std::string scope(scopeKey.str());
+              auto* destination = Style::materialScope(out.materialOverrides, scope);
+              const std::string scopePath = std::string(parentPath) + ".material_overrides." + scope;
+              const auto* targets = scopeNode.as_table();
+              if (!destination || !targets) {
+                diag.error(scopePath, "Expected a roles, families or surfaces table");
+                continue;
+              }
+              if (targets->size() > 128) {
+                diag.error(scopePath, "At most 128 material targets are supported in each scope");
+                continue;
+              }
+              for (const auto& [targetKey, targetNode] : *targets) {
+                const std::string target(targetKey.str());
+                const std::string targetPath = scopePath + "." + target;
+                const auto* fields = targetNode.as_table();
+                if (!Style::validMaterialTarget(target) || !fields) {
+                  diag.error(targetPath, "A material target must have a stable identifier and a table of overrides");
+                  continue;
+                }
+                Style::MaterialOverride patch;
+                for (const auto& [fieldKey, fieldNode] : *fields) {
+                  const std::string_view fieldName = fieldKey.str();
+                  const std::string fieldPath = targetPath + "." + std::string(fieldName);
+                  if (fieldName == "primitive") {
+                    const auto value = fieldNode.value<std::string>();
+                    if (value) patch.primitive = Style::materialPrimitive(*value);
+                    if (!patch.primitive)
+                      diag.error(fieldPath, "Expected flat, neumorphic, liquid_glass or illustrated; remove the key to inherit");
+                    continue;
+                  }
+                  if (fieldName == "custom_effect") {
+                    const auto value = fieldNode.value<std::string>();
+                    if (!value || !Style::validMaterialTarget(*value))
+                      diag.error(fieldPath, "Expected a stable imported effect identifier");
+                    else patch.customBackground = *value;
+                    continue;
+                  }
+                  if (fieldName == "custom_effect_digest") {
+                    const auto value = fieldNode.value<std::string>();
+                    const bool valid = value && value->size() == 64
+                        && std::ranges::all_of(*value, [](char c) {
+                             return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+                           });
+                    if (!valid) diag.error(fieldPath, "Expected a lowercase SHA-256 digest");
+                    else patch.customBackgroundDigest = *value;
+                    continue;
+                  }
+                  if (fieldName == "custom_sample_radius") {
+                    const auto value = finiteDouble((*fields)[fieldName]);
+                    if (!value || *value < 0.0 || *value > Style::kCustomEffectSampleRadiusMax)
+                      diag.error(fieldPath, "Custom effect sample radius must be between 0 and 256 pixels");
+                    else patch.customSampleRadiusPx = static_cast<float>(*value);
+                    continue;
+                  }
+                  if (fieldName.starts_with("custom_p") && fieldName.size() == 11
+                      && fieldName[9] == '_' && fieldName[8] >= '0' && fieldName[8] <= '7'
+                      && std::string_view("xyzw").contains(fieldName[10])) {
+                    const std::string_view components = "xyzw";
+                    const auto component = components.find(fieldName[10]);
+                    const std::size_t index = static_cast<std::size_t>(fieldName[8] - '0') * 4 + component;
+                    const auto value = finiteDouble((*fields)[fieldName]);
+                    if (!value || *value < Style::kCustomEffectParameterMin
+                        || *value > Style::kCustomEffectParameterMax)
+                      diag.error(fieldPath, "Custom effect parameters must be between -16 and 16");
+                    else patch.customParameters[index] = static_cast<float>(*value);
+                    continue;
+                  }
+                  bool known = false;
+#define MATERIAL_FIELD(member, key, initial, low, high, step, label, group) \
+                  if (fieldName == #key) { \
+                    known = true; \
+                    const auto value = finiteDouble((*fields)[fieldName]); \
+                    if (!value || !noctalia::material::validScalarValue(fieldName, *value)) \
+                      diag.error(fieldPath, "Material value is outside its supported range or discrete choices"); \
+                    else patch.key = static_cast<float>(*value); \
+                  }
+#include "material/fields.def"
+#undef MATERIAL_FIELD
+                  if (!known) diag.error(fieldPath, "Unknown material parameter");
+                }
+                if (patch.customBackground.has_value() != patch.customBackgroundDigest.has_value())
+                  diag.error(targetPath, "Custom effects require both custom_effect and custom_effect_digest");
+                destination->insert_or_assign(target, std::move(patch));
+              }
+            }
+          },
+          [](toml::table& tbl, const ShellConfig& in) {
+            toml::table all;
+            for (const auto scope : {"roles", "families", "surfaces"}) {
+              toml::table targets;
+              for (const auto& [target, patch] : *Style::materialScope(in.materialOverrides, scope)) {
+                toml::table fields;
+                if (patch.primitive)
+                  fields.insert_or_assign("primitive", std::string(Style::materialPrimitiveName(*patch.primitive)));
+                if (patch.customBackground)
+                  fields.insert_or_assign("custom_effect", *patch.customBackground);
+                if (patch.customBackgroundDigest)
+                  fields.insert_or_assign("custom_effect_digest", *patch.customBackgroundDigest);
+                if (patch.customSampleRadiusPx)
+                  fields.insert_or_assign("custom_sample_radius", static_cast<double>(*patch.customSampleRadiusPx));
+                constexpr std::string_view components = "xyzw";
+                for (std::size_t index = 0; index < patch.customParameters.size(); ++index) {
+                  if (!patch.customParameters[index]) continue;
+                  const std::string key = "custom_p" + std::to_string(index / 4) + "_" + components[index % 4];
+                  fields.insert_or_assign(key, static_cast<double>(*patch.customParameters[index]));
+                }
+#define MATERIAL_FIELD(member, key, initial, low, high, step, label, group) \
+                if (patch.key) fields.insert_or_assign(#key, static_cast<double>(*patch.key));
+#include "material/fields.def"
+#undef MATERIAL_FIELD
+                if (!fields.empty()) targets.insert_or_assign(target, std::move(fields));
+              }
+              if (!targets.empty()) all.insert_or_assign(scope, std::move(targets));
+            }
+            tbl.insert_or_assign("material_overrides", std::move(all));
+          });
+    }
+
+    const Schema<Style::ControlSettings>& controlSettingsSchema() {
+      static const Schema<Style::ControlSettings> s = {
+#define CONTROL_NUMBER(member, initial, low, high, step, label, group) \
+        field(&Style::ControlSettings::member, #member, Range<float>{low, high, step}),
+#define CONTROL_BOOL(member, initial, label, group) field(&Style::ControlSettings::member, #member),
+#define CONTROL_ENUM(member, type, initial, label, group) \
+        custom<Style::ControlSettings>(#member, \
+          [](const toml::table& tbl, Style::ControlSettings& out, std::string_view path, Diagnostics& diag) { \
+            if (!tbl.contains(#member)) return; \
+            const auto text = tbl[#member].value<std::string>(); \
+            const auto value = text ? Style::parseControl<Style::type>(*text) : std::nullopt; \
+            if (value) out.member = *value; else diag.error(joinPath(path, #member), "Unsupported control presentation value"); \
+          }, [](toml::table& tbl, const Style::ControlSettings& in) { tbl.insert_or_assign(#member, std::string(Style::controlName(in.member))); }),
+#include "ui/control_settings.def"
+#undef CONTROL_NUMBER
+#undef CONTROL_BOOL
+#undef CONTROL_ENUM
+      };
+      return s;
+    }
+    // Design tokens are editable through transactions. Reject malformed values
+    // before the generic reader can silently substitute a default and erase a
+    // previously valid draft. Keep its established range clamping unchanged.
+    template <typename T>
+    Field<Style::Metrics> designTokenField(T Style::Metrics::* member, std::string_view key,
+        Range<std::conditional_t<std::is_integral_v<T>, std::int64_t, T>> range) {
+      auto result = field(member, key, range);
+      auto read = std::move(result.read);
+      result.read = [read = std::move(read), key](const toml::table& table, Style::Metrics& out,
+          std::string_view path, Diagnostics& diag) {
+        const auto node = table[key];
+        if (!node) return;
+        if constexpr (std::is_integral_v<T>) {
+          if (!node.is_integer()) { diag.error(joinPath(path, key), "Expected an integer"); return; }
+        } else {
+          if (!finiteDouble(node)) { diag.error(joinPath(path, key), "Expected a finite number"); return; }
+        }
+        read(table, out, path, diag);
+      };
+      return result;
+    }
+    const Schema<Style::Metrics>& designMetricsSchema() {
+      static const Schema<Style::Metrics> s = {
+#define STYLE_TOKEN(type, member, key, initial, low, high, step, label, group) \
+          designTokenField(&Style::Metrics::member, key, Range<std::conditional_t<std::is_integral_v<type>, std::int64_t, type>>{low, high, step}),
+#include "ui/style_tokens.def"
+#undef STYLE_TOKEN
+      };
+      return s;
+    }
+  }
+
+  const Schema<DesktopFrameShelfConfig>& desktopFrameShelfSchema() {
+    static const Schema<DesktopFrameShelfConfig> s = {
+        field(&DesktopFrameShelfConfig::enabled, "enabled"),
+        field(&DesktopFrameShelfConfig::start, "start", kUnitRange),
+        field(&DesktopFrameShelfConfig::end, "end", kUnitRange),
+        field(&DesktopFrameShelfConfig::depth, "depth", Range<float>{0.F, 1024.F}),
+        field(&DesktopFrameShelfConfig::radius, "radius", Range<float>{0.F, 512.F}),
+        field(&DesktopFrameShelfConfig::shoulder, "shoulder", Range<float>{0.F, 512.F}),
+    };
+    return s;
+  }
+
+  namespace {
+    const Schema<TerminalAppearance>& terminalAppearanceSchema() {
+      static const Schema<TerminalAppearance> schema{
+          field(&TerminalAppearance::enabled, "enabled"),
+          field(&TerminalAppearance::backgroundOpacity, "background_opacity", Range<float>{.1F, 1.F, .01F}),
+          field(&TerminalAppearance::backgroundBlur, "background_blur"),
+          field(&TerminalAppearance::opacityCells, "opacity_cells"),
+          field(&TerminalAppearance::paddingX, "padding_x", Range<std::int64_t>{-1, 128, 1}),
+          field(&TerminalAppearance::paddingY, "padding_y", Range<std::int64_t>{-1, 128, 1}),
+          field(&TerminalAppearance::fontSize, "font_size", Range<float>{0.F, 48.F, .5F})};
+      return schema;
+    }
+    template <typename Struct> Field<Struct> colorField(ColorSpec Struct::* member, std::string_view key);
+
+    const Schema<DesktopFrameExtraShelfConfig>& desktopFrameExtraShelfSchema() {
+      static const Schema<DesktopFrameExtraShelfConfig> s = {
+          field(&DesktopFrameExtraShelfConfig::enabled, "enabled"),
+          enumField(&DesktopFrameExtraShelfConfig::edge, "edge", kDesktopFrameEdges),
+          field(&DesktopFrameExtraShelfConfig::start, "start", kUnitRange),
+          field(&DesktopFrameExtraShelfConfig::end, "end", kUnitRange),
+          field(&DesktopFrameExtraShelfConfig::depth, "depth", Range<float>{0.F, 1024.F}),
+          field(&DesktopFrameExtraShelfConfig::radius, "radius", Range<float>{0.F, 512.F}),
+          field(&DesktopFrameExtraShelfConfig::shoulder, "shoulder", Range<float>{0.F, 512.F}),
+      };
+      return s;
+    }
+
+    const Schema<DesktopFrameBorderLayerConfig>& desktopFrameBorderLayerSchema() {
+      static const Schema<DesktopFrameBorderLayerConfig> s = {
+          field(&DesktopFrameBorderLayerConfig::enabled, "enabled"),
+          colorField(&DesktopFrameBorderLayerConfig::color, "color"),
+          field(&DesktopFrameBorderLayerConfig::width, "width", Range<float>{0.F, 128.F}),
+          field(&DesktopFrameBorderLayerConfig::offset, "offset", Range<float>{0.F, 1024.F}),
+      };
+      return s;
+    }
+
+    template <typename Element, std::size_t N>
+    Field<DesktopFrameConfig> indexedFrameSubTable(
+        std::array<Element, N> DesktopFrameConfig::* member, std::size_t index, std::string_view key,
+        const Schema<Element>& schema, bool validateRange = false
+    ) {
+      return Field<DesktopFrameConfig>{
+          key,
+          [member,index,key,&schema,validateRange](const toml::table& tbl, DesktopFrameConfig& out,
+                                                   std::string_view path, Diagnostics& diag) {
+            if (const auto* sub=tbl[key].as_table()) {
+              readInto(*sub,(out.*member)[index],schema,joinPath(path,key),diag);
+              if constexpr (std::is_same_v<Element,DesktopFrameExtraShelfConfig>) {
+                if (validateRange && (out.*member)[index].start>(out.*member)[index].end)
+                  diag.error(joinPath(joinPath(path,key),"end"),"Shelf end must be greater than or equal to start");
+              }
+            } else if (tbl.contains(key)) {
+              diag.error(joinPath(path,key),"Expected a table");
+            }
+          },
+          [member,index,key,&schema](toml::table& tbl,const DesktopFrameConfig& in) {
+            tbl.insert_or_assign(key,writeTable((in.*member)[index],schema));
+          },
+          [key,&schema](const toml::table& tbl,std::string_view path,std::vector<std::string>& unknown) {
+            if (const auto* sub=tbl[key].as_table()) collectUnknownKeys(*sub,schema,joinPath(path,key),unknown);
+          },
+      };
+    }
+  }
+
+  const Schema<DesktopFrameConfig>& desktopFrameSchema() {
+    static const Schema<DesktopFrameConfig> s = [] {
+      Schema<DesktopFrameConfig> fields = {
+        field(&DesktopFrameConfig::enabled, "enabled"),
+        colorField(&DesktopFrameConfig::fill, "fill"),
+        colorField(&DesktopFrameConfig::border, "border"),
+        field(&DesktopFrameConfig::borderWidth, "border_width", Range<float>{0.F, 128.F}),
+        field(&DesktopFrameConfig::chamfered, "chamfered"),
+        field(&DesktopFrameConfig::chamferTopLeft, "chamfer_top_left", Range<float>{0.F, 8192.F}),
+        field(&DesktopFrameConfig::chamferTopRight, "chamfer_top_right", Range<float>{0.F, 8192.F}),
+        field(&DesktopFrameConfig::chamferBottomRight, "chamfer_bottom_right", Range<float>{0.F, 8192.F}),
+        field(&DesktopFrameConfig::chamferBottomLeft, "chamfer_bottom_left", Range<float>{0.F, 8192.F}),
+        field(&DesktopFrameConfig::left, "left", Range<float>{0.F, 1024.F}),
+        field(&DesktopFrameConfig::top, "top", Range<float>{0.F, 1024.F}),
+        field(&DesktopFrameConfig::right, "right", Range<float>{0.F, 1024.F}),
+        field(&DesktopFrameConfig::bottom, "bottom", Range<float>{0.F, 1024.F}),
+        field(&DesktopFrameConfig::radius, "radius", Range<float>{0.F, 512.F}),
+        field(&DesktopFrameConfig::referenceWidth, "reference_width", Range<float>{0.F, 16384.F}),
+        field(&DesktopFrameConfig::referenceHeight, "reference_height", Range<float>{0.F, 16384.F}),
+        subTable(&DesktopFrameConfig::leftShelf, "left_shelf", desktopFrameShelfSchema()),
+        subTable(&DesktopFrameConfig::topShelf, "top_shelf", desktopFrameShelfSchema()),
+        subTable(&DesktopFrameConfig::rightShelf, "right_shelf", desktopFrameShelfSchema()),
+        subTable(&DesktopFrameConfig::bottomShelf, "bottom_shelf", desktopFrameShelfSchema()),
+      };
+      constexpr std::string_view shelfKeys[]{"shelf_1","shelf_2","shelf_3","shelf_4","shelf_5","shelf_6","shelf_7","shelf_8"};
+      for (std::size_t i=0;i<std::size(shelfKeys);++i)
+        fields.push_back(indexedFrameSubTable(&DesktopFrameConfig::shelves,i,shelfKeys[i],desktopFrameExtraShelfSchema(),true));
+      constexpr std::string_view borderKeys[]{"border_layer_1","border_layer_2","border_layer_3"};
+      for (std::size_t i=0;i<std::size(borderKeys);++i)
+        fields.push_back(indexedFrameSubTable(&DesktopFrameConfig::borderLayers,i,borderKeys[i],desktopFrameBorderLayerSchema()));
+      return fields;
+    }();
+    return s;
+  }
+
   const Schema<ShellConfig>& shellSchema() {
     static const Schema<ShellConfig> s = {
+        subTable(&ShellConfig::design, "design", designMetricsSchema()),
+        subTable(&ShellConfig::controls, "controls", controlSettingsSchema()),
+        subTable(&ShellConfig::material, "material", materialSettingsSchema()),
+        materialOverridesField(),
+        field(&ShellConfig::materialOverrideEditorScope, "material_override_editor_scope"),
+        field(&ShellConfig::materialOverrideEditorTarget, "material_override_editor_target"),
+        enumField(&ShellConfig::surfaceMaterial, "surface_material", kShellSurfaceMaterials),
         field(&ShellConfig::cornerRadiusScale, "corner_radius_scale", kCornerRadiusScaleRange),
         field(&ShellConfig::buttonBorders, "button_borders"),
         field(&ShellConfig::inputBorders, "input_borders"),
@@ -1568,6 +2017,12 @@ namespace noctalia::config::schema {
         field(&ShellConfig::polkitAgent, "polkit_agent"),
         enumField(&ShellConfig::passwordMaskStyle, "password_style", kPasswordMaskStyles),
         field(&ShellConfig::settingsShowAdvanced, "settings_show_advanced"),
+        subTable(&ShellConfig::terminalAppearance, "terminal_appearance", terminalAppearanceSchema()),
+        field(&ShellConfig::settingsConnectedRows, "settings_connected_rows"),
+        field(&ShellConfig::settingsCompactChrome, "settings_compact_chrome"),
+        field(&ShellConfig::settingsWindowWidth, "settings_window_width", Range<std::int64_t>{0, 3840, 1}),
+        field(&ShellConfig::settingsWindowHeight, "settings_window_height", Range<std::int64_t>{0, 2160, 1}),
+        colorField(&ShellConfig::settingsBackground, "settings_background"),
         field(&ShellConfig::settingsWindowTranslucent, "settings_window_translucent"),
         field(&ShellConfig::showLocation, "show_location"),
         field(&ShellConfig::appIconColorize, "app_icon_colorize"),
@@ -1587,9 +2042,13 @@ namespace noctalia::config::schema {
         field(&ShellConfig::clipboardImageActionCommand, "clipboard_image_action_command"),
         pathStringField(&ShellConfig::avatarPath, "avatar_path"),
         subTable(&ShellConfig::animation, "animation", shellAnimationSchema()),
+        subTable(&ShellConfig::caret, "caret", shellCaretSchema()),
+        field(&ShellConfig::caretAppIntegration, "caret_app_integration"),
+        field(&ShellConfig::caretAdoptExisting, "caret_adopt_existing"),
         subTable(&ShellConfig::shadow, "shadow", shellShadowSchema()),
         subTable(&ShellConfig::panel, "panel", shellPanelSchema()),
         subTable(&ShellConfig::launcher, "launcher", shellLauncherSchema()),
+        subTable(&ShellConfig::desktopFrame, "desktop_frame", desktopFrameSchema()),
         subTable(&ShellConfig::keyboardLayout, "keyboard_layout", shellKeyboardLayoutSchema()),
         subTable(&ShellConfig::windowSwitcher, "window_switcher", shellWindowSwitcherSchema()),
         subTable(&ShellConfig::screenCorners, "screen_corners", shellScreenCornersSchema()),
@@ -1617,6 +2076,7 @@ namespace noctalia::config::schema {
         pathStringField(&WallpaperConfig::directoryLight, "directory_light"),
         pathStringField(&WallpaperConfig::directoryDark, "directory_dark"),
         field(&WallpaperConfig::perMonitorDirectories, "per_monitor_directories"),
+        field(&WallpaperConfig::foregroundMasks, "foreground_masks"),
         subTable(&WallpaperConfig::automation, "automation", wallpaperAutomationSchema()),
         namedMap<WallpaperConfig, WallpaperMonitorOverride>(
             &WallpaperConfig::monitorOverrides, "monitor", wallpaperMonitorSchema(),
@@ -1788,6 +2248,24 @@ namespace noctalia::config::schema {
     }
     const std::string& section = path[0];
 
+    if (section == "shell" && path.size() >= 2 && path[1] == "material_overrides") {
+      if (path.size() == 2) return true;
+      if (path[2] != "roles" && path[2] != "families" && path[2] != "surfaces") return false;
+      if (path.size() == 3) return true;
+      if (!Style::validMaterialTarget(path[3])) return false;
+      if (path.size() == 4) return true;
+      if (path.size() != 5) return false;
+      if (path[4] == "primitive" || path[4] == "custom_effect"
+          || path[4] == "custom_effect_digest" || path[4] == "custom_sample_radius") return true;
+      if (path[4].starts_with("custom_p") && path[4].size() == 11
+          && path[4][8] >= '0' && path[4][8] <= '7' && path[4][9] == '_'
+          && std::string_view("xyzw").contains(path[4][10])) return true;
+#define MATERIAL_FIELD(member, key, initial, low, high, step, label, group) if (path[4] == #key) return true;
+#include "material/fields.def"
+#undef MATERIAL_FIELD
+      return false;
+    }
+
     // Bar lives at the config root (named bars + monitor overrides), not a section
     // schema. {"bar"} / {"bar",name} / {"bar",name,"monitor"[,match]} are container
     // levels; deeper keys validate against the bar field schemas.
@@ -1837,6 +2315,7 @@ namespace noctalia::config::schema {
     // drift apart.
     constexpr Range<std::int64_t> kBarThicknessRange{10, 300};
     constexpr Range<std::int64_t> kBarRadiusRange{0, 500};
+    constexpr Range<std::int64_t> kBarIslandMorphGapRange{0, 512};
     constexpr Range<std::int64_t> kBarPanelOverlapRange{-2, 3};
     constexpr Range<float> kBarCapsuleThicknessRange{0.1F, 1.0F};
     constexpr Range<float> kBarOpacityRange{0.0F, 1.0F};
@@ -1846,6 +2325,8 @@ namespace noctalia::config::schema {
     constexpr Range<float> kBarCapsuleRadiusRangeF{0.0F, 80.0F};
     constexpr Range<double> kBarCapsulePaddingRangeD{0.0, 48.0};
     constexpr Range<double> kBarCapsuleRadiusRangeD{0.0, 80.0};
+    constexpr Range<float> kBarCapsuleContourDepthRangeF{0.0F, 32.0F};
+    constexpr Range<double> kBarCapsuleContourDepthRangeD{0.0, 32.0};
     constexpr Range<double> kBarCapsuleOpacityRangeD{0.0, 1.0};
 
     // Concrete ColorSpec stored as a config string; always emitted. A present
@@ -2146,6 +2627,8 @@ namespace noctalia::config::schema {
           optionalColorField(&BarCapsuleGroupStyle::foreground, "foreground"),
           field(&BarCapsuleGroupStyle::padding, "padding", kBarCapsulePaddingRange),
           optionalFloatField(&BarCapsuleGroupStyle::radius, "radius", kBarCapsuleRadiusRangeF),
+          optionalEnumField(&BarCapsuleGroupStyle::contour, "contour", kBarCapsuleContours),
+          optionalFloatField(&BarCapsuleGroupStyle::contourDepth, "contour_depth", kBarCapsuleContourDepthRangeF),
           field(&BarCapsuleGroupStyle::opacity, "opacity", kBarOpacityRange),
           field(&BarCapsuleGroupStyle::accordion, "accordion"),
           enumField(&BarCapsuleGroupStyle::accordionDirection, "accordion_direction", kBarAccordionDirections),
@@ -2206,6 +2689,37 @@ namespace noctalia::config::schema {
     return s;
   }
 
+  const Schema<BarWidgetPlacementConfig>& barWidgetPlacementSchema() {
+    static const Schema<BarWidgetPlacementConfig> s = {
+        field(&BarWidgetPlacementConfig::id, "id"),
+        field(&BarWidgetPlacementConfig::widget, "widget"),
+        optionalColorField(&BarWidgetPlacementConfig::foreground, "foreground"),
+        optionalColorField(&BarWidgetPlacementConfig::iconForeground, "icon_foreground"),
+    };
+    return s;
+  }
+
+  const Schema<BarSectionConfig>& barSectionSchema() {
+    static const Schema<BarSectionConfig> s = {
+        field(&BarSectionConfig::id, "id"),
+        field(&BarSectionConfig::widgets, "widgets"),
+        enumField(&BarSectionConfig::anchor, "anchor", kBarCenterAlignments),
+        enumField(&BarSectionConfig::alignment, "alignment", kBarCenterAlignments),
+        enumField(&BarSectionConfig::layoutRole, "layout_role", kBarSectionLayoutRoles),
+        field(&BarSectionConfig::offset, "offset", Range<float>{-7680, 7680, 1}),
+        field(&BarSectionConfig::crossOffset, "cross_offset", Range<float>{-512, 512, 1}),
+        field(&BarSectionConfig::allowOverlap, "allow_overlap"),
+        optionalColorField(&BarSectionConfig::background, "background"),
+        optionalFloatField(&BarSectionConfig::backgroundOpacity, "background_opacity", kBarOpacityRange),
+        optionalColorField(&BarSectionConfig::border, "border"),
+        optionalFloatField(&BarSectionConfig::borderWidth, "border_width", kBarBorderWidthRange),
+        enumField(&BarSectionConfig::materialMode, "material_mode", kBarMaterialModes),
+        enumField(&BarSectionConfig::shader, "shader", kBarSectionShaders),
+        subTable(&BarSectionConfig::actionArea, "actions", barDeadZoneSchema()),
+    };
+    return s;
+  }
+
   const Schema<BarConfig>& barFieldsSchema() {
     static const Schema<BarConfig> s = {
         field(&BarConfig::enabled, "enabled"),
@@ -2216,6 +2730,7 @@ namespace noctalia::config::schema {
         barLayerField(),
         field(&BarConfig::thickness, "thickness", kBarThicknessRange),
         field(&BarConfig::backgroundOpacity, "background_opacity", kBarOpacityRange),
+        colorField(&BarConfig::background, "background"),
         colorField(&BarConfig::border, "border"),
         field(&BarConfig::borderWidth, "border_width", kBarBorderWidthRange),
         barRadiusField(),
@@ -2223,7 +2738,22 @@ namespace noctalia::config::schema {
         field(&BarConfig::radiusTopRight, "radius_top_right", kBarRadiusRange),
         field(&BarConfig::radiusBottomLeft, "radius_bottom_left", kBarRadiusRange),
         field(&BarConfig::radiusBottomRight, "radius_bottom_right", kBarRadiusRange),
+        field(&BarConfig::sectionBackgrounds, "section_backgrounds"),
+        field(&BarConfig::islandHoverGrow, "island_hover_grow", kBarIslandHoverRange),
+        field(&BarConfig::islandHoverOffset, "island_hover_offset", kBarIslandHoverRange),
+        field(&BarConfig::islandOutward, "island_outward"),
+        field(&BarConfig::islandPanelOffset, "island_panel_offset", Range<std::int64_t>{0, 64, 1}),
+        field(&BarConfig::centeredSections, "centered_sections"),
+        enumFieldOmitDefault(&BarConfig::centerAlignment, "center_alignment", kBarCenterAlignments,
+            BarCenterAlignment::Center),
+        enumFieldOmitDefault(&BarConfig::edgeClusterPolicy, "edge_cluster_policy", kBarEdgeClusterPolicies,
+            BarEdgeClusterPolicy::Edge),
+        enumFieldOmitDefault(&BarConfig::materialMode, "material_mode", kBarMaterialModes,
+            BarMaterialMode::Inherit),
+        field(&BarConfig::islandMorph, "island_morph"),
+        field(&BarConfig::islandMorphGap, "island_morph_gap", kBarIslandMorphGapRange),
         field(&BarConfig::concaveEdgeCorners, "concave_edge_corners"),
+        field(&BarConfig::maxLength, "max_length", Range<std::int64_t>{0, 7680, 1}),
         field(&BarConfig::marginEnds, "margin_ends"),
         field(&BarConfig::marginEdge, "margin_edge"),
         field(&BarConfig::marginOppositeEdge, "margin_opposite_edge"),
@@ -2236,6 +2766,12 @@ namespace noctalia::config::schema {
         field(&BarConfig::scale, "scale", kBarScaleRange),
         field(&BarConfig::fontScale, "font_scale", kBarFontScaleRange),
         field(&BarConfig::fontWeight, "font_weight"),
+        arrayOf<BarConfig, BarWidgetPlacementConfig>(
+            &BarConfig::widgetPlacements, "widget_placement", barWidgetPlacementSchema(),
+            [](const BarWidgetPlacementConfig& placement) {
+              return !placement.id.empty() && !placement.widget.empty();
+            }, /*writeEmpty=*/false
+        ),
         optionalTrimmedStringField(&BarConfig::fontFamily, "font_family"),
         field(&BarConfig::startWidgets, "start"),
         field(&BarConfig::centerWidgets, "center"),
@@ -2251,10 +2787,18 @@ namespace noctalia::config::schema {
         ),
         field(&BarConfig::widgetCapsulePadding, "capsule_padding", kBarCapsulePaddingRange),
         optionalDoubleField(&BarConfig::widgetCapsuleRadius, "capsule_radius", kBarCapsuleRadiusRangeD),
+        enumField(&BarConfig::widgetCapsuleContour, "capsule_contour", kBarCapsuleContours),
+        field(&BarConfig::widgetCapsuleContourDepth, "capsule_contour_depth", kBarCapsuleContourDepthRangeF),
         field(&BarConfig::widgetCapsuleOpacity, "capsule_opacity", kBarOpacityRange),
         capsuleBorderField(&BarConfig::widgetCapsuleBorder, &BarConfig::widgetCapsuleBorderSpecified, "capsule_border"),
         field(&BarConfig::hoverHighlight, "hover_highlight"),
         subTable(&BarConfig::deadZone, "dead_zone", barDeadZoneSchema()),
+        subTable(&BarConfig::startLane, "start_lane", barDeadZoneSchema(), false),
+        subTable(&BarConfig::centerLane, "center_lane", barDeadZoneSchema(), false),
+        subTable(&BarConfig::endLane, "end_lane", barDeadZoneSchema(), false),
+        arrayOf<BarConfig, BarSectionConfig>(
+            &BarConfig::sections, "section", barSectionSchema(),
+            [](const BarSectionConfig&) { return true; }, false),
         field(&BarConfig::actions, "actions"),
     };
     return s;
@@ -2289,6 +2833,7 @@ namespace noctalia::config::schema {
         ),
         optionalIntField(&BarMonitorOverride::thickness, "thickness", kBarThicknessRange),
         optionalFloatField(&BarMonitorOverride::backgroundOpacity, "background_opacity", kBarOpacityRange),
+        optionalColorField(&BarMonitorOverride::background, "background"),
         optionalColorField(&BarMonitorOverride::border, "border"),
         optionalFloatField(&BarMonitorOverride::borderWidth, "border_width", kBarBorderWidthRange),
         optionalIntField(&BarMonitorOverride::radius, "radius", kBarRadiusRange),
@@ -2296,7 +2841,19 @@ namespace noctalia::config::schema {
         optionalIntField(&BarMonitorOverride::radiusTopRight, "radius_top_right", kBarRadiusRange),
         optionalIntField(&BarMonitorOverride::radiusBottomLeft, "radius_bottom_left", kBarRadiusRange),
         optionalIntField(&BarMonitorOverride::radiusBottomRight, "radius_bottom_right", kBarRadiusRange),
+        optionalBoolField(&BarMonitorOverride::sectionBackgrounds, "section_backgrounds"),
+        optionalFloatField(&BarMonitorOverride::islandHoverGrow, "island_hover_grow", kBarIslandHoverRange),
+        optionalFloatField(&BarMonitorOverride::islandHoverOffset, "island_hover_offset", kBarIslandHoverRange),
+        optionalBoolField(&BarMonitorOverride::islandOutward, "island_outward"),
+        optionalIntField(&BarMonitorOverride::islandPanelOffset, "island_panel_offset", Range<std::int64_t>{0, 64, 1}),
+        optionalBoolField(&BarMonitorOverride::centeredSections, "centered_sections"),
+        optionalEnumField(&BarMonitorOverride::centerAlignment, "center_alignment", kBarCenterAlignments),
+        optionalEnumField(&BarMonitorOverride::edgeClusterPolicy, "edge_cluster_policy", kBarEdgeClusterPolicies),
+        optionalEnumField(&BarMonitorOverride::materialMode, "material_mode", kBarMaterialModes),
+        optionalBoolField(&BarMonitorOverride::islandMorph, "island_morph"),
+        optionalIntField(&BarMonitorOverride::islandMorphGap, "island_morph_gap", kBarIslandMorphGapRange),
         optionalBoolField(&BarMonitorOverride::concaveEdgeCorners, "concave_edge_corners"),
+        optionalIntField(&BarMonitorOverride::maxLength, "max_length", Range<std::int64_t>{0, 7680, 1}),
         optionalIntField(&BarMonitorOverride::marginEnds, "margin_ends"),
         optionalIntField(&BarMonitorOverride::marginEdge, "margin_edge"),
         optionalIntField(&BarMonitorOverride::marginOppositeEdge, "margin_opposite_edge"),
@@ -2312,6 +2869,10 @@ namespace noctalia::config::schema {
         optionalStringVectorField(&BarMonitorOverride::startWidgets, "start"),
         optionalStringVectorField(&BarMonitorOverride::centerWidgets, "center"),
         optionalStringVectorField(&BarMonitorOverride::endWidgets, "end"),
+        optionalArrayOf<BarMonitorOverride, BarSectionConfig>(
+            &BarMonitorOverride::sections, &BarMonitorOverride::sectionsSpecified,
+            "section", barSectionSchema(),
+            [](const BarSectionConfig&) { return true; }),
         optionalBoolField(&BarMonitorOverride::widgetCapsuleDefault, "capsule"),
         optionalColorField(&BarMonitorOverride::widgetCapsuleFill, "capsule_fill"),
         optionalColorField(&BarMonitorOverride::widgetCapsuleForeground, "capsule_foreground"),
@@ -2319,6 +2880,10 @@ namespace noctalia::config::schema {
         optionalColorField(&BarMonitorOverride::widgetIconColor, "icon_color"),
         optionalDoubleField(&BarMonitorOverride::widgetCapsulePadding, "capsule_padding", kBarCapsulePaddingRangeD),
         optionalDoubleField(&BarMonitorOverride::widgetCapsuleRadius, "capsule_radius", kBarCapsuleRadiusRangeD),
+        optionalEnumField(&BarMonitorOverride::widgetCapsuleContour, "capsule_contour", kBarCapsuleContours),
+        optionalDoubleField(
+            &BarMonitorOverride::widgetCapsuleContourDepth, "capsule_contour_depth", kBarCapsuleContourDepthRangeD
+        ),
         optionalDoubleField(&BarMonitorOverride::widgetCapsuleOpacity, "capsule_opacity", kBarCapsuleOpacityRangeD),
         capsuleBorderField(
             &BarMonitorOverride::widgetCapsuleBorder, &BarMonitorOverride::widgetCapsuleBorderSpecified,

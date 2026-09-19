@@ -8,6 +8,7 @@
 #include "config/schema/config_sections.h"
 #include "config/schema/engine.h"
 #include "config/widget_config.h"
+#include "shell/bar/bar_material_target.h"
 #include "launcher/launcher_provider.h"
 #include "scripting/plugin_id.h"
 #include "scripting/plugin_manager.h"
@@ -17,6 +18,7 @@
 #include "shell/bar/widget_gesture.h"
 #include "shell/desktop/desktop_widget_settings_registry.h"
 #include "shell/lockscreen/lockscreen_login_box.h"
+#include "shell/activity/transient_activity.h"
 #include "shell/settings/widget_settings_registry.h"
 #include "system/day_night_schedule.h"
 #include "time/time_format.h"
@@ -104,6 +106,16 @@ namespace noctalia::config {
               path, "custom_schedule needs a " + std::string(key) + " time in HH:MM form", "location.clock.missing"
           );
         }
+      }
+    }
+
+    void validateOsdActivity(const toml::table& merged, schema::Diagnostics& diag) {
+      const auto* osd = merged["osd"].as_table();
+      if (osd == nullptr || (*osd)["activity"].as_table() == nullptr) return;
+      OsdConfig parsed;
+      schema::readInto(*osd, parsed, schema::osdSchema(), "osd", diag);
+      if (const auto invalid = validateTransientActivityConfig(parsed.activity)) {
+        diag.error(*invalid, "invalid transient activity route", "osd.activity.invalid");
       }
     }
 
@@ -695,6 +707,42 @@ namespace noctalia::config {
         BarConfig tmpBar{};
         try {
           schema::readInto(*barTbl, tmpBar, schema::barFieldsSchema(), base, diag);
+          std::unordered_map<std::string, std::string> placements;
+          for (const auto& placement : tmpBar.widgetPlacements) {
+            if (!Style::validMaterialTarget(placement.id)) {
+              diag.error(base + ".widget_placement", "placement id must be a stable identifier");
+              continue;
+            }
+            if (placement.widget.empty()) {
+              diag.error(base + ".widget_placement", "placement widget must not be empty");
+              continue;
+            }
+            if (!placements.emplace(placement.id, placement.widget).second)
+              diag.error(base + ".widget_placement", "duplicate placement id \"" + placement.id + "\"");
+          }
+          // A token-looking value is still a legal widget configuration name unless a matching
+          // placement record exists. Runtime uses the same rule, so validation must not silently
+          // reserve the @widget: namespace from existing user-defined module IDs.
+          const auto validateLane = [&](const std::vector<std::string>& lane, std::string_view path) {
+            (void)path;
+            for (const auto& entry : lane)
+              (void)noctalia::bar::resolveBarWidgetLaneEntry(entry, placements);
+          };
+          validateLane(tmpBar.startWidgets, base + ".start");
+          validateLane(tmpBar.centerWidgets, base + ".center");
+          validateLane(tmpBar.endWidgets, base + ".end");
+          for (const auto& group : tmpBar.widgetCapsuleGroups)
+            validateLane(group.members, base + ".capsule_group." + group.id + ".members");
+          std::unordered_set<std::string> sectionIds;
+          for (const auto& section : tmpBar.sections) {
+            if (section.id.empty()) {
+              diag.error(base + ".section", "section id must not be empty");
+              continue;
+            }
+            if (!sectionIds.insert(section.id).second)
+              diag.error(base + ".section", "duplicate section id \"" + section.id + "\"");
+            validateLane(section.widgets, base + ".section." + section.id + ".widgets");
+          }
         } catch (const std::exception& e) {
           diag.error(base, e.what());
         }
@@ -713,6 +761,15 @@ namespace noctalia::config {
             BarMonitorOverride tmpOvr{};
             try {
               schema::readInto(*monTbl, tmpOvr, schema::barMonitorOverrideSchema(), monBase, diag);
+              std::unordered_set<std::string> sectionIds;
+              for (const auto& section : tmpOvr.sections) {
+                if (section.id.empty()) {
+                  diag.error(monBase + ".section", "section id must not be empty");
+                  continue;
+                }
+                if (!sectionIds.insert(section.id).second)
+                  diag.error(monBase + ".section", "duplicate section id \"" + section.id + "\"");
+              }
             } catch (const std::exception& e) {
               diag.error(monBase, e.what());
             }
@@ -746,6 +803,7 @@ namespace noctalia::config {
       }
 
       validateLocation(merged, diag);
+      validateOsdActivity(merged, diag);
       validateBars(merged, diag);
       validateBarWidgets(merged, diag, pluginRegistry);
       validatePluginSettings(merged, diag, pluginRegistry);

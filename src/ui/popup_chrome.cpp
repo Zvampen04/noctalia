@@ -33,15 +33,16 @@ namespace popup_chrome {
   }
 
   Geometry computeGeometry(
-      float contentWidth, float contentHeight, const ShellConfig::ShadowConfig& shadow, bool componentShadow
+      float contentWidth, float contentHeight, const ShellConfig::ShadowConfig& shadow, bool componentShadow,
+      std::string_view materialSurface, std::string_view materialFamily
   ) noexcept {
     Geometry geometry{
         .contentWidth = std::max(1.0F, contentWidth),
         .contentHeight = std::max(1.0F, contentHeight),
     };
 
+    geometry.bleed = shell::surface_shadow::bleed(componentShadow, shadow, materialFamily, materialSurface);
     if (shell::surface_shadow::enabled(componentShadow, shadow)) {
-      geometry.bleed = shell::surface_shadow::bleed(componentShadow, shadow);
       geometry.bleed.left += kShadowSafetyPadding;
       geometry.bleed.right += kShadowSafetyPadding;
       geometry.bleed.up += kShadowSafetyPadding;
@@ -92,8 +93,17 @@ namespace popup_chrome {
     config.offsetY = adjustedOffsetY(config.offsetY, geometry, attachment.vertical);
   }
 
-  void setContentInputRegion(PopupSurface& surface, const Geometry& geometry) {
-    surface.setInputRegion({geometry.inputRect()});
+  std::vector<InputRect> roundedContentRegion(const Geometry& geometry, float radius, float cornerPower) {
+    return Surface::tessellateRoundedRect(
+        geometry.bleed.left, geometry.bleed.up,
+        roundedInt(geometry.contentWidth), roundedInt(geometry.contentHeight), radius, 1, cornerPower
+    );
+  }
+
+  void setContentInputRegion(
+      PopupSurface& surface, const Geometry& geometry, float radius, float cornerPower
+  ) {
+    surface.setInputRegion(roundedContentRegion(geometry, radius, cornerPower));
   }
 
   RectNode* addShadow(

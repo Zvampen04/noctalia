@@ -7,8 +7,17 @@
 #include <algorithm>
 #include <ranges>
 #include <utility>
+#include <unordered_map>
+#include "material/shape_geometry.h"
 
 namespace {
+
+  struct CornerPolicy {
+    float power = 2.0F;
+    std::unordered_map<Node*,std::uint64_t> live;
+    std::uint64_t nextIdentity = 1;
+  };
+  CornerPolicy& cornerPolicy() { static CornerPolicy state; return state; }
 
   Mat3 localTransform(const Node* node) {
     const float cx = node->width() * 0.5F;
@@ -90,9 +99,10 @@ LayoutSize LayoutConstraints::constrain(LayoutSize size) const noexcept {
   return LayoutSize{.width = constrainWidth(size.width), .height = constrainHeight(size.height)};
 }
 
-Node::Node(NodeType type) : m_type(type) {}
+Node::Node(NodeType type) : m_type(type) { auto& policy=cornerPolicy(); policy.live.emplace(this,policy.nextIdentity++); }
 
 Node::~Node() {
+  cornerPolicy().live.erase(this);
   // Ensure any animation still targeting this node is cancelled before the node goes away.
   // Call sites that pass `this` as the animation owner get lifetime safety for free.
   if (m_animationManager != nullptr) {
@@ -284,6 +294,12 @@ void Node::setParticipatesInLayout(bool participatesInLayout) {
   markLayoutDirty();
 }
 
+void Node::setBypassParentPaintClip(bool bypass) {
+  if (m_bypassParentPaintClip == bypass) return;
+  m_bypassParentPaintClip = bypass;
+  markPaintDirty();
+}
+
 void Node::setClipChildren(bool clipChildren) {
   if (m_clipChildren == clipChildren) {
     return;
@@ -340,9 +356,70 @@ void Node::setInvalidationCallback(std::function<void(NodeInvalidation)> callbac
   m_invalidationCallback = std::move(callback);
 }
 
+float Node::defaultCornerPower() noexcept { return cornerPolicy().power; }
+float Node::cornerPower() const noexcept {
+  if (m_cornerPower) return *m_cornerPower;
+  return m_parent ? m_parent->cornerPower() : defaultCornerPower();
+}
+void Node::invalidateCornerPower(bool notify) {
+  // Mark the complete retained subtree before calling a root callback. The
+  // callback may remove/reparent nodes; never retain an iterator across it.
+  std::vector<Node*> pending{this};
+  while (!pending.empty()) {
+    auto* node = pending.back(); pending.pop_back();
+    node->m_paintDirty = true;
+    for (const auto& child : node->m_children) pending.push_back(child.get());
+  }
+  if (!notify) return;
+  if (m_parent) m_parent->propagatePaintDirty();
+  else notifyInvalidated(NodeInvalidation::Paint);
+}
+void Node::setCornerPower(std::optional<float> power) {
+  uiAssertSceneMutationAllowed("Node::setCornerPower");
+  if (power) power = noctalia::material::shape::clampPower(*power);
+  if (m_cornerPower == power) return;
+  const float before = cornerPower(); m_cornerPower = power;
+  if (before != cornerPower()) invalidateCornerPower();
+}
+void Node::setDefaultCornerPower(float power) {
+  uiAssertSceneMutationAllowed("Node::setDefaultCornerPower");
+  auto& state = cornerPolicy();
+  power = noctalia::material::shape::clampPower(power);
+  if (state.power == power) return;
+  state.power = power;
+  // Snapshot roots: invalidation callbacks may destroy other roots. Membership
+  // is checked again before dereferencing each retained pointer.
+  std::vector<std::pair<Node*,std::uint64_t>> roots;
+  for (const auto& [node,identity] : state.live) if (!node->m_parent) roots.emplace_back(node,identity);
+  for (const auto& [root,identity] : roots) {
+    const auto live=state.live.find(root);
+    if (live!=state.live.end() && live->second==identity && !root->m_parent) root->invalidateCornerPower();
+  }
+}
+
+std::string_view Node::materialSurfaceName() const noexcept {
+  if (!m_materialSurface.empty()) return m_materialSurface;
+  return m_parent != nullptr ? m_parent->materialSurfaceName() : std::string_view{};
+}
+
+void Node::setMaterialSurface(std::string_view surface) {
+  if (m_materialSurface == surface) return;
+  const std::string previous(materialSurfaceName());
+  m_materialSurface = surface;
+  if (previous != materialSurfaceName()) refreshMaterialSurface();
+}
+
+void Node::refreshMaterialSurface() {
+  doMaterialSurfaceChanged();
+  for (auto& child : m_children) child->refreshMaterialSurface();
+}
+
 Node* Node::addChild(std::unique_ptr<Node> child) {
   uiAssertSceneMutationAllowed("Node::addChild");
+  const std::string previousSurface(child->materialSurfaceName());
   child->m_parent = this;
+  child->invalidateCornerPower(false);
+  if (previousSurface != child->materialSurfaceName()) child->refreshMaterialSurface();
   if (m_animationManager != nullptr && child->m_animationManager == nullptr) {
     child->setAnimationManager(m_animationManager);
   }
@@ -357,7 +434,10 @@ Node* Node::addChild(std::unique_ptr<Node> child) {
 
 Node* Node::insertChildAt(std::size_t index, std::unique_ptr<Node> child) {
   uiAssertSceneMutationAllowed("Node::insertChildAt");
+  const std::string previousSurface(child->materialSurfaceName());
   child->m_parent = this;
+  child->invalidateCornerPower(false);
+  if (previousSurface != child->materialSurfaceName()) child->refreshMaterialSurface();
   if (m_animationManager != nullptr && child->m_animationManager == nullptr) {
     child->setAnimationManager(m_animationManager);
   }
@@ -384,7 +464,10 @@ std::unique_ptr<Node> Node::removeChild(Node* child) {
 
   auto removed = std::move(*it);
   m_children.erase(it);
+  const std::string previousSurface(removed->materialSurfaceName());
   removed->m_parent = nullptr;
+  removed->invalidateCornerPower(false);
+  if (previousSurface != removed->materialSurfaceName()) removed->refreshMaterialSurface();
   markLayoutDirty();
   return removed;
 }

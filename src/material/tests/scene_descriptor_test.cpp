@@ -28,15 +28,34 @@ int main() {
   scene.planes[0].cornerPower=4;
   scene.planes[0].paintClip=SceneRoundedClip{{-10,0,200,50},20,10};
   auto bytes=encodeScene(scene);CHECK(!bytes.empty());CHECK(decodeScene(bytes)==scene);
+  CHECK(sceneWireVersion(bytes)==kLegacySceneVersion);
+  CHECK(!sceneWireVersion(std::span(bytes.data(),7)));
+  auto legacy=encodeScene(scene,kLegacySceneVersion);CHECK(!legacy.empty());CHECK(decodeScene(legacy)==scene);
   for (std::size_t n=0;n<bytes.size();++n) CHECK(!decodeScene(std::span(bytes.data(),n)));
   auto trailing=bytes;trailing.push_back(0);CHECK(!decodeScene(trailing));
-  auto unsupported=bytes;unsupported[4]=static_cast<std::uint8_t>(kSceneVersion+1);CHECK(!decodeScene(unsupported));
+  auto unsupported=bytes;unsupported[4]=static_cast<std::uint8_t>(kLeasedSceneVersion+1);CHECK(!decodeScene(unsupported));
   auto oldVersion=bytes;oldVersion[4]=4;CHECK(!decodeScene(oldVersion));
+  SceneCustomEffect effect;effect.transportDigest.fill(0x5a);effect.sampleRadius=16;effect.parameters[2][3]=.75F;
+  scene.planes[0].customEffect=effect;
+  auto bad=scene;
+  bytes=encodeScene(scene);CHECK(!bytes.empty());CHECK(decodeScene(bytes)==scene);
+  CHECK(sceneWireVersion(bytes)==kSceneVersion);
+  CHECK(encodeScene(scene,kLegacySceneVersion).empty());
+  scene.leaseToken=19;
+  CHECK(encodeScene(scene,kSceneVersion).empty());
+  bytes=encodeScene(scene,kLeasedSceneVersion);CHECK(!bytes.empty());CHECK(decodeScene(bytes)==scene);
+  CHECK(sceneWireVersion(bytes)==kLeasedSceneVersion);
+  scene.leaseToken=0;
+  bytes=encodeScene(scene,kLeasedSceneVersion);CHECK(!bytes.empty());CHECK(decodeScene(bytes)==scene);
+  bad=scene;bad.planes[0].customEffect->transportDigest={};CHECK(encodeScene(bad).empty());
+  bad=scene;bad.planes[0].customEffect->sampleRadius=257;CHECK(encodeScene(bad).empty());
+  bad=scene;bad.planes[0].customEffect->parameters[0][0]=std::numeric_limits<float>::infinity();CHECK(encodeScene(bad).empty());
+  scene.planes[0].customEffect.reset();
   for(float power : {1.0F,10.1F,std::numeric_limits<float>::quiet_NaN(),std::numeric_limits<float>::infinity()}) {
     auto invalid=scene;invalid.planes[0].cornerPower=power;CHECK(encodeScene(invalid).empty());
     invalid=scene;invalid.planes[0].paintClip->cornerPower=power;CHECK(encodeScene(invalid).empty());
   }
-  auto bad=scene;bad.planes[0].transform.fill(0);CHECK(encodeScene(bad).empty());
+  bad=scene;bad.planes[0].transform.fill(0);CHECK(encodeScene(bad).empty());
   bad=scene;bad.planes[0].parameters.optical.thickness=std::numeric_limits<float>::quiet_NaN();CHECK(encodeScene(bad).empty());
   bad=scene;bad.planes[0].parameters.optical.refractiveIndex=0.9F;CHECK(encodeScene(bad).empty());
   bad=scene;bad.planes[0].surface="../client";CHECK(encodeScene(bad).empty());

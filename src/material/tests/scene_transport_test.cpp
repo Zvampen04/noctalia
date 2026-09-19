@@ -53,6 +53,9 @@ int main() {
   CHECK(kMaxInlineSceneBytes == 4080);
   CHECK(kSceneChunkBytes == 3072);
   CHECK(kSceneTransportVersion == 2);
+  CHECK(kCustomEffectTransportVersion == 3);
+  CHECK(kMaterialProtocolVersion == 5);
+  CHECK(kCustomEffectLeaseVersion == 5);
 
   // Exercise assembly limits independently of descriptor validation.
   SceneAssembly assembly;
@@ -85,8 +88,10 @@ int main() {
   CHECK(!state.commit());
   state.release();
   CHECK(state.setInline(1, firstWire) == SceneTransportState::Result::Accepted);
+  CHECK(state.pendingSequence() == 1 && state.pendingWireVersion() == kLegacySceneVersion);
   CHECK(!state.scene());
   CHECK(state.commit() == 1);
+  CHECK(state.sceneSequence() == 1 && state.sceneWireVersion() == kLegacySceneVersion);
   CHECK(*state.scene() == first);
 
   // A rejected inline update neither replaces current state nor an earlier
@@ -95,6 +100,7 @@ int main() {
   std::vector<std::uint8_t> oversized(kMaxInlineSceneBytes + 1, 0);
   CHECK(state.setInline(3, oversized) == SceneTransportState::Result::Rejected);
   CHECK(state.commit() == 2);
+  CHECK(state.sceneSequence() == 2 && state.pendingSequence() == 0);
   CHECK(*state.scene() == second);
 
   const auto large = scene(1024, kMaxScenePlanes);
@@ -149,8 +155,22 @@ int main() {
   CHECK(state.commit() == 11);
   CHECK(*state.scene() == second);
   state.release();
-  CHECK(!state.scene());
+  CHECK(!state.scene() && state.sceneSequence() == 0 && state.sceneWireVersion() == 0);
   CHECK(!state.commit());
+
+  // An armed receiver may inspect and later invalidate pending state without
+  // changing the last committed scene.
+  CHECK(state.setInline(21, encodeScene(first)) == SceneTransportState::Result::Accepted);
+  CHECK(state.pendingSequence() == 21 && state.pendingScene() && *state.pendingScene() == first);
+  state.discardPending();
+  CHECK(state.pendingSequence() == 0 && !state.pendingScene() && !state.commit());
+
+  auto leased = first;
+  leased.leaseToken = 23;
+  const auto leasedWire = encodeScene(leased, kLeasedSceneVersion);
+  CHECK(state.setInline(22, leasedWire) == SceneTransportState::Result::Accepted);
+  CHECK(state.pendingWireVersion() == kLeasedSceneVersion);
+  CHECK(state.commit() == 22 && state.sceneWireVersion() == kLeasedSceneVersion);
 
   std::cout << "scene transport boundaries, replacement and atomic commit passed\n";
 }

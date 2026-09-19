@@ -13,6 +13,7 @@
 #include "scripting/plugin_catalog.h"
 #include "scripting/plugin_registry.h"
 #include "shell/settings/bar_widget_editor.h"
+#include "shell/bar/bar_material_target.h"
 #include "shell/settings/color_spec_picker.h"
 #include "shell/settings/plugin_store_content.h"
 #include "shell/settings/settings_content.h"
@@ -87,6 +88,7 @@ namespace {
         .serial = serial,
         .width = surface.width(),
         .height = surface.height(),
+        .materialSurface = "settings",
     };
   }
 
@@ -379,6 +381,7 @@ void SettingsWindow::openActionsMenu() {
           .parent = PopupSurfaceParent{
               .xdgSurface = m_surface->xdgSurface(),
               .output = output,
+              .materialSurface = "settings",
           },
       }
   );
@@ -432,6 +435,18 @@ void SettingsWindow::openBarWidgetAddPopup(const std::vector<std::string>& laneP
 
       const Config& activeConfig = m_config->config();
       auto laneItems = barWidgetItemsForPath(activeConfig, selectedLanePath);
+      const BarConfig* bar = selectedLanePath.size() >= 2 ? settings::findBar(activeConfig, selectedLanePath[1]) : nullptr;
+      if (bar == nullptr) return;
+      auto placements = bar->widgetPlacements;
+      std::unordered_set<std::string> placementIds;
+      for (const auto& placement : placements) placementIds.insert(placement.id);
+      std::string placementId = StringUtils::generateUuid();
+      if (placementId.empty() || placementIds.contains(placementId)) {
+        const std::string& widgetName = !newInstanceId.empty() ? newInstanceId : value;
+        placementId = noctalia::bar::legacyBarWidgetPlacementId(
+            selectedLanePath[1], selectedLanePath.back(), widgetName, laneItems.size(), placementIds
+        );
+      }
 
       m_pendingDeleteWidgetName.clear();
       m_pendingDeleteWidgetSettingPath.clear();
@@ -439,9 +454,11 @@ void SettingsWindow::openBarWidgetAddPopup(const std::vector<std::string>& laneP
       m_editingWidgetName.clear();
 
       if (!newInstanceType.empty() && !newInstanceId.empty()) {
-        laneItems.push_back(newInstanceId);
+        placements.push_back({.id = placementId, .widget = newInstanceId});
+        laneItems.push_back(noctalia::bar::makeBarWidgetPlacementToken(placementId));
         std::vector<std::pair<std::vector<std::string>, ConfigOverrideValue>> overrides = {
             {{"widget", newInstanceId, "type"}, newInstanceType},
+            {{"bar", selectedLanePath[1], "widget_placement"}, placements},
         };
         for (const auto& [key, settingValue] : initialSettings) {
           overrides.push_back({{"widget", newInstanceId, key}, settingValue});
@@ -451,8 +468,12 @@ void SettingsWindow::openBarWidgetAddPopup(const std::vector<std::string>& laneP
         return;
       }
 
-      laneItems.push_back(value);
-      setSettingOverride(selectedLanePath, laneItems);
+      placements.push_back({.id = placementId, .widget = value});
+      laneItems.push_back(noctalia::bar::makeBarWidgetPlacementToken(placementId));
+      setSettingOverrides({
+          {{"bar", selectedLanePath[1], "widget_placement"}, placements},
+          {selectedLanePath, laneItems},
+      });
     });
   }
 
@@ -537,6 +558,7 @@ void SettingsWindow::openSearchPickerPopup(settings::SearchPickerOpenRequest req
           .placeholder = std::move(request.placeholder),
           .emptyText = std::move(request.emptyText),
           .scale = uiScale(),
+          .fontFamilies = !request.settingPath.empty() && request.settingPath.back() == "font_family",
       }
   );
 }
@@ -2022,6 +2044,11 @@ void SettingsWindow::openPluginSourceCreateEditor(std::optional<PluginSourceConf
 }
 
 void SettingsWindow::openPluginSettingsEditor(std::string pluginId) {
+  if (const auto* manifest = scripting::PluginRegistry::instance().findManifest(pluginId);
+      manifest && !manifest->settingsTabs.empty()) {
+    DeferredCall::callLater([this, pluginId = std::move(pluginId)] { (void)openToPlugin(pluginId); });
+    return;
+  }
   DeferredCall::callLater([this, pluginId = std::move(pluginId)]() mutable {
     if (m_config == nullptr) {
       return;

@@ -8,6 +8,7 @@
 #include "render/scene/rect_node.h"
 #include "ui/palette.h"
 #include "ui/style.h"
+#include "ui/surface_material.h"
 #include "util/clamp.h"
 
 #include <algorithm>
@@ -24,7 +25,7 @@ namespace {
         .fill = fill,
         .border = fill,
         .fillMode = FillMode::Solid,
-        .radius = radius,
+        .radius = Style::scaledRadius(radius),
         .softness = 1.0F,
         .borderWidth = 0.0F,
     };
@@ -35,6 +36,8 @@ namespace {
 } // namespace
 
 Slider::Slider() {
+  m_materialConn = Style::surfaceMaterialChanged().connect([this] { applyVisualState(); });
+  m_paletteConn = paletteChanged().connect([this] { applyVisualState(); });
   auto track = std::make_unique<RectNode>();
   m_track = static_cast<RectNode*>(addChild(std::move(track)));
 
@@ -306,15 +309,16 @@ void Slider::applyVisualState() {
   }
 
   auto trackStyle = solidStyle(trackColor, m_trackHeight * 0.5F);
-  m_track->setStyle(trackStyle);
+  m_track->setStyle(SurfaceMaterial::styled(*m_track, trackStyle, -0.75F, MaterialBackdrop::Inherited, "slider"));
 
   auto fillStyle = solidStyle(fillColor, m_trackHeight * 0.5F);
-  m_fill->setStyle(fillStyle);
+  m_fill->setStyle(SurfaceMaterial::styled(*m_fill, fillStyle, -0.35F, MaterialBackdrop::Inherited, "slider"));
 
   auto thumbStyle = solidStyle(thumbColor, m_thumbSizePx * 0.5F);
+  thumbStyle.cornerPower = 2.0F;
   thumbStyle.border = thumbBorder;
   thumbStyle.borderWidth = focused ? Style::focusRingWidth : Style::borderWidth;
-  m_thumb->setStyle(thumbStyle);
+  m_thumb->setStyle(SurfaceMaterial::styled(*m_thumb, thumbStyle, pressing ? 0.3F : 1.0F, MaterialBackdrop::Inherited, "slider"));
 }
 
 float Slider::normalizedValue() const noexcept {

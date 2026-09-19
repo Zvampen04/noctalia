@@ -6,6 +6,8 @@
 #include "ui/controls/glyph.h"
 #include "ui/palette.h"
 #include "ui/style.h"
+#include "ui/control_settings_palette.h"
+#include "render/animation/animation_manager.h"
 
 #include <algorithm>
 #include <cmath>
@@ -15,6 +17,11 @@ Checkbox::Checkbox() {
   auto box = std::make_unique<Box>();
   m_box = static_cast<Box*>(addChild(std::move(box)));
 
+  m_box->setMaterialIdentity("control", "checkbox-well");
+  auto plateau = std::make_unique<Box>();
+  m_plateau = static_cast<Box*>(addChild(std::move(plateau)));
+  m_plateau->setMaterialIdentity("control", "checkbox-plateau");
+  m_plateau->setHitTestVisible(false);
   auto checkGlyph = std::make_unique<Glyph>();
   checkGlyph->setGlyph("check");
   m_checkGlyph = static_cast<Glyph*>(addChild(std::move(checkGlyph)));
@@ -34,8 +41,7 @@ Checkbox::Checkbox() {
       return;
     }
     const bool next = !m_checked;
-    m_checked = next;
-    applyState();
+    setChecked(next);
     if (m_onChange) {
       m_onChange(next);
     }
@@ -45,8 +51,7 @@ Checkbox::Checkbox() {
       return;
     }
     const bool next = !m_checked;
-    m_checked = next;
-    applyState();
+    setChecked(next);
     if (m_onChange) {
       m_onChange(next);
     }
@@ -54,6 +59,8 @@ Checkbox::Checkbox() {
   m_inputArea = static_cast<InputArea*>(addChild(std::move(area)));
 
   applyState();
+  m_materialConn = Style::surfaceMaterialChanged().connect([this] { applyState(); markLayoutDirty(); });
+  m_paletteConn = paletteChanged().connect([this] { applyState(); });
 }
 
 void Checkbox::setChecked(bool checked) {
@@ -61,7 +68,17 @@ void Checkbox::setChecked(bool checked) {
     return;
   }
   m_checked = checked;
-  applyState();
+  if (m_animId && animationManager()) animationManager()->cancel(m_animId);
+  m_animId = 0;
+  if (animationManager() && Style::controls().checkbox_variant == Style::CheckboxTreatment::Plateau) {
+    m_animId = animationManager()->animate(m_checkedProgress, checked ? 1.0F : 0.0F,
+        Style::controls().checkbox_transition_ms, Easing::EaseInOutCubic,
+        [this](float value) { m_checkedProgress = value; applyState(); }, [this] { m_animId = 0; }, this);
+    markPaintDirty();
+  } else {
+    m_checkedProgress = checked ? 1.0F : 0.0F;
+    applyState();
+  }
 }
 
 void Checkbox::setEnabled(bool enabled) {
@@ -97,8 +114,10 @@ bool Checkbox::hovered() const noexcept { return m_inputArea != nullptr && m_inp
 bool Checkbox::pressed() const noexcept { return m_inputArea != nullptr && m_inputArea->pressed(); }
 
 void Checkbox::doLayout(Renderer& renderer) {
-  const float touchSize = Style::controlHeightSm * m_scale;
-  const float boxSize = (Style::fontSizeTitle + Style::spaceXs) * m_scale;
+  const auto& controls = Style::controls();
+  const bool plateau = controls.checkbox_variant == Style::CheckboxTreatment::Plateau;
+  const float boxSize = (plateau ? controls.checkbox_size : Style::fontSizeTitle + Style::spaceXs) * m_scale;
+  const float touchSize = std::max(Style::controlHeightSm * m_scale, boxSize);
   const float boxInset = (touchSize - boxSize) * 0.5F;
 
   setSize(touchSize, touchSize);
@@ -106,7 +125,11 @@ void Checkbox::doLayout(Renderer& renderer) {
   if (m_box != nullptr) {
     m_box->setPosition(boxInset, boxInset);
     m_box->setFrameSize(boxSize, boxSize);
-    m_box->setRadius(Style::scaledRadiusSm(m_scale));
+    m_box->setRadius(plateau ? Style::scaledRadius(controls.checkbox_radius, m_scale) : Style::scaledRadiusSm(m_scale));
+    const float centerSize = std::min(boxSize, controls.checkbox_plateau_size * m_scale);
+    m_plateau->setFrameSize(centerSize, centerSize);
+    m_plateau->setPosition((touchSize - centerSize) * 0.5F, (touchSize - centerSize) * 0.5F);
+    m_plateau->setRadius(Style::scaledRadius(controls.checkbox_plateau_radius, m_scale));
   }
 
   if (m_checkGlyph != nullptr) {
@@ -150,11 +173,27 @@ void Checkbox::applyState() {
     border = colorSpecFromRole(ColorRole::Hover);
   }
 
-  m_box->setFill(fill);
-  m_box->setBorder(border, borderWidth);
+  const auto& controls = Style::controls();
+  const bool plateau = controls.checkbox_variant == Style::CheckboxTreatment::Plateau;
+  m_plateau->setVisible(plateau);
+  if (plateau) {
+    const auto face = colorForRole(controlColorRole(controls.checkbox_face_role));
+    const auto accent = colorForRole(controlColorRole(controls.checkbox_accent_role));
+    const auto idle = colorForRole(ColorRole::SurfaceVariant);
+    m_box->setSurfaceRelief(-1.0F);
+    m_box->setFill(lerpColor(idle, m_checkedFill ? resolveColorSpec(*m_checkedFill) : accent, m_checkedProgress));
+    m_box->setBorder(focusRingColorSpec(), focused ? Style::focusRingWidth * m_scale : 0.0F);
+    m_plateau->setSurfaceRelief(pressed() ? 0.4F : 1.0F);
+    m_plateau->setFill(lerpColor(face, colorForRole(ColorRole::OnPrimary), m_checkedProgress));
+    m_plateau->clearBorder();
+  } else {
+    m_box->setSurfaceRelief(m_checked ? -0.4F : 0.4F);
+    m_box->setFill(fill);
+    m_box->setBorder(border, borderWidth);
+  }
 
   m_checkGlyph->setColor(glyph);
-  m_checkGlyph->setVisible(m_checked);
+  m_checkGlyph->setVisible(m_checked && (!plateau || controls.checkbox_plateau_tick));
 
   setOpacity(m_enabled ? 1.0F : 0.55F);
 }

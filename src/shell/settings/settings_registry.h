@@ -2,11 +2,13 @@
 
 #include "config/config_types.h"
 #include "core/input/key_chord.h"
+#include "render/custom_effect/custom_effect_types.h"
 #include "ui/controls/button.h"
 #include "ui/controls/color_swatch_preview.h"
 #include "ui/palette.h"
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -34,7 +36,6 @@ namespace settings {
     ControlCenter,
     Notifications,
     Osd,
-    Screenshot,
     Shell,
     Keybinds,
     Security,
@@ -92,11 +93,14 @@ namespace settings {
     bool segmented = false;           // render as Segmented pill group instead of dropdown Select
     SelectValueType valueType = SelectValueType::String; // storage type for option values
     float preferredWidth = 0.0F;                         // 0 = default settings dropdown width
+    std::vector<std::vector<std::string>> linkedPaths; // additional fields changed/reset atomically
     std::vector<std::string> linkedPath;                 // companion path for groupedCommit / override reset
     std::function<std::vector<std::pair<std::vector<std::string>, ConfigOverrideValue>>(
         std::string_view selectedValue, const std::vector<std::string>& primaryPath
     )>
         groupedCommit;
+    // False/true labels selected from a linked boolean owner while acknowledgment is pending.
+    std::optional<std::pair<std::string, std::string>> linkedBooleanValues;
   };
 
   struct SearchPickerSetting {
@@ -256,6 +260,14 @@ namespace settings {
     ButtonVariant variant = ButtonVariant::Default;
   };
 
+  struct CustomEffectSetting {
+    std::string targetId;
+    std::string stableId;
+    std::string digest;
+    float sampleRadiusPx = 0.0F;
+    std::string diagnostic;
+  };
+
   struct ColorSpecPickerSetting {
     std::vector<ColorRole> roles;
     std::string selectedValue;
@@ -272,11 +284,20 @@ namespace settings {
     std::string defaultAction;
   };
 
+  struct CurveSetting {
+    std::array<float, 4> value{.34F, .8F, .34F, 1.0F};
+    std::array<std::vector<std::string>, 4> paths;
+    std::vector<std::string> stylePath; // optional selection activated while editing
+    std::string initialStyle = "custom";
+    std::string editedStyle = "custom";
+  };
+
   using SettingControl = std::variant<
-      ToggleSetting, SelectSetting, SliderSetting, RangeSliderSetting, TextSetting, OptionalNumberSetting,
+      CurveSetting, ToggleSetting, SelectSetting, SliderSetting, RangeSliderSetting, TextSetting, OptionalNumberSetting,
       OptionalStepperSetting, StepperSetting, ListSetting, StringMapSetting, ShortcutListSetting, KeybindListSetting,
       SessionPanelActionsSetting, IdleBehaviorsSetting, NotificationFiltersSetting, MultiSelectSetting,
-      TemplateGridSetting, ButtonSetting, ColorSpecPickerSetting, SearchPickerSetting, GestureActionSetting>;
+      TemplateGridSetting, ButtonSetting, CustomEffectSetting, ColorSpecPickerSetting, SearchPickerSetting,
+      GestureActionSetting>;
 
   // Visibility predicate, evaluated against the same Config the registry was built from
   // (the registry rebuilds on every config change). Capture snapshot values or read the
@@ -315,6 +336,7 @@ namespace settings {
     std::vector<SelectOption> fontFamilies;
     std::string shellAvatarPath;
     std::vector<std::string> keyboardLayoutNames;
+    std::function<std::optional<CustomEffectCompileStatus>(std::string_view)> customEffectStatus;
   };
 
   [[nodiscard]] const BarConfig* findBar(const Config& cfg, std::string_view name);

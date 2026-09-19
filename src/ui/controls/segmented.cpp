@@ -1,6 +1,10 @@
 #include "ui/controls/segmented.h"
 
 #include "render/core/render_styles.h"
+#include "render/animation/animation_manager.h"
+#include "render/animation/motion_service.h"
+#include "ui/controls/box.h"
+#include "ui/control_settings_palette.h"
 #include "render/scene/input_area.h"
 #include "ui/controls/button.h"
 #include "ui/controls/flex.h"
@@ -14,10 +18,19 @@
 #include <utility>
 
 Segmented::Segmented() {
+  setMaterialIdentity("control", "segmented");
   setDirection(FlexDirection::Horizontal);
   setAlign(FlexAlign::Stretch);
   setGap(0.0F);
   applyOuterStyle();
+
+  auto indicator = std::make_unique<Box>();
+  indicator->setMaterialIdentity("control", "segmented-indicator");
+  indicator->setParticipatesInLayout(false);
+  indicator->setHitTestVisible(false);
+  indicator->setVisible(false);
+  indicator->setZIndex(0);
+  m_indicator = static_cast<Box*>(addChild(std::move(indicator)));
 
   auto area = std::make_unique<InputArea>();
   area->setFocusable(true);
@@ -35,7 +48,15 @@ Segmented::Segmented() {
       }
   );
   m_rovingNav.bindFocusArea(m_focusArea);
+  m_presentationConn = Style::surfaceMaterialChanged().connect([this] { refreshPresentation(); });
+  m_paletteConn = paletteChanged().connect([this] { refreshVariants(); paintIndicator(); });
+  m_motionConn = MotionService::instance().changed().connect([this] {
+    if (!MotionService::instance().enabled()) updateIndicator(false);
+  });
 }
+
+Segmented::~Segmented() { cancelIndicator(); }
+
 
 std::size_t Segmented::addOption(std::string_view label) { return addOption(label, std::string_view{}); }
 
@@ -47,11 +68,14 @@ std::size_t Segmented::addOption(std::string_view label, std::string_view glyph)
     addChild(std::move(sep));
   }
   auto btn = makeSegmentButton(label, glyph, index);
+  btn->setZIndex(1);
   Button* raw = btn.get();
   m_buttons.push_back(raw);
   m_rovingNav.registerItem(raw, [this, index]() { setSelectedIndex(index); });
-  addChild(std::move(btn));
+  // Establish the new option before attachment so its initial palette does not animate.
   refreshVariants();
+  addChild(std::move(btn));
+  m_rovingNav.notifyExternalSelectionChanged();
   return index;
 }
 
@@ -61,6 +85,7 @@ void Segmented::setSelectedIndex(std::size_t index) {
   }
   m_selected = index;
   refreshVariants();
+  updateIndicator(true);
   m_rovingNav.notifyExternalSelectionChanged();
   if (m_onChange) {
     m_onChange(index);
@@ -134,6 +159,9 @@ void Segmented::setOptionTooltip(std::size_t index, std::string_view text) {
 }
 
 void Segmented::clearOptions() {
+  cancelIndicator();
+  m_indicatorMotion.clear();
+  m_indicator->setVisible(false);
   for (Button* btn : m_buttons) {
     if (btn != nullptr) {
       (void)removeChild(btn);
@@ -175,6 +203,7 @@ void Segmented::setEnabled(bool enabled) {
     return;
   }
   m_enabled = enabled;
+  m_focusArea->setEnabled(enabled);
   for (Button* btn : m_buttons) {
     if (btn != nullptr) {
       btn->setEnabled(enabled);
@@ -238,9 +267,27 @@ void Segmented::setEqualSegmentWidths(bool equalWidths) {
 
 void Segmented::refreshVariants() {
   const std::size_t n = m_buttons.size();
-  const float r = Style::scaledRadiusMd(m_scale);
+  const bool floating = Style::controls().segmented_variant == Style::SegmentedTreatment::Floating;
+  const float r = floating ? Style::scaledRadius(Style::controls().segmented_indicator_radius, m_scale) : Style::scaledRadiusMd(m_scale);
+  for (Separator* separator : m_separators) separator->setVisible(!floating);
   for (std::size_t i = 0; i < n; ++i) {
     if (m_buttons[i] == nullptr) {
+      continue;
+    }
+    if (floating) {
+      m_buttons[i]->setVariant(ButtonVariant::Ghost);
+      auto palette = Button::defaultPalette(ButtonVariant::Ghost);
+      palette.normal.bg = palette.hover.bg = palette.pressed.bg = palette.disabled.bg = clearColorSpec();
+      palette.normal.border = palette.hover.border = palette.pressed.border = palette.disabled.border = clearColorSpec();
+      const auto selectedRole = Style::controls().segmented_indicator_opacity > 0
+          ? controlForegroundRole(Style::controls().segmented_indicator_role) : ColorRole::Primary;
+      const auto textRole = i == m_selected ? selectedRole : ColorRole::OnSurface;
+      palette.normal.label = colorSpecFromRole(textRole);
+      palette.hover.label = palette.pressed.label = colorSpecFromRole(i == m_selected ? textRole : ColorRole::Primary);
+      palette.disabled.label = colorSpecFromRole(textRole, 0.55F);
+      palette.selected.reset();
+      m_buttons[i]->setCustomPalette(palette);
+      m_buttons[i]->setRadii(Radii{r});
       continue;
     }
     m_buttons[i]->setVariant(i == m_selected ? ButtonVariant::TabActive : ButtonVariant::Tab);
@@ -262,14 +309,76 @@ void Segmented::applyOuterStyle() {
   Flex::setPadding(m_outerPadding);
   setFill(colorSpecFromRole(m_surfaceRole, m_surfaceOpacity));
   clearBorder();
-  setRadius(Style::scaledRadiusMd(m_scale));
+  setRadius(Style::controls().segmented_variant == Style::SegmentedTreatment::Floating
+      ? Style::scaledRadius(Style::controls().segmented_indicator_radius, m_scale) : Style::scaledRadiusMd(m_scale));
 }
 
 void Segmented::doLayout(Renderer& renderer) {
   Flex::doLayout(renderer);
   m_rovingNav.layoutOverlay(width(), height());
+  updateIndicator(false);
 }
 
 float Segmented::effectiveFontSize() const noexcept {
   return (m_fontSize > 0.0F ? m_fontSize : Style::fontSizeBody) * m_scale;
+}
+
+void Segmented::cancelIndicator() {
+  if (m_indicatorAnimation && animationManager()) animationManager()->cancel(m_indicatorAnimation);
+  m_indicatorAnimation = 0;
+}
+
+void Segmented::paintIndicator() {
+  if (!m_indicator) return;
+  const auto& controls = Style::controls();
+  const bool visible = controls.segmented_variant == Style::SegmentedTreatment::Floating && m_indicatorMotion.valid();
+  m_indicator->setVisible(visible);
+  if (!visible) return;
+  const auto& frame = m_indicatorMotion.current();
+  m_indicator->setPosition(frame.x, frame.y);
+  m_indicator->setFrameSize(frame.width, frame.height);
+  m_indicator->setRadius(Style::scaledRadius(controls.segmented_indicator_radius, m_scale));
+  m_indicator->setFill(colorSpecFromRole(controlColorRole(controls.segmented_indicator_role)));
+  m_indicator->setOpacity(controls.segmented_indicator_opacity);
+  m_indicator->clearBorder();
+}
+
+void Segmented::updateIndicator(bool animate) {
+  const auto& controls = Style::controls();
+  if (controls.segmented_variant != Style::SegmentedTreatment::Floating || m_buttons.empty() || m_selected >= m_buttons.size()) {
+    cancelIndicator(); m_indicatorMotion.clear(); paintIndicator(); return;
+  }
+  const auto* button = m_buttons[m_selected];
+  if (button->width() <= 0 || button->height() <= 0 || width() <= 0 || height() <= 0) {
+    cancelIndicator(); m_indicatorMotion.clear(); paintIndicator(); return;
+  }
+  const auto target = segmentedIndicatorTarget({button->x(), button->y(), button->width(), button->height()},
+      controls.segmented_indicator_inset * m_scale, width(), height());
+  // A layout pass during travel must not restart or finish an unchanged trip.
+  if (!animate && m_indicatorAnimation && target == m_indicatorMotion.target() && MotionService::instance().enabled() && controls.segmented_transition_ms > 0) {
+    paintIndicator(); return;
+  }
+  cancelIndicator();
+  if (!animate || !animationManager() || !MotionService::instance().enabled() || controls.segmented_transition_ms <= 0) {
+    m_indicatorMotion.snap(target); paintIndicator(); return;
+  }
+  if (!m_indicatorMotion.retarget(target)) { paintIndicator(); return; }
+  m_indicatorAnimation = animationManager()->animateProgress(0, 1, controls.segmented_transition_ms,
+      [this](float progress) {
+        auto settings = Style::controls();
+        const auto& motion = MotionService::instance();
+        if (motion.style() == MotionStyle::Linear) settings.segmented_travel_stretch = 0;
+        const float native = Style::controlBezier(progress, settings.segmented_curve_x1, settings.segmented_curve_y1,
+                                                  settings.segmented_curve_x2, settings.segmented_curve_y2);
+        m_indicatorMotion.advance(progress, settings, width(), height(), motion.easedProgress(progress, native));
+        paintIndicator();
+      }, [this] { m_indicatorAnimation = 0; }, this);
+  markPaintDirty();
+}
+
+void Segmented::refreshPresentation() {
+  applyOuterStyle();
+  refreshVariants();
+  updateIndicator(false);
+  markLayoutDirty();
 }

@@ -53,7 +53,7 @@ public:
   void setSoftness(float softness);
   // Section card background. The outline follows the [shell].card_borders
   // toggle unless a caller passes an explicit showBorder.
-  void setCardStyle(float scale = 1.0F, float fillOpacity = 1.0F, bool showBorder = Style::cardBordersEnabled());
+  void setCardStyle(float scale = 1.0F, float fillOpacity = 1.0F, std::optional<bool> showBorder = std::nullopt);
   void bindState(ScrollViewState* state);
   void setOnScrollChanged(std::function<void(float)> callback);
 
@@ -96,6 +96,10 @@ private:
   ColorSpec m_backgroundFill = clearColorSpec();
   ColorSpec m_backgroundBorder = clearColorSpec();
   Signal<>::ScopedConnection m_paletteConn;
+  Signal<>::ScopedConnection m_cardMaterialConn;
+  std::optional<float> m_cardScale;
+  float m_cardOpacity = 1.0F;
+  std::optional<bool> m_cardBorder;
 
   float m_viewportPaddingH = Style::spaceXs;
   float m_viewportPaddingV = Style::spaceSm;

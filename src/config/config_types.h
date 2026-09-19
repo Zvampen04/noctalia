@@ -1,11 +1,15 @@
 #pragma once
 
+#include "ui/terminal_appearance.h"
+
 #include "config/color_spec.h"
 #include "config/config_limits.h"
 #include "config/widget_setting_value.h"
 #include "core/input/key_chord.h"
 #include "system/sysmon_threshold_profile.h"
 #include "ui/style.h"
+#include "ui/caret_settings.h"
+#include "render/animation/motion_curve.h"
 
 #include <array>
 #include <cstddef>
@@ -23,6 +27,12 @@ struct WaylandOutput;
 // Direction hidden accordion members unfold relative to the always-visible first member, along the
 // bar lane's main axis.
 enum class BarAccordionDirection : std::uint8_t { End = 0, Start = 1 };
+enum class BarCapsuleContour : std::uint8_t { Rounded = 0, Powerline = 1, PowerlineStart = 2, PowerlineEnd = 3 };
+enum class BarCenterAlignment : std::uint8_t { Start = 0, Center = 1, End = 2 };
+enum class BarEdgeClusterPolicy : std::uint8_t { FollowCenter = 0, Equidistant = 1, Edge = 2 };
+enum class BarSectionLayoutRole : std::uint8_t { Free = 0, Start = 1, Center = 2, End = 3 };
+enum class BarMaterialMode : std::uint8_t { Inherit = 0, Solid = 1, Glass = 2, Transparent = 3 };
+enum class BarSectionShader : std::uint8_t { Inherit = 0, Flat = 1, GlassRim = 2 };
 
 // A capsule group: an ordered set of member widgets sharing one capsule + style. `id` is opaque and
 // auto-generated. A group appears in a bar lane as a single token (see makeCapsuleGroupToken); its
@@ -36,8 +46,10 @@ struct BarCapsuleGroupStyle {
   bool borderSpecified = false;
   std::optional<ColorSpec> border;
   std::optional<ColorSpec> foreground;
-  float padding = Style::barCapsulePadding;
+  float padding = Style::Metrics{}.barCapsulePadding;
   std::optional<float> radius;
+  std::optional<BarCapsuleContour> contour;
+  std::optional<float> contourDepth;
   float opacity = 1.0F;
   // Collapse the group to its first member; hovering the capsule reveals the rest inline.
   bool accordion = false;
@@ -61,6 +73,44 @@ struct BarDeadZoneOverride {
   bool operator==(const BarDeadZoneOverride&) const = default;
 };
 
+struct BarDeadZoneConfig {
+  // Gesture -> action bindings for the parts of the bar no widget covers. Same grammar as widget
+  // actions; see widget_action.h.
+  std::unordered_map<std::string, std::string> actions;
+
+  bool operator==(const BarDeadZoneConfig&) const = default;
+};
+
+struct BarWidgetPlacementConfig {
+  std::string id;
+  std::string widget;
+  std::optional<ColorSpec> foreground;
+  std::optional<ColorSpec> iconForeground;
+  bool operator==(const BarWidgetPlacementConfig&) const = default;
+};
+
+struct BarSectionConfig {
+  std::string id;
+  std::vector<std::string> widgets;
+  BarCenterAlignment anchor = BarCenterAlignment::Start;
+  BarCenterAlignment alignment = BarCenterAlignment::Start;
+  // Free preserves the section's explicit anchor/alignment/offset. The three
+  // lane roles opt into the bar-wide center/edge cluster policies.
+  BarSectionLayoutRole layoutRole = BarSectionLayoutRole::Free;
+  float offset = 0.0F;
+  float crossOffset = 0.0F;
+  bool allowOverlap = false;
+  std::optional<ColorSpec> background;
+  std::optional<float> backgroundOpacity;
+  std::optional<ColorSpec> border;
+  std::optional<float> borderWidth;
+  BarMaterialMode materialMode = BarMaterialMode::Inherit;
+  BarSectionShader shader = BarSectionShader::Inherit;
+  BarDeadZoneConfig actionArea;
+
+  bool operator==(const BarSectionConfig&) const = default;
+};
+
 struct BarMonitorOverride {
   std::string match;
   std::optional<std::string> position;
@@ -71,6 +121,7 @@ struct BarMonitorOverride {
   std::optional<bool> reserveSpace;
   std::optional<std::string> layer; // top | overlay
   std::optional<std::int32_t> thickness;
+  std::optional<ColorSpec> background;
   std::optional<float> backgroundOpacity;
   std::optional<ColorSpec> border;
   std::optional<float> borderWidth;
@@ -79,7 +130,19 @@ struct BarMonitorOverride {
   std::optional<std::int32_t> radiusTopRight;
   std::optional<std::int32_t> radiusBottomLeft;
   std::optional<std::int32_t> radiusBottomRight;
+  std::optional<bool> sectionBackgrounds; // separate surfaces for the three widget lanes
+  std::optional<float> islandHoverGrow;
+  std::optional<float> islandHoverOffset;
+  std::optional<bool> islandOutward;
+  std::optional<std::int32_t> islandPanelOffset;
+  std::optional<bool> centeredSections;
+  std::optional<BarCenterAlignment> centerAlignment;
+  std::optional<BarEdgeClusterPolicy> edgeClusterPolicy;
+  std::optional<BarMaterialMode> materialMode;
+  std::optional<bool> islandMorph; // attached panel owns and expands its source lane
+  std::optional<std::int32_t> islandMorphGap;
   std::optional<bool> concaveEdgeCorners;
+  std::optional<std::int32_t> maxLength;
   std::optional<std::int32_t> marginEnds;         // inset from each end of the bar along its main axis
   std::optional<std::int32_t> marginEdge;         // distance from the nearest screen edge (floats the bar when > 0)
   std::optional<std::int32_t> marginOppositeEdge; // extra reserved space on the inward side of the bar
@@ -95,6 +158,10 @@ struct BarMonitorOverride {
   std::optional<std::vector<std::string>> startWidgets;
   std::optional<std::vector<std::string>> centerWidgets;
   std::optional<std::vector<std::string>> endWidgets;
+  // Ordered replacement for the base bar's configured sections. `sectionsSpecified`
+  // distinguishes an explicit empty override (use no sections) from inheritance.
+  std::vector<BarSectionConfig> sections;
+  bool sectionsSpecified = false;
   std::optional<bool> widgetCapsuleDefault;
   std::optional<ColorSpec> widgetCapsuleFill;
   bool widgetCapsuleBorderSpecified = false;
@@ -105,6 +172,8 @@ struct BarMonitorOverride {
   std::optional<std::vector<BarCapsuleGroupStyle>> widgetCapsuleGroups;
   std::optional<double> widgetCapsulePadding;
   std::optional<double> widgetCapsuleRadius;
+  std::optional<BarCapsuleContour> widgetCapsuleContour;
+  std::optional<double> widgetCapsuleContourDepth;
   std::optional<double> widgetCapsuleOpacity;
   std::optional<bool> hoverHighlight;
   BarDeadZoneOverride deadZone;
@@ -116,18 +185,14 @@ struct BarMonitorOverride {
   bool operator==(const BarMonitorOverride&) const = default;
 };
 
-struct BarDeadZoneConfig {
-  // Gesture -> action bindings for the parts of the bar no widget covers. Same grammar as widget
-  // actions; see widget_action.h.
-  std::unordered_map<std::string, std::string> actions;
-
-  bool operator==(const BarDeadZoneConfig&) const = default;
-};
-
+// Configuration defaults are immutable. Effective config snapshots are built
+// during live previews and must not read the preview's mutable Style globals.
 struct BarConfig {
   // Gesture -> action bindings applied to every widget on this bar, overriding widget-type
   // defaults and overridden in turn by `[widget.<name>.actions]`. See widget_action.h.
   std::unordered_map<std::string, std::string> actions;
+  // Persistent lane-item identity. Lanes reference these records with @widget:<id> tokens.
+  std::vector<BarWidgetPlacementConfig> widgetPlacements;
   std::string name = "default";
   std::string position = "top";
   bool enabled = true;
@@ -138,17 +203,30 @@ struct BarConfig {
   [[nodiscard]] constexpr bool isAutoHideEnabled() const noexcept { return autoHide || smartAutoHide; }
   bool reserveSpace = true;  // reserve compositor exclusive zone; applies with or without auto_hide
   std::string layer = "top"; // top | overlay; attached panels use the same layer
-  std::int32_t thickness = Style::barThicknessDefault;
+  std::int32_t thickness = Style::Metrics{}.barThicknessDefault;
+  ColorSpec background = colorSpecFromRole(ColorRole::Surface);
   float backgroundOpacity = 1.0F;
   // Inside outline for the bar background; attached panels inherit the resolved values.
   ColorSpec border = colorSpecFromRole(ColorRole::Outline);
   float borderWidth = 0.0F;
-  std::int32_t radius = static_cast<std::int32_t>(Style::radiusXl);
-  std::int32_t radiusTopLeft = static_cast<std::int32_t>(Style::radiusXl);
-  std::int32_t radiusTopRight = static_cast<std::int32_t>(Style::radiusXl);
-  std::int32_t radiusBottomLeft = static_cast<std::int32_t>(Style::radiusXl);
-  std::int32_t radiusBottomRight = static_cast<std::int32_t>(Style::radiusXl);
+  std::int32_t radius = static_cast<std::int32_t>(Style::Metrics{}.radiusXl);
+  std::int32_t radiusTopLeft = static_cast<std::int32_t>(Style::Metrics{}.radiusXl);
+  std::int32_t radiusTopRight = static_cast<std::int32_t>(Style::Metrics{}.radiusXl);
+  std::int32_t radiusBottomLeft = static_cast<std::int32_t>(Style::Metrics{}.radiusXl);
+  std::int32_t radiusBottomRight = static_cast<std::int32_t>(Style::Metrics{}.radiusXl);
+  bool sectionBackgrounds = false; // content-sized start/center/end islands instead of one background
+  float islandHoverGrow = 0.0F; // cross-axis growth; elongated pills grow twice this along the bar
+  float islandHoverOffset = 0.0F; // movement toward the desktop
+  bool islandOutward = false; // side panels grow away from the central section
+  std::int32_t islandPanelOffset = 0; // inward offset of the expanded optical surface
+  bool centeredSections = false; // group all three lanes around the center lane
+  BarCenterAlignment centerAlignment = BarCenterAlignment::Center;
+  BarEdgeClusterPolicy edgeClusterPolicy = BarEdgeClusterPolicy::Edge;
+  BarMaterialMode materialMode = BarMaterialMode::Inherit;
+  bool islandMorph = false; // expand an attached panel's source island and reflow sibling islands
+  std::int32_t islandMorphGap = 16; // minimum logical-pixel gap between reflowed islands
   bool concaveEdgeCorners = true;
+  std::int32_t maxLength = 0; // zero fills available space; otherwise centered logical length
   std::int32_t marginEnds = 100;       // inset from each end of the bar along its main axis
   std::int32_t marginEdge = 0;         // distance from the nearest screen edge (floats the bar when > 0)
   std::int32_t marginOppositeEdge = 0; // extra reserved space on the inward side of the bar
@@ -184,9 +262,11 @@ struct BarConfig {
   std::optional<ColorSpec> widgetIconColor;
   std::vector<BarCapsuleGroupStyle> widgetCapsuleGroups;
   // Inner padding between capsule edge and widget content (logical px), multiplied by widget content scale on the bar.
-  float widgetCapsulePadding = Style::barCapsulePadding;
+  float widgetCapsulePadding = Style::Metrics{}.barCapsulePadding;
   // Capsule corner radius in logical pixels before content-scale; unset means automatic pill radius.
   std::optional<double> widgetCapsuleRadius;
+  BarCapsuleContour widgetCapsuleContour = BarCapsuleContour::Rounded;
+  float widgetCapsuleContourDepth = 8.0F;
   // Capsule background opacity multiplier (0.0–1.0).
   float widgetCapsuleOpacity = 1.0F;
   // True when `capsule_border` appears under `[bar.*]` (empty value = no outline for widgets that inherit border).
@@ -195,6 +275,10 @@ struct BarConfig {
   // Soft tint of a widget's foreground color over the widget under the pointer (per member in capsule groups).
   bool hoverHighlight = true;
   BarDeadZoneConfig deadZone;
+  BarDeadZoneConfig startLane;
+  BarDeadZoneConfig centerLane;
+  BarDeadZoneConfig endLane;
+  std::vector<BarSectionConfig> sections;
   std::vector<BarMonitorOverride> monitorOverrides;
 
   bool operator==(const BarConfig&) const = default;
@@ -202,6 +286,9 @@ struct BarConfig {
 
 struct ShortcutConfig {
   std::string type;
+  // Persistent identity for per-instance appearance. Legacy entries may omit
+  // it until an explicit Settings edit materializes IDs for the whole list.
+  std::optional<std::string> id;
   bool operator==(const ShortcutConfig&) const = default;
 };
 
@@ -359,7 +446,8 @@ enum class KeybindAction : std::uint8_t {
 using ConfigOverrideValue = std::variant<
     bool, std::int64_t, double, std::string, std::vector<std::string>, std::vector<ShortcutConfig>,
     std::vector<SessionPanelActionConfig>, std::vector<IdleBehaviorConfig>, std::vector<NotificationFilterConfig>,
-    std::vector<KeyChord>, std::vector<BarCapsuleGroupStyle>>;
+    std::vector<KeyChord>, std::vector<BarCapsuleGroupStyle>, std::vector<BarWidgetPlacementConfig>,
+    std::vector<BarSectionConfig>>;
 
 // Optional rounded “capsule” behind a bar widget (see `[widget.*] capsule_*` in CONFIG.md).
 // Corner shape, border width, and edge softness are fixed in the shell code; padding/radius are configurable.
@@ -374,9 +462,11 @@ struct WidgetBarCapsuleSpec {
   // Icon + primary label color when the capsule is visible; unset = widget defaults.
   std::optional<ColorSpec> foreground;
   // Inner padding in logical pixels before content-scale (see `capsule_padding` / bar default).
-  float padding = Style::barCapsulePadding;
+  float padding = Style::Metrics{}.barCapsulePadding;
   // Corner radius in logical pixels before content-scale; unset means automatic pill radius.
   std::optional<float> radius;
+  BarCapsuleContour contour = BarCapsuleContour::Rounded;
+  float contourDepth = 8.0F;
   // Capsule background opacity multiplier (0.0–1.0).
   float opacity = 1.0F;
   bool hoverHighlight = true;
@@ -519,6 +609,9 @@ struct WallpaperConfig {
   std::string directoryLight; // empty = directory
   std::string directoryDark;  // empty = directory
   bool perMonitorDirectories = false;
+  // Wallpaper-specific foreground masks stay outside visual style ownership.
+  // Keys are wallpaper paths; values are same-size grayscale image paths.
+  std::unordered_map<std::string, std::string> foregroundMasks;
   WallpaperAutomationConfig automation;
   std::vector<WallpaperMonitorOverride> monitorOverrides;
 
@@ -585,6 +678,45 @@ template <typename T, std::size_t N> constexpr std::string_view enumToKey(const 
 constexpr EnumOption<BarAccordionDirection> kBarAccordionDirections[] = {
     {BarAccordionDirection::End, "end", "settings.options.accordion-direction.end"},
     {BarAccordionDirection::Start, "start", "settings.options.accordion-direction.start"},
+};
+
+constexpr EnumOption<BarCapsuleContour> kBarCapsuleContours[] = {
+    {BarCapsuleContour::Rounded, "rounded", "settings.options.capsule-contour.rounded"},
+    {BarCapsuleContour::Powerline, "powerline", "settings.options.capsule-contour.powerline"},
+    {BarCapsuleContour::PowerlineStart, "powerline-start", "settings.options.capsule-contour.powerline-start"},
+    {BarCapsuleContour::PowerlineEnd, "powerline-end", "settings.options.capsule-contour.powerline-end"},
+};
+
+constexpr EnumOption<BarCenterAlignment> kBarCenterAlignments[] = {
+    {BarCenterAlignment::Start, "start", "settings.options.alignment.start"},
+    {BarCenterAlignment::Center, "center", "settings.options.alignment.center"},
+    {BarCenterAlignment::End, "end", "settings.options.alignment.end"},
+};
+
+constexpr EnumOption<BarEdgeClusterPolicy> kBarEdgeClusterPolicies[] = {
+    {BarEdgeClusterPolicy::FollowCenter, "follow_center", "settings.options.edge-cluster.follow-center"},
+    {BarEdgeClusterPolicy::Equidistant, "equidistant", "settings.options.edge-cluster.equidistant"},
+    {BarEdgeClusterPolicy::Edge, "edge", "settings.options.edge-cluster.edge"},
+};
+
+constexpr EnumOption<BarSectionLayoutRole> kBarSectionLayoutRoles[] = {
+    {BarSectionLayoutRole::Free, "free", "settings.options.section-layout-role.free"},
+    {BarSectionLayoutRole::Start, "start", "settings.options.section-layout-role.start"},
+    {BarSectionLayoutRole::Center, "center", "settings.options.section-layout-role.center"},
+    {BarSectionLayoutRole::End, "end", "settings.options.section-layout-role.end"},
+};
+
+constexpr EnumOption<BarMaterialMode> kBarMaterialModes[] = {
+    {BarMaterialMode::Inherit, "inherit", "settings.options.material-mode.inherit"},
+    {BarMaterialMode::Solid, "solid", "settings.options.material-mode.solid"},
+    {BarMaterialMode::Glass, "glass", "settings.options.material-mode.glass"},
+    {BarMaterialMode::Transparent, "transparent", "settings.options.material-mode.transparent"},
+};
+
+constexpr EnumOption<BarSectionShader> kBarSectionShaders[] = {
+    {BarSectionShader::Inherit, "inherit", "settings.options.section-shader.inherit"},
+    {BarSectionShader::Flat, "flat", "settings.options.section-shader.flat"},
+    {BarSectionShader::GlassRim, "glass_rim", "settings.options.section-shader.glass-rim"},
 };
 
 enum class DockEdge : std::uint8_t {
@@ -726,6 +858,49 @@ struct OsdKindsConfig {
   bool operator==(const OsdKindsConfig&) const = default;
 };
 
+// Generic transient presentation used by volume, brightness, and notification activity. The
+// standalone default preserves existing configurations. Profiles select routes; render code never
+// branches on a profile or theme name.
+struct ActivityRouteConfig {
+  std::string presentation = "standalone"; // standalone | section | attached
+  std::string bar;
+  std::string section;
+  std::string output = "focused"; // focused | all | output selector
+  std::string placement = "auto"; // auto | before | after | below | above | left | right
+  std::string motion = "inherit";  // inherit | off
+  std::string material = "inherit"; // inherit | surface | transparent
+
+  bool operator==(const ActivityRouteConfig&) const = default;
+};
+
+struct ActivityRouteOverrideConfig {
+  // Empty fields inherit `[osd.activity]` atomically after the complete config validates.
+  std::string presentation;
+  std::string bar;
+  std::string section;
+  std::string output;
+  std::string placement;
+  std::string motion;
+  std::string material;
+
+  bool operator==(const ActivityRouteOverrideConfig&) const = default;
+};
+
+struct OsdActivityConfig {
+  std::string presentation = "standalone";
+  std::string bar;
+  std::string section;
+  std::string output = "focused";
+  std::string placement = "auto";
+  std::string motion = "inherit";
+  std::string material = "inherit";
+  ActivityRouteOverrideConfig volume;
+  ActivityRouteOverrideConfig brightness;
+  ActivityRouteOverrideConfig notification;
+
+  bool operator==(const OsdActivityConfig&) const = default;
+};
+
 struct OsdConfig {
   bool enabled = true; // master gate for all OSD popups
   std::string position = "top_center";
@@ -738,6 +913,7 @@ struct OsdConfig {
   int offsetY = 8;
   std::vector<std::string> monitors;
   OsdKindsConfig kinds;
+  OsdActivityConfig activity;
 
   bool operator==(const OsdConfig&) const = default;
 };
@@ -947,10 +1123,81 @@ struct LauncherProviderConfig {
   bool operator==(const LauncherProviderConfig&) const = default;
 };
 
+constexpr EnumOption<Style::SurfaceMaterialMode> kShellSurfaceMaterials[] = {
+    {Style::SurfaceMaterialMode::Flat, "flat", "Flat"},
+    {Style::SurfaceMaterialMode::Neumorphic, "neumorphic", "Raised plateau"},
+    {Style::SurfaceMaterialMode::LiquidGlass, "liquid_glass", "Optical glass"},
+    {Style::SurfaceMaterialMode::Illustrated, "illustrated", "Illustrated"},
+};
+
+struct DesktopFrameShelfConfig {
+  bool enabled = false;
+  float start = 0.25F;
+  float end = 0.75F;
+  float depth = 64.0F;
+  float radius = 24.0F;
+  float shoulder = 32.0F;
+  bool operator==(const DesktopFrameShelfConfig&) const = default;
+};
+
+enum class DesktopFrameEdge : std::uint8_t { Left, Top, Right, Bottom };
+inline constexpr EnumOption<DesktopFrameEdge> kDesktopFrameEdges[] = {
+    {DesktopFrameEdge::Left, "left", "settings.options.edge.left"},
+    {DesktopFrameEdge::Top, "top", "settings.options.edge.top"},
+    {DesktopFrameEdge::Right, "right", "settings.options.edge.right"},
+    {DesktopFrameEdge::Bottom, "bottom", "settings.options.edge.bottom"},
+};
+
+struct DesktopFrameExtraShelfConfig {
+  bool enabled = false;
+  DesktopFrameEdge edge = DesktopFrameEdge::Left;
+  float start = 0.25F;
+  float end = 0.75F;
+  float depth = 64.0F;
+  float radius = 24.0F;
+  float shoulder = 32.0F;
+  bool operator==(const DesktopFrameExtraShelfConfig&) const = default;
+};
+
+struct DesktopFrameBorderLayerConfig {
+  bool enabled = false;
+  ColorSpec color = colorSpecFromRole(ColorRole::Primary);
+  float width = 2.0F;
+  // Gap from the aperture boundary into the filled frame.
+  float offset = 8.0F;
+  bool operator==(const DesktopFrameBorderLayerConfig&) const = default;
+};
+
+struct DesktopFrameConfig {
+  bool enabled = false;
+  ColorSpec fill = colorSpecFromRole(ColorRole::Surface);
+  ColorSpec border = colorSpecFromRole(ColorRole::Outline);
+  float borderWidth = 0;
+  bool chamfered = false;
+  float chamferTopLeft = 0, chamferTopRight = 0, chamferBottomRight = 0, chamferBottomLeft = 0;
+  float left = 16.0F, top = 16.0F, right = 16.0F, bottom = 16.0F;
+  float radius = 32.0F;
+  // Zero uses logical pixels; paired reference dimensions scale a saved layout.
+  float referenceWidth = 0.0F, referenceHeight = 0.0F;
+  DesktopFrameShelfConfig leftShelf, topShelf, rightShelf, bottomShelf;
+  std::array<DesktopFrameExtraShelfConfig, 8> shelves{};
+  std::array<DesktopFrameBorderLayerConfig, 3> borderLayers{};
+  bool operator==(const DesktopFrameConfig&) const = default;
+};
+
 struct ShellConfig {
+  CaretSettings caret;
+  bool caretAppIntegration = false;
+  bool caretAdoptExisting = false;
+  Style::ControlSettings controls;
   struct AnimationConfig {
     bool enabled = true;
     float speed = 1.0F;
+    MotionStyle style = MotionStyle::Native;
+    float curveX1 = 0.34F;
+    float curveY1 = 0.8F;
+    float curveX2 = 0.34F;
+    float curveY2 = 1.0F;
 
     bool operator==(const AnimationConfig&) const = default;
   };
@@ -963,6 +1210,12 @@ struct ShellConfig {
   };
 
   struct PanelConfig {
+    bool attachedMorph = true;
+    float attachedStartWidth = 0.55F; // fraction of final span along the bar
+    float attachedCornerGrowth = 0.5F; // growth exponent; lower values form shoulders earlier
+    float attachedContentTravel = 0.1F; // content translation relative to reveal distance
+    float attachedDurationMs = 400.0F;
+    bool quickSettingsEnabled = false;
     PanelTransparencyMode transparencyMode = PanelTransparencyMode::Solid;
     bool borders = true;                   // outline on floating panel surfaces
     bool shadow = true;                    // cast the global [shell.shadow] from panel surfaces
@@ -996,6 +1249,10 @@ struct ShellConfig {
   // under [shell.panel] (launcher_placement/position/open_near_click_launcher),
   // parallel to every other surface.
   struct LauncherConfig {
+    std::int32_t width = 560;
+    std::int32_t height = 500;
+    std::int32_t gridColumns = 5;
+    std::int32_t visibleRows = 0; // zero uses the configured height; other rows remain scrollable
     bool categories = true;
     bool showIcons = true;
     bool showAppOriginIndicator = true;
@@ -1049,7 +1306,6 @@ struct ShellConfig {
     bool rememberLastRegion = false;
     bool showCursor = false;
     bool annotate = false;
-    bool closeOnCopy = true;
     bool pipeToCommand = false;
     std::string pipeCommand;
     std::string directory;       // empty = XDG Pictures directory
@@ -1072,6 +1328,14 @@ struct ShellConfig {
     bool operator==(const WindowSwitcherConfig&) const = default;
   };
 
+  Style::Metrics design;
+  DesktopFrameConfig desktopFrame;
+  Style::MaterialSettings material;
+  Style::MaterialOverrides materialOverrides;
+  // Editor navigation is local UI state, excluded from desktop profile ownership.
+  std::string materialOverrideEditorScope = "roles";
+  std::string materialOverrideEditorTarget = "surface";
+  Style::SurfaceMaterialMode surfaceMaterial = Style::SurfaceMaterialMode::Flat;
   float cornerRadiusScale = 1.0F;
   bool buttonBorders = true;
   bool inputBorders = true;
@@ -1097,6 +1361,12 @@ struct ShellConfig {
   std::string avatarPath;
   bool settingsShowAdvanced = true;
   bool settingsWindowTranslucent = false;
+  TerminalAppearance terminalAppearance;
+  bool settingsConnectedRows = false;
+  bool settingsCompactChrome = false;
+  int settingsWindowWidth = 0;
+  int settingsWindowHeight = 0;
+  ColorSpec settingsBackground = colorSpecFromRole(ColorRole::Surface);
   bool showLocation = true;
   bool appIconColorize = false;
   std::optional<ColorSpec> appIconColor;
@@ -1571,13 +1841,43 @@ struct ThemeConfig {
   return theme.mode;
 }
 
+enum class MediaLayout : std::uint8_t { Split, Stacked, Compact };
+enum class MediaVisualizer : std::uint8_t { Bars, Radial, Off, Wave };
+enum class ControlCenterMediaHomeVisibility : std::uint8_t { Auto, Always, Hidden };
+inline constexpr EnumOption<MediaLayout> kMediaLayouts[] = {
+    {MediaLayout::Split, "split", "Split"}, {MediaLayout::Stacked, "stacked", "Stacked"}, {MediaLayout::Compact, "compact", "Compact card"}};
+inline constexpr EnumOption<MediaVisualizer> kMediaVisualizers[] = {
+    {MediaVisualizer::Bars, "bars", "Bars"}, {MediaVisualizer::Radial, "radial", "Circular"},
+    {MediaVisualizer::Off, "off", "Off"}, {MediaVisualizer::Wave, "wave", "Wave"}};
+inline constexpr EnumOption<ControlCenterMediaHomeVisibility> kControlCenterMediaHomeVisibilities[] = {
+    {ControlCenterMediaHomeVisibility::Auto, "auto", "Hide when the bar has media"},
+    {ControlCenterMediaHomeVisibility::Always, "always", "Always show"},
+    {ControlCenterMediaHomeVisibility::Hidden, "hidden", "Always hide"},
+};
+
 struct ControlCenterConfig {
   static constexpr std::int32_t kDefaultWidth = 700;
 
   struct CalendarTabConfig {
     bool showEventsCard = true;
     bool showWeekNumbers = false;
+    bool weekStrip = false;
+    bool centerToday = false;
+    bool fadeEdges = false;
+    std::int32_t width = 256;
+    std::int32_t height = 116;
     bool operator==(const CalendarTabConfig&) const = default;
+  };
+  struct MediaConfig {
+    ControlCenterMediaHomeVisibility homeVisibility = ControlCenterMediaHomeVisibility::Auto;
+    MediaLayout layout = MediaLayout::Split;
+    float backdropOpacity = .28F;
+    std::int32_t artworkSize = 0; // automatic; positive logical pixels cap the available artwork square
+    MediaVisualizer visualizer = MediaVisualizer::Bars;
+    bool equalizerAccess = false;
+    std::int32_t width = 411;
+    std::int32_t height = 215;
+    bool operator==(const MediaConfig&) const = default;
   };
 
   std::vector<ShortcutConfig> shortcuts;
@@ -1585,9 +1885,13 @@ struct ControlCenterConfig {
   ControlCenterSidebarMode sidebarMode = ControlCenterSidebarMode::Compact;
   ControlCenterSidebarMode sidebarSectionMode = ControlCenterSidebarMode::Compact;
   std::int32_t width = kDefaultWidth; // full-sidebar logical width; compact/none modes scale down from this
+  bool compactSections = false; // source-specific panels without shared navigation chrome
+  std::int32_t compactHeight = 444;
+  bool literalWidth = false; // treat width as the final panel width instead of a full-sidebar basis
   bool showShortcutLabels = true;
   bool showSessionButton = true;
   CalendarTabConfig calendarTab;
+  MediaConfig media;
   bool operator==(const ControlCenterConfig&) const = default;
 };
 

@@ -4,6 +4,7 @@
 #include "render/core/render_styles.h"
 
 #include <cstdint>
+#include <string_view>
 
 namespace shell::surface_shadow {
 
@@ -23,7 +24,8 @@ namespace shell::surface_shadow {
   };
 
   [[nodiscard]] bool enabled(bool componentShadow, const ShellConfig::ShadowConfig& shadow) noexcept;
-  [[nodiscard]] Bleed bleed(bool componentShadow, const ShellConfig::ShadowConfig& shadow) noexcept;
+  [[nodiscard]] Bleed bleed(bool componentShadow, const ShellConfig::ShadowConfig& shadow,
+        std::string_view family = "container", std::string_view surface = {}) noexcept;
   [[nodiscard]] RoundedRectStyle
   style(const ShellConfig::ShadowConfig& shadow, float backgroundOpacity, const Shape& shape) noexcept;
   [[nodiscard]] bool

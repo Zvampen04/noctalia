@@ -12,6 +12,9 @@
 
 #include "config/config_export.h"
 #include "config/config_types.h"
+#include "config/profile_scope.h"
+#include "shell/control_center/control_center_width.h"
+#include "shell/wallpaper/desktop_frame_geometry.h"
 #include "config/schema/config_schema.h"
 #include "config/schema/config_sections.h"
 #include "config/schema/engine.h"
@@ -25,6 +28,7 @@
 #include <print>
 #include <set>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 
 using namespace noctalia::config::schema;
@@ -45,6 +49,161 @@ namespace {
         table, toml::toml_formatter::default_flags & ~toml::format_flags::allow_literal_strings
     };
     return out.str();
+  }
+
+  void checkDesktopFrame() {
+    DesktopFrameConfig frame;
+    frame.enabled=true; frame.left=100; frame.right=16;
+    frame.referenceWidth=1600; frame.referenceHeight=900;
+    frame.chamfered=true; frame.chamferTopLeft=48; frame.chamferBottomRight=80;
+    frame.borderWidth=12; frame.border=colorSpecFromRole(ColorRole::Primary);
+    frame.rightShelf.enabled=true; frame.rightShelf.start=.25F; frame.rightShelf.end=.75F;
+    frame.rightShelf.depth=64; frame.rightShelf.radius=12; frame.rightShelf.shoulder=32;
+    frame.shelves[0].enabled=true; frame.shelves[0].edge=DesktopFrameEdge::Right;
+    frame.shelves[0].start=.05F; frame.shelves[0].end=.2F; frame.shelves[0].depth=32;
+    frame.shelves[1].enabled=true; frame.shelves[1].edge=DesktopFrameEdge::Right;
+    frame.shelves[1].start=.8F; frame.shelves[1].end=.95F; frame.shelves[1].depth=40;
+    frame.borderLayers[0].enabled=true; frame.borderLayers[0].width=6; frame.borderLayers[0].offset=18;
+    const auto full=desktop_frame::resolve(frame,1600,900);
+    const auto half=desktop_frame::resolve(frame,800,450);
+    if (!half.contour.chamfered || half.contour.chamfers[0]!=24 || half.contour.chamfers[2]!=40 || half.borderWidth!=6)
+      throw std::runtime_error("Frame chamfers did not preserve reference scaling");
+    if (full.inset.left!=100 || half.inset.left!=50 || full.contour.shelves[2].x!=1520
+        || half.contour.shelves[2].x!=760 || half.contour.shelves[2].height!=225
+        || half.contour.shelves[2].shoulder!=16 || half.contour.shelves[4].height!=67.5F
+        || half.contour.shelves[5].height!=67.5F || half.borderLayers[0].width!=3 || half.borderLayers[0].offset!=9)
+      fail("desktop frame: proportional output/shelf geometry changed");
+    frame.referenceWidth=frame.referenceHeight=1e-40F;
+    const auto tinyReference=desktop_frame::resolve(frame,1600,900);
+    if (!std::isfinite(tinyReference.inset.left) || !std::isfinite(tinyReference.radius)
+        || !std::isfinite(tinyReference.contour.shelves[2].x))
+      fail("desktop frame: subpixel reference dimensions produced nonfinite uniforms");
+    frame.referenceWidth=frame.referenceHeight=0;
+    const auto tiny=desktop_frame::resolve(frame,20,10);
+    if (tiny.inset.left+tiny.inset.right>20.001F || tiny.inset.top+tiny.inset.bottom>10.001F
+        || tiny.radius<0 || !std::isfinite(tiny.radius))
+      fail("desktop frame: tiny output produces invalid aperture");
+    frame.borderLayers[0].offset=1024; frame.borderLayers[0].width=128;
+    const auto boundedBand=desktop_frame::resolve(frame,20,10);
+    if (boundedBand.borderLayers[0].offset+boundedBand.borderLayers[0].width>10.001F)
+      fail("desktop frame: border band offset and width escaped the output bound");
+    frame.borderLayers[0].offset=18; frame.borderLayers[0].width=6;
+    frame.rightShelf.start=.9F; frame.rightShelf.end=.1F;
+    if (desktop_frame::resolve(frame,1600,900).contour.shelves[2].width!=0)
+      fail("desktop frame: reversed shelf range must be empty");
+    Config config; config.shell.desktopFrame=frame;
+    const auto saved=config_export::serialize(config);
+    Config restored; Diagnostics diag;
+    readInto(*saved["shell"].as_table(),restored.shell,shellSchema(),"shell",diag);
+    if (restored.shell.desktopFrame!=frame || !noctalia::profile::owns({"shell","desktop_frame"}))
+      fail("desktop frame: recipe ownership or config persistence lost");
+
+    ShellConfig invalid;
+    Diagnostics invalidDiag;
+    const auto invalidTable=toml::parse(R"(
+[desktop_frame]
+border_layer_1 = 7
+[desktop_frame.shelf_1]
+enabled = true
+edge = "right"
+start = 0.9
+end = 0.1
+)");
+    readInto(invalidTable,invalid,shellSchema(),"shell",invalidDiag);
+    const auto hasPath=[&](std::string_view path) {
+      return std::ranges::any_of(invalidDiag.entries,[&](const auto& entry) {
+        return entry.severity==Diagnostics::Severity::Error && entry.path==path;
+      });
+    };
+    if (!hasPath("shell.desktop_frame.shelf_1.end")
+        || !hasPath("shell.desktop_frame.border_layer_1"))
+      fail("desktop frame: invalid repeated shelf range or non-table slot was accepted");
+  }
+
+  void checkForegroundMaskOwnership() {
+    const auto source = toml::parse(R"(
+[wallpaper.foreground_masks]
+"/pictures/scene.with.dots.jpg" = "/pictures/scene-mask.png"
+[shell]
+font_family = "Manrope"
+)");
+    Config config;
+    Diagnostics diag;
+    readInto(*source["wallpaper"].as_table(), config.wallpaper, wallpaperSchema(), "wallpaper", diag);
+    const auto saved = config_export::serialize(config);
+    Config restored;
+    readInto(*saved["wallpaper"].as_table(), restored.wallpaper, wallpaperSchema(), "wallpaper", diag);
+    if (restored.wallpaper.foregroundMasks != config.wallpaper.foregroundMasks
+        || restored.wallpaper.foregroundMasks.size() != 1)
+      fail("foreground masks: literal wallpaper paths did not survive serialization");
+    auto destination = source;
+    const auto style = toml::parse("[shell]\nfont_family = \"Geist\"\n");
+    noctalia::profile::replace(destination, style);
+    if (destination["wallpaper"]["foreground_masks"]["/pictures/scene.with.dots.jpg"].value<std::string>()
+        != std::optional<std::string>{"/pictures/scene-mask.png"}
+        || noctalia::profile::subset(source).contains("wallpaper")
+        || noctalia::profile::owns({"wallpaper", "foreground_masks"}))
+      fail("foreground masks: a style change replaced wallpaper-specific configuration");
+  }
+
+  void checkMediaLauncherComposition() {
+    const auto source = toml::parse(R"(
+[shell.launcher]
+width = 740
+height = 680
+grid_columns = 7
+visible_rows = 4
+[control_center.media]
+layout = "stacked"
+artwork_size = 128
+visualizer = "radial"
+equalizer_access = true
+)");
+    Config config;
+    Diagnostics diag;
+    readInto(*source["shell"].as_table(), config.shell, shellSchema(), "shell", diag);
+    readInto(*source["control_center"].as_table(), config.controlCenter, controlCenterSchema(), "control_center", diag);
+    const auto& launcher = config.shell.launcher;
+    const auto& media = config.controlCenter.media;
+    if (launcher.width != 740 || launcher.height != 680 || launcher.gridColumns != 7 || launcher.visibleRows != 4
+        || media.layout != MediaLayout::Stacked || media.artworkSize != 128
+        || media.visualizer != MediaVisualizer::Radial || !media.equalizerAccess)
+      fail("media/launcher: nondefault composition did not parse");
+    const auto saved = config_export::serialize(config);
+    Config loaded;
+    readInto(*saved["shell"].as_table(), loaded.shell, shellSchema(), "shell", diag);
+    readInto(*saved["control_center"].as_table(), loaded.controlCenter, controlCenterSchema(), "control_center", diag);
+    if (loaded.shell.launcher != launcher || loaded.controlCenter.media != media)
+      fail("media/launcher: export lost composition settings");
+    const auto subset = noctalia::profile::subset(source);
+    if (!subset["control_center"]["media"]["equalizer_access"].value_or(false))
+      fail("media: leaf profile subset lost appearance settings");
+    if (noctalia::profile::owns({"control_center", "media"})
+        || noctalia::profile::owns({"control_center", "media", "backend"}))
+      fail("media: profile ownership includes service or entire media table");
+    for (const auto* key : {"layout", "artwork_size", "visualizer", "equalizer_access"})
+      if (!noctalia::profile::owns({"control_center", "media", key})) fail("media: missing owned leaf");
+    const auto bounds = toml::parse(R"(
+width = -100
+height = 9000
+grid_columns = 0
+visible_rows = 9000
+)");
+    const auto shellBounds = toml::table{{"launcher", bounds}};
+    readInto(shellBounds, loaded.shell, shellSchema(), "shell", diag);
+    if (loaded.shell.launcher.width != 240 || loaded.shell.launcher.height != 1600
+        || loaded.shell.launcher.gridColumns != 1 || loaded.shell.launcher.visibleRows != 20)
+      fail("launcher: geometry ranges are not enforced");
+    const auto zero = toml::parse("[media]\nartwork_size = 0\nvisualizer = \"off\"\n");
+    readInto(zero, loaded.controlCenter, controlCenterSchema(), "control_center", diag);
+    if (loaded.controlCenter.media.artworkSize != 0 || loaded.controlCenter.media.visualizer != MediaVisualizer::Off)
+      fail("media: explicit zero/off is not retained");
+    const auto wave = toml::parse("[media]\nvisualizer = \"wave\"\n");
+    readInto(wave, loaded.controlCenter, controlCenterSchema(), "control_center", diag);
+    const auto waveExport = config_export::serialize(loaded);
+    if (loaded.controlCenter.media.visualizer != MediaVisualizer::Wave
+        || waveExport["control_center"]["media"]["visualizer"].value_or(std::string{}) != "wave")
+      fail("media: wave visualizer silently fell back to bars");
   }
 
   void checkPluginSourceNameValidation() {
@@ -203,6 +362,12 @@ location = "https://example.invalid/bad"
     bar.reserveSpace = false;
     bar.layer = "overlay";
     bar.thickness = 44;
+    bar.background = colorSpecFromRole(ColorRole::Shadow);
+    bar.centeredSections = true;
+    bar.centerAlignment = BarCenterAlignment::End;
+    bar.edgeClusterPolicy = BarEdgeClusterPolicy::Equidistant;
+    bar.materialMode = BarMaterialMode::Glass;
+    bar.islandOutward = true; bar.islandPanelOffset = 7;
     bar.backgroundOpacity = 0.85F;
     bar.border = colorSpecFromConfigString("#123456");
     bar.borderWidth = 2.0F;
@@ -212,6 +377,12 @@ location = "https://example.invalid/bad"
     bar.radiusBottomLeft = 8;
     bar.radiusBottomRight = 10;
     bar.concaveEdgeCorners = true;
+    bar.sectionBackgrounds = true;
+    bar.islandHoverGrow = 8.F;
+    bar.islandHoverOffset = 7.F;
+    bar.islandMorph = true;
+    bar.islandMorphGap = 28;
+    bar.maxLength = 144;
     bar.marginEnds = 100;
     bar.marginEdge = 5;
     bar.marginOppositeEdge = 12;
@@ -245,6 +416,8 @@ location = "https://example.invalid/bad"
     bar.widgetIconColor = colorSpecFromConfigString("#0c0b0a");
     bar.widgetCapsulePadding = 16.0F;
     bar.widgetCapsuleRadius = 12.0;
+    bar.widgetCapsuleContour = BarCapsuleContour::Powerline;
+    bar.widgetCapsuleContourDepth = 7.0F;
     bar.widgetCapsuleOpacity = 0.9F;
     bar.widgetCapsuleBorderSpecified = true;
     bar.widgetCapsuleBorder = colorSpecFromConfigString("#111213");
@@ -258,6 +431,8 @@ location = "https://example.invalid/bad"
     group.foreground = colorSpecFromConfigString("#444546");
     group.padding = 20.0F;
     group.radius = 14.0F;
+    group.contour = BarCapsuleContour::PowerlineStart;
+    group.contourDepth = 6.0F;
     group.opacity = 0.8F;
     group.accordion = true;
     group.accordionDirection = BarAccordionDirection::Start;
@@ -283,6 +458,19 @@ location = "https://example.invalid/bad"
     ovr.radiusBottomLeft = 3;
     ovr.radiusBottomRight = 4;
     ovr.concaveEdgeCorners = false;
+    ovr.sectionBackgrounds = false;
+    ovr.centeredSections = false;
+    ovr.centerAlignment = BarCenterAlignment::Start;
+    ovr.edgeClusterPolicy = BarEdgeClusterPolicy::FollowCenter;
+    ovr.materialMode = BarMaterialMode::Solid;
+    ovr.background = colorSpecFromRole(ColorRole::Surface);
+    ovr.islandHoverGrow = 0.F;
+    ovr.islandHoverOffset = 0.F;
+    ovr.islandMorph = false;
+    ovr.islandMorphGap = 42;
+    ovr.islandOutward = false;
+    ovr.islandPanelOffset = 0;
+    ovr.maxLength = 0;
     ovr.marginEnds = 70;
     ovr.marginEdge = 9;
     ovr.marginOppositeEdge = 4;
@@ -319,10 +507,14 @@ location = "https://example.invalid/bad"
     ogroup.foreground = colorSpecFromConfigString("#0c0b0a");
     ogroup.padding = 18.0F;
     ogroup.radius = 9.0F;
+    ogroup.contour = BarCapsuleContour::PowerlineEnd;
+    ogroup.contourDepth = 5.0F;
     ogroup.opacity = 0.6F;
     ovr.widgetCapsuleGroups = std::vector<BarCapsuleGroupStyle>{ogroup};
     ovr.widgetCapsulePadding = 24.0;
     ovr.widgetCapsuleRadius = 30.0;
+    ovr.widgetCapsuleContour = BarCapsuleContour::PowerlineEnd;
+    ovr.widgetCapsuleContourDepth = 4.0;
     ovr.widgetCapsuleOpacity = 0.5;
     bar.monitorOverrides = {ovr};
     return bar;
@@ -414,6 +606,17 @@ location = "https://example.invalid/bad"
     };
     c.battery.warningThreshold = 15;
     c.battery.deviceThresholds = {{"BAT0", 10}, {"hidpp:1", 25}};
+    c.controlCenter.compactSections = true;
+    c.controlCenter.compactHeight = 430;
+    c.controlCenter.media.layout = MediaLayout::Compact;
+    c.controlCenter.media.backdropOpacity = .62F;
+    c.controlCenter.media.width = 400;
+    c.controlCenter.media.height = 210;
+    c.controlCenter.calendarTab.weekStrip = true;
+    c.controlCenter.calendarTab.centerToday = true;
+    c.controlCenter.calendarTab.fadeEdges = true;
+    c.controlCenter.calendarTab.width = 255;
+    c.controlCenter.calendarTab.height = 115;
     c.controlCenter.sidebarMode = ControlCenterSidebarMode::Full;
     c.controlCenter.sidebarSectionMode = ControlCenterSidebarMode::None;
     c.controlCenter.calendarTab.showEventsCard = false;
@@ -462,6 +665,7 @@ location = "https://example.invalid/bad"
     c.wallpaper.transitionDurationMs = 2000.0F;
     c.wallpaper.edgeSmoothness = 0.5F;
     c.wallpaper.directory = "/srv/wallpapers"; // absolute: expandUserPath leaves it unchanged
+    c.wallpaper.foregroundMasks = {{"/srv/wallpapers/scene.jpg", "/srv/wallpapers/scene-mask.png"}};
     c.wallpaper.automation.enabled = true;
     c.wallpaper.automation.intervalSeconds = 30;
     c.wallpaper.automation.order = WallpaperAutomationConfig::Order::Alphabetical;
@@ -470,7 +674,18 @@ location = "https://example.invalid/bad"
     };
     c.accessibility.uiScale = 1.25F;
     c.shell.buttonBorders = false;
+    {
+      auto& effect = c.shell.materialOverrides.surfaces["bar.widget.weather-primary"];
+      effect.customBackground = "user.weather-primary";
+      effect.customBackgroundDigest = std::string(64, 'a');
+      effect.customSampleRadiusPx = 18.0F;
+      effect.customParameters[0] = 0.75F;
+      effect.customParameters[31] = -2.0F;
+    }
     c.shell.fontFamily = "Inter";
+    c.shell.settingsCompactChrome = true; c.shell.settingsWindowWidth = 807; c.shell.settingsWindowHeight = 545;
+    c.shell.settingsBackground = colorSpecFromRole(ColorRole::Shadow);
+    c.shell.terminalAppearance = {.enabled=true,.backgroundOpacity=.62F,.backgroundBlur=false,.opacityCells=false,.paddingX=33,.paddingY=30,.fontSize=10.5F};
     c.shell.lang = "en_US";
     c.shell.timeFormat = "{:%H:%M:%S}";
     c.shell.passwordMaskStyle = PasswordMaskStyle::RandomIcons;
@@ -621,6 +836,53 @@ location = "https://example.invalid/bad"
       if (s.clipboardHistoryMaxEntries != 10000) {
         fail("shell.clipboard_history_max_entries clamp: expected 10000");
       }
+    }
+  }
+
+  void checkControlCenterLiteralWidth() {
+    if (!noctalia::profile::owns({"control_center", "literal_width"}))
+      fail("literal Control Center width is outside appearance transaction ownership");
+    ControlCenterConfig defaults;
+    if (control_center_width::preferred(defaults, ControlCenterSidebarMode::Compact) != 595.0F
+        || control_center_width::preferred(defaults, ControlCenterSidebarMode::None) != 525.0F
+        || control_center_width::preferred(defaults, ControlCenterSidebarMode::Full) != 700.0F) {
+      fail("legacy Control Center sidebar width scaling changed");
+    }
+    defaults.width = 320;
+    if (control_center_width::preferred(defaults, ControlCenterSidebarMode::None) != 320.0F) {
+      fail("legacy sidebar scaling escaped the public minimum width");
+    }
+    ControlCenterConfig literal;
+    Diagnostics diagnostics;
+    readInto(toml::table{{"width", 320}, {"literal_width", true}}, literal,
+        controlCenterSchema(), "control_center", diagnostics);
+    if (diagnostics.hasErrors() || literal.width != 320 || !literal.literalWidth) {
+      fail("literal Control Center width did not parse at its narrow public bound");
+    }
+    for (const auto sidebar : {ControlCenterSidebarMode::Full, ControlCenterSidebarMode::Compact,
+             ControlCenterSidebarMode::None}) {
+      if (control_center_width::preferred(literal, sidebar) != 320.0F
+          || control_center_width::preferred(literal, sidebar, 1.25F) != 400.0F) {
+        fail("literal Control Center width was modified by sidebar mode or lost content scale");
+      }
+    }
+    const float fittedSidebar = control_center_width::fittedFullSidebar(
+        240.0F, 320.0F, 40.0F, 160.0F, 16.0F);
+    const float fittedSidebarWithGutter = control_center_width::fittedFullSidebar(
+        fittedSidebar + 12.0F, 320.0F, 40.0F, 160.0F, 16.0F);
+    if (fittedSidebar != 144.0F || fittedSidebarWithGutter != 144.0F
+        || fittedSidebarWithGutter + 160.0F + 16.0F > 320.0F) {
+      fail("narrow full-sidebar layout or its scrollbar gutter escaped the panel bounds");
+    }
+    ControlCenterConfig clamped;
+    diagnostics = {};
+    readInto(toml::table{{"width", 100}, {"literal_width", true}}, clamped,
+        controlCenterSchema(), "control_center", diagnostics);
+    if (clamped.width != 320) fail("Control Center width did not clamp to the 320px content-safe minimum");
+    const auto serialized = writeTable(literal, controlCenterSchema());
+    if (serialized["width"].value<std::int64_t>() != 320
+        || serialized["literal_width"].value<bool>() != true) {
+      fail("literal Control Center width did not round-trip through the native schema");
     }
   }
 
@@ -986,11 +1248,14 @@ int main() {
 
 [default]
 auto_hide = true
+background = "shadow"
 background_opacity = 0.85000002384185791
 border = "#123456"
 border_width = 2.0
 capsule = true
 capsule_border = "#111213"
+capsule_contour = "powerline"
+capsule_contour_depth = 7.0
 capsule_fill = "#ABCDEF"
 capsule_foreground = "#FEDCBA"
 capsule_opacity = 0.89999997615814209
@@ -998,9 +1263,12 @@ capsule_padding = 16.0
 capsule_radius = 12.0
 capsule_thickness = 0.5
 center = [ "clock", "weather" ]
+center_alignment = "end"
+centered_sections = true
 color = "#0A0B0C"
 concave_edge_corners = true
 contact_shadow = true
+edge_cluster_policy = "equidistant"
 enabled = false
 end = [ "battery" ]
 font_family = "Inter"
@@ -1008,10 +1276,18 @@ font_scale = 1.5
 font_weight = 600
 hover_highlight = false
 icon_color = "#0C0B0A"
+island_hover_grow = 8.0
+island_hover_offset = 7.0
+island_morph = true
+island_morph_gap = 28
+island_outward = true
+island_panel_offset = 7
 layer = "overlay"
 margin_edge = 5
 margin_ends = 100
 margin_opposite_edge = 12
+material_mode = "glass"
+max_length = 144
 padding = 12
 panel_overlap = 2
 position = "bottom"
@@ -1022,6 +1298,7 @@ radius_top_left = 4
 radius_top_right = 6
 reserve_space = false
 scale = 2.0
+section_backgrounds = true
 shadow = false
 show_on_workspace_switch = true
 smart_auto_hide = false
@@ -1044,11 +1321,14 @@ widget_spacing = 8
 
     [default.monitor.DP-1]
     auto_hide = false
+    background = "surface"
     background_opacity = 0.69999998807907104
     border = "#A1A2A3"
     border_width = 3.0
     capsule = false
     capsule_border = "#C1C2C3"
+    capsule_contour = "powerline-end"
+    capsule_contour_depth = 4.0
     capsule_fill = "#B1B2B3"
     capsule_foreground = "#D1D2D3"
     capsule_opacity = 0.5
@@ -1056,9 +1336,12 @@ widget_spacing = 8
     capsule_radius = 30.0
     capsule_thickness = 0.25
     center = [ "media" ]
+    center_alignment = "start"
+    centered_sections = false
     color = "#E1E2E3"
     concave_edge_corners = false
     contact_shadow = false
+    edge_cluster_policy = "follow_center"
     enabled = true
     end = [ "volume" ]
     font_family = "Fira Sans"
@@ -1066,11 +1349,19 @@ widget_spacing = 8
     font_weight = 600
     hover_highlight = true
     icon_color = "#E3E2E1"
+    island_hover_grow = 0.0
+    island_hover_offset = 0.0
+    island_morph = false
+    island_morph_gap = 42
+    island_outward = false
+    island_panel_offset = 0
     layer = "top"
     margin_edge = 9
     margin_ends = 70
     margin_opposite_edge = 4
     match = "DP-1"
+    material_mode = "solid"
+    max_length = 0
     padding = 11
     panel_overlap = -1
     position = "top"
@@ -1081,6 +1372,7 @@ widget_spacing = 8
     radius_top_right = 2
     reserve_space = true
     scale = 1.5
+    section_backgrounds = false
     shadow = true
     show_on_workspace_switch = true
     smart_auto_hide = false
@@ -1100,6 +1392,8 @@ widget_spacing = 8
         accordion = false
         accordion_direction = "end"
         border = "#0F0E0D"
+        contour = "powerline-end"
+        contour_depth = 5.0
         enabled = true
         fill = "#F1F2F3"
         foreground = "#0C0B0A"
@@ -1113,6 +1407,8 @@ widget_spacing = 8
     accordion = true
     accordion_direction = "start"
     border = "#333435"
+    contour = "powerline-start"
+    contour_depth = 6.0
     enabled = true
     fill = "#222324"
     foreground = "#444546"
@@ -1218,12 +1514,16 @@ widget_spacing = 8
     }
   }
 
+  checkDesktopFrame();
+  checkForegroundMaskOwnership();
+  checkMediaLauncherComposition();
   checkPluginIdValidation();
   checkPluginSourceNameValidation();
   checkCalendarCredentialSourceValidation();
   checkStorageKeySourceValidation();
   checkPanelFloatingLayerValidation();
   checkClamps();
+  checkControlCenterLiteralWidth();
   checkMonitorFontScaleChangeSet();
   checkPluginAutoUpdateMode();
   checkAutoUpdateScopeSelection();

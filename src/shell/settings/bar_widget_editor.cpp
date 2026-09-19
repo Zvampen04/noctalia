@@ -8,6 +8,8 @@
 #include "render/scene/node.h"
 #include "shell/bar/widget_gesture.h"
 #include "shell/bar/widget_gesture_defaults.h"
+#include "shell/bar/widget_action.h"
+#include "shell/bar/bar_material_target.h"
 #include "shell/settings/color_spec_picker.h"
 #include "shell/settings/font_weight_catalog.h"
 #include "shell/settings/path_browse.h"
@@ -19,6 +21,7 @@
 #include "ui/dialogs/glyph_picker_dialog.h"
 #include "ui/palette.h"
 #include "ui/style.h"
+#include "util/string_utils.h"
 
 #include <algorithm>
 #include <cctype>
@@ -297,6 +300,140 @@ namespace settings {
       return {};
     }
 
+    std::unordered_map<std::string, std::string> barWidgetPlacementMap(const BarConfig* bar) {
+      std::unordered_map<std::string, std::string> result;
+      if (bar != nullptr) {
+        for (const auto& placement : bar->widgetPlacements)
+          result.insert_or_assign(placement.id, placement.widget);
+      }
+      return result;
+    }
+
+    std::pair<std::string, std::string> resolveBarWidgetEntry(
+        const Config& cfg, const std::vector<std::string>& lanePath, std::string_view entry
+    ) {
+      const BarConfig* bar = lanePath.size() >= 2 ? findBar(cfg, lanePath[1]) : nullptr;
+      const auto placements = barWidgetPlacementMap(bar);
+      const auto resolved = noctalia::bar::resolveBarWidgetLaneEntry(entry, placements);
+      return {std::string(resolved.widgetConfigName), std::string(resolved.placementId)};
+    }
+
+    std::vector<std::pair<std::vector<std::string>, ConfigOverrideValue>>
+    migrateBarWidgetPlacements(const Config& cfg, std::string_view barName) {
+      const BarConfig* bar = findBar(cfg, barName);
+      if (bar == nullptr) return {};
+      auto placements = bar->widgetPlacements;
+      std::unordered_map<std::string, std::string> placementMap = barWidgetPlacementMap(bar);
+      std::unordered_set<std::string> occupied;
+      for (const auto& placement : placements) occupied.insert(placement.id);
+      std::size_t occurrence = 0;
+      const auto migrate = [&](std::vector<std::string>& entries, std::string_view owner) {
+        bool changed = false;
+        for (auto& entry : entries) {
+          if (isCapsuleGroupToken(entry)) continue;
+          if (noctalia::bar::resolveBarWidgetLaneEntry(entry, placementMap).isPlacement()) continue;
+          const std::string id = noctalia::bar::legacyBarWidgetPlacementId(
+              barName, owner, entry, occurrence++, occupied
+          );
+          occupied.insert(id);
+          placementMap.insert_or_assign(id, entry);
+          placements.push_back({.id = id, .widget = entry});
+          entry = noctalia::bar::makeBarWidgetPlacementToken(id);
+          changed = true;
+        }
+        return changed;
+      };
+
+      std::vector<std::pair<std::vector<std::string>, ConfigOverrideValue>> batch;
+      const auto migrateLane = [&](const std::vector<std::string>& source, std::string_view lane) {
+        auto next = source;
+        if (migrate(next, lane)) batch.emplace_back(
+            std::vector<std::string>{"bar", std::string(barName), std::string(lane)}, std::move(next)
+        );
+      };
+      migrateLane(bar->startWidgets, "start");
+      migrateLane(bar->centerWidgets, "center");
+      migrateLane(bar->endWidgets, "end");
+      auto groups = bar->widgetCapsuleGroups;
+      bool groupsChanged = false;
+      for (auto& group : groups) groupsChanged |= migrate(group.members, "group." + group.id);
+      if (groupsChanged) batch.emplace_back(
+          std::vector<std::string>{"bar", std::string(barName), "capsule_group"}, std::move(groups)
+      );
+      auto sections = bar->sections;
+      bool sectionsChanged = false;
+      for (auto& section : sections) sectionsChanged |= migrate(section.widgets, "section." + section.id);
+      if (sectionsChanged) batch.emplace_back(
+          std::vector<std::string>{"bar", std::string(barName), "section"}, std::move(sections)
+      );
+
+      for (const auto& monitor : bar->monitorOverrides) {
+        const std::vector<std::string> prefix{"bar", std::string(barName), "monitor", monitor.match};
+        const auto migrateOptionalLane = [&](const std::optional<std::vector<std::string>>& source,
+                                             std::string_view lane) {
+          if (!source) return;
+          auto next = *source;
+          if (migrate(next, "monitor." + monitor.match + "." + std::string(lane))) {
+            auto path = prefix;
+            path.push_back(std::string(lane));
+            batch.emplace_back(std::move(path), std::move(next));
+          }
+        };
+        migrateOptionalLane(monitor.startWidgets, "start");
+        migrateOptionalLane(monitor.centerWidgets, "center");
+        migrateOptionalLane(monitor.endWidgets, "end");
+        if (monitor.widgetCapsuleGroups) {
+          auto next = *monitor.widgetCapsuleGroups;
+          bool changed = false;
+          for (auto& group : next)
+            changed |= migrate(group.members, "monitor." + monitor.match + ".group." + group.id);
+          if (changed) {
+            auto path = prefix;
+            path.push_back("capsule_group");
+            batch.emplace_back(std::move(path), std::move(next));
+          }
+        }
+        if (monitor.sectionsSpecified) {
+          auto next = monitor.sections;
+          bool changed = false;
+          for (auto& section : next)
+            changed |= migrate(section.widgets, "monitor." + monitor.match + ".section." + section.id);
+          if (changed) {
+            auto path = prefix;
+            path.push_back("section");
+            batch.emplace_back(std::move(path), std::move(next));
+          }
+        }
+      }
+      if (!batch.empty()) batch.insert(
+          batch.begin(), {{"bar", std::string(barName), "widget_placement"}, std::move(placements)}
+      );
+      return batch;
+    }
+
+    std::size_t barWidgetPlacementReferenceCount(const BarConfig& bar, std::string_view placementId) {
+      const std::string token = noctalia::bar::makeBarWidgetPlacementToken(placementId);
+      std::size_t count = 0;
+      const auto countIn = [&count, &token](const std::vector<std::string>& values) {
+        count += static_cast<std::size_t>(std::ranges::count(values, token));
+      };
+      countIn(bar.startWidgets);
+      countIn(bar.centerWidgets);
+      countIn(bar.endWidgets);
+      for (const auto& group : bar.widgetCapsuleGroups) countIn(group.members);
+      for (const auto& section : bar.sections) countIn(section.widgets);
+      for (const auto& monitor : bar.monitorOverrides) {
+        if (monitor.startWidgets) countIn(*monitor.startWidgets);
+        if (monitor.centerWidgets) countIn(*monitor.centerWidgets);
+        if (monitor.endWidgets) countIn(*monitor.endWidgets);
+        if (monitor.widgetCapsuleGroups)
+          for (const auto& group : *monitor.widgetCapsuleGroups) countIn(group.members);
+        if (monitor.sectionsSpecified)
+          for (const auto& section : monitor.sections) countIn(section.widgets);
+      }
+      return count;
+    }
+
     bool isMonitorWidgetListPath(const std::vector<std::string>& path) {
       return isBarWidgetListPath(path) && path.size() >= 5 && path[2] == "monitor";
     }
@@ -491,14 +628,18 @@ namespace settings {
       };
       const auto scopeContains = [&](const std::vector<std::string>& start, const std::vector<std::string>& center,
                                      const std::vector<std::string>& end,
-                                     const std::vector<BarCapsuleGroupStyle>& groups) {
-        if (std::ranges::contains(start, widgetName)
-            || std::ranges::contains(center, widgetName)
-            || std::ranges::contains(end, widgetName)) {
+                                     const std::vector<BarCapsuleGroupStyle>& groups,
+                                     const std::unordered_map<std::string, std::string>& placements) {
+        const auto containsWidget = [&](const std::vector<std::string>& entries) {
+          return std::ranges::any_of(entries, [&](const std::string& entry) {
+            return noctalia::bar::resolveBarWidgetLaneEntry(entry, placements).widgetConfigName == widgetName;
+          });
+        };
+        if (containsWidget(start) || containsWidget(center) || containsWidget(end)) {
           return true;
         }
         for (const auto& group : groups) {
-          if (!std::ranges::contains(group.members, widgetName)) {
+          if (!containsWidget(group.members)) {
             continue;
           }
           const std::string token = makeCapsuleGroupToken(group.id);
@@ -512,10 +653,16 @@ namespace settings {
       };
 
       for (const auto& bar : cfg.bars) {
+        const auto placements = barWidgetPlacementMap(&bar);
         const std::vector<std::string>& baseStart = editedItems({"bar", bar.name, "start"}, bar.startWidgets);
         const std::vector<std::string>& baseCenter = editedItems({"bar", bar.name, "center"}, bar.centerWidgets);
         const std::vector<std::string>& baseEnd = editedItems({"bar", bar.name, "end"}, bar.endWidgets);
-        if (scopeContains(baseStart, baseCenter, baseEnd, bar.widgetCapsuleGroups)) {
+        if (scopeContains(baseStart, baseCenter, baseEnd, bar.widgetCapsuleGroups, placements)
+            || std::ranges::any_of(bar.sections, [&](const BarSectionConfig& section) {
+                 return std::ranges::any_of(section.widgets, [&](const std::string& widget) {
+                   return noctalia::bar::resolveBarWidgetLaneEntry(widget, placements).widgetConfigName == widgetName;
+                 });
+               })) {
           return true;
         }
 
@@ -530,7 +677,12 @@ namespace settings {
               ? editedItems({"bar", bar.name, "monitor", ovr.match, "end"}, *ovr.endWidgets)
               : baseEnd;
           const auto& groups = ovr.widgetCapsuleGroups.has_value() ? *ovr.widgetCapsuleGroups : bar.widgetCapsuleGroups;
-          if (scopeContains(monitorStart, monitorCenter, monitorEnd, groups)) {
+          if (scopeContains(monitorStart, monitorCenter, monitorEnd, groups, placements)
+              || (ovr.sectionsSpecified && std::ranges::any_of(ovr.sections, [&](const BarSectionConfig& section) {
+                   return std::ranges::any_of(section.widgets, [&](const std::string& widget) {
+                     return noctalia::bar::resolveBarWidgetLaneEntry(widget, placements).widgetConfigName == widgetName;
+                   });
+                 }))) {
             return true;
           }
         }
@@ -973,6 +1125,134 @@ namespace settings {
       return spec.schema.defaultValue;
     }
 
+    std::string reservedGestureDescription(std::string_view type, noctalia::bar::Gesture gesture) {
+      using noctalia::bar::Gesture;
+      if (type == "workspaces" && gesture == Gesture::Left) return "Activate the selected workspace";
+      if (type == "taskbar" && gesture == Gesture::Left) return "Activate the selected application";
+      if (type == "taskbar" && gesture == Gesture::Middle) return "Close the selected application";
+      if (type == "tray" && gesture == Gesture::Left) return "Activate the selected tray item";
+      if (type == "tray" && gesture == Gesture::Right) return "Open the selected tray item's menu";
+      if (type == "screenshot" && gesture == Gesture::Right) return "Open the capture menu";
+      return {};
+    }
+
+    std::string widgetActionConfigValue(const noctalia::bar::WidgetAction& action) {
+      return action.kind == noctalia::bar::WidgetAction::Kind::Exec
+          ? "exec " + action.args : action.commandLine();
+    }
+
+    std::string describeWidgetAction(const noctalia::bar::WidgetAction* action) {
+      if (action == nullptr) return "None";
+      if (action->kind == noctalia::bar::WidgetAction::Kind::Exec) return "Run command: " + action->args;
+      return action->commandLine();
+    }
+
+    WidgetSettingStringMap inheritedWidgetActionDefaults(
+        std::string_view widgetName, std::string_view widgetType, const WidgetConfig* widgetConfig,
+        const BarConfig* bar
+    ) {
+      const auto typeDefaults = noctalia::bar::gestureDefaultsForType(widgetType, widgetConfig);
+      noctalia::bar::WidgetActionBindings bindings;
+      bindings.resolve({
+          .builtinDefaults = noctalia::bar::builtinGestureDefaults(),
+          .widgetDefaults = typeDefaults,
+          .barActions = bar != nullptr ? &bar->actions : nullptr,
+          .reserved = noctalia::bar::reservedGesturesForType(widgetType),
+          .widgetContext = std::format("widget.{}", widgetName),
+          .barContext = bar != nullptr ? std::format("bar.{}", bar->name) : "bar",
+          .widgetName = widgetName,
+          .widgetType = widgetType,
+      });
+
+      WidgetSettingStringMap defaults;
+      for (const auto gesture : noctalia::bar::allGestures()) {
+        if (const auto* action = bindings.find(gesture); action != nullptr) {
+          defaults.insert_or_assign(
+              std::string(noctalia::bar::gestureConfigKey(gesture)), widgetActionConfigValue(*action)
+          );
+        }
+      }
+      return defaults;
+    }
+
+    std::unique_ptr<Node> makeWidgetBehaviorSummary(
+        const Config& cfg, std::string_view widgetName, std::string_view widgetType,
+        const WidgetConfig* widgetConfig, const std::vector<std::string>& lanePath,
+        const std::vector<WidgetSettingSpec>& specs, float scale
+    ) {
+      const BarConfig* bar = lanePath.size() >= 2 && lanePath[0] == "bar" ? findBar(cfg, lanePath[1]) : nullptr;
+      const auto typeDefaults = noctalia::bar::gestureDefaultsForType(widgetType, widgetConfig);
+      noctalia::bar::WidgetActionBindings bindings;
+      bindings.resolve({
+          .builtinDefaults = noctalia::bar::builtinGestureDefaults(),
+          .widgetDefaults = typeDefaults,
+          .barActions = bar != nullptr ? &bar->actions : nullptr,
+          .widgetActions = noctalia::bar::findActionTable(widgetConfig),
+          .reserved = noctalia::bar::reservedGesturesForType(widgetType),
+          .widgetContext = std::format("widget.{}", widgetName),
+          .barContext = bar != nullptr ? std::format("bar.{}", bar->name) : "bar",
+          .widgetName = widgetName,
+          .widgetType = widgetType,
+      });
+
+      bool interactive = widgetType != "spacer";
+      if (const auto spec = std::ranges::find(specs, "interactive", [](const WidgetSettingSpec& candidate) {
+            return std::string_view(candidate.schema.key);
+          }); spec != specs.end()) {
+        if (const auto value = widgetSettingValue(cfg, widgetName, *spec); const auto* enabled = std::get_if<bool>(&value)) {
+          interactive = *enabled;
+        }
+      } else if (widgetConfig != nullptr) {
+        interactive = widgetConfig->getBool("interactive", interactive);
+      }
+
+      bool revealsOnHover = false;
+      if (const auto spec = std::ranges::find(specs, "title_scroll", [](const WidgetSettingSpec& candidate) {
+            return std::string_view(candidate.schema.key);
+          }); spec != specs.end()) {
+        const auto titleScroll = widgetSettingValue(cfg, widgetName, *spec);
+        revealsOnHover = std::get_if<std::string>(&titleScroll) != nullptr
+            && *std::get_if<std::string>(&titleScroll) == "on_hover";
+      }
+      std::string hover;
+      if (!interactive) hover = "Disabled (pointer input passes through)";
+      else if (widgetType == "workspaces") hover = "Highlight workspace item";
+      else if (widgetType == "taskbar") hover = "Highlight task item";
+      else if (widgetType == "tray") hover = "Highlight tray item";
+      else hover = bar != nullptr && bar->hoverHighlight ? "Highlight module" : "None";
+      if (interactive && revealsOnHover) hover = hover == "None" ? "Scroll title" : hover + "; scroll title";
+
+      auto body = ui::column({.align = FlexAlign::Stretch, .gap = Style::spaceXs * scale});
+      body->addChild(makeLabel(
+          "Action inheritance: built-in, module type, bar-wide, then module instance. Pointer fallback: child control or module first; uncovered section background (or legacy lane) next; bar dead_zone last.",
+          Style::fontSizeMini * scale, colorSpecFromRole(ColorRole::OnSurfaceVariant)
+      ));
+      body->addChild(makeLabel(
+          "Hover · " + hover, Style::fontSizeCaption * scale, colorSpecFromRole(ColorRole::OnSurface)
+      ));
+      const auto reserved = noctalia::bar::reservedGesturesForType(widgetType);
+      for (const auto gesture : noctalia::bar::allGestures()) {
+        std::string action = interactive ? std::string{} : "Disabled (handled by section or bar)";
+        if (interactive && reserved.contains(gesture)) action = reservedGestureDescription(widgetType, gesture);
+        if (interactive && action.empty()) action = describeWidgetAction(bindings.find(gesture));
+        body->addChild(makeLabel(
+            i18n::tr(std::string(noctalia::bar::gestureLabelKey(gesture))) + " · " + action,
+            Style::fontSizeCaption * scale, colorSpecFromRole(ColorRole::OnSurface)
+        ));
+      }
+      const std::string scrollMode = widgetConfig != nullptr
+          ? widgetConfig->getString("scroll_repeat", "auto")
+          : "auto";
+      body->addChild(makeLabel(
+          "Scroll delivery · " + (!interactive ? std::string("Disabled (handled by section or bar)")
+              : scrollMode == "steps" ? std::string("Every wheel detent")
+              : scrollMode == "gesture" ? std::string("Once per continuous gesture")
+                                        : std::string("Cycle actions once; other actions every detent")),
+          Style::fontSizeMini * scale, colorSpecFromRole(ColorRole::OnSurfaceVariant)
+      ));
+      return body;
+    }
+
     [[nodiscard]] bool isBarHorizontal(const Config& cfg, std::string_view barName) {
       const BarConfig* bar = findBar(cfg, barName);
       if (bar == nullptr) {
@@ -1354,6 +1634,11 @@ namespace settings {
           .gap = Style::spaceXs * ctx.scale,
       });
 
+      panel->addChild(makeMiniSectionHeader("Behavior", ctx.scale, false));
+      panel->addChild(makeWidgetBehaviorSummary(
+          ctx.config, widgetName, widgetType, widgetConfig, lanePath, specs, ctx.scale
+      ));
+
       std::size_t visibleSpecs = 0;
       std::string activeGroupKey;
       // Coalesce specs by group so each group header renders once regardless of spec declaration order.
@@ -1580,10 +1865,11 @@ namespace settings {
           // Gesture bindings have a closed key set, so they get one fixed row per gesture rather
           // than the free-form key/value editor.
           if (spec.schema.key == "actions") {
-            WidgetSettingStringMap defaults;
-            if (const auto* declared = std::get_if<WidgetSettingStringMap>(&spec.schema.defaultValue)) {
-              defaults = *declared;
-            }
+            const BarConfig* hostingBar = lanePath.size() >= 2 && lanePath[0] == "bar"
+                ? findBar(ctx.config, lanePath[1]) : nullptr;
+            WidgetSettingStringMap defaults = inheritedWidgetActionDefaults(
+                widgetName, widgetType, widgetConfig, hostingBar
+            );
             WidgetSettingStringMap configured;
             if (widgetConfig != nullptr) {
               if (const auto tableIt = widgetConfig->tables.find(spec.schema.key);
@@ -2346,6 +2632,41 @@ namespace settings {
             mutateGroup([&](BarCapsuleGroupStyle& g) { g.radius = r; });
           })
       );
+      const BarCapsuleContour inheritedContour = laneOvr != nullptr && laneOvr->widgetCapsuleContour.has_value()
+          ? *laneOvr->widgetCapsuleContour
+          : (laneBar != nullptr ? laneBar->widgetCapsuleContour : BarCapsuleContour::Rounded);
+      const BarCapsuleContour contour = style.contour.value_or(inheritedContour);
+      ctx.makeRow(
+          *panelPtr, groupEntry("contour"),
+          ui::segmented({
+              .options = std::vector<ui::SegmentedOption>{
+                  {.label = i18n::tr("settings.options.capsule-contour.rounded")},
+                  {.label = i18n::tr("settings.options.capsule-contour.powerline")},
+                  {.label = i18n::tr("settings.options.capsule-contour.powerline-start")},
+                  {.label = i18n::tr("settings.options.capsule-contour.powerline-end")},
+              },
+              .selectedIndex = static_cast<std::size_t>(contour),
+              .scale = ctx.scale,
+              .onChange = [mutateGroup](std::size_t index) {
+                const auto next = static_cast<BarCapsuleContour>(std::min<std::size_t>(index, 3));
+                mutateGroup([&](BarCapsuleGroupStyle& g) { g.contour = next; });
+              },
+          })
+      );
+      if (contour != BarCapsuleContour::Rounded) {
+        const float inheritedDepth = laneOvr != nullptr && laneOvr->widgetCapsuleContourDepth.has_value()
+            ? static_cast<float>(*laneOvr->widgetCapsuleContourDepth)
+            : (laneBar != nullptr ? laneBar->widgetCapsuleContourDepth : 8.0F);
+        ctx.makeRow(
+            *panelPtr, groupEntry("contour-depth"),
+            makeGroupSliderControl(
+                ctx, style.contourDepth.value_or(inheritedDepth), 0.0, 32.0, 1.0, true,
+                [mutateGroup](double value) {
+                  mutateGroup([&](BarCapsuleGroupStyle& g) { g.contourDepth = static_cast<float>(value); });
+                }
+            )
+        );
+      }
       ctx.makeRow(
           *panelPtr, groupEntry("accordion"),
           ui::toggle({
@@ -2571,6 +2892,594 @@ namespace settings {
       block.addChild(std::move(toolbar));
     }
 
+    std::vector<std::string> sectionOverridePath(const std::vector<std::string>& lanePath) {
+      std::vector<std::string> path = lanePath;
+      if (!path.empty()) {
+        path.back() = "section";
+      }
+      return path;
+    }
+
+    std::vector<BarSectionConfig>
+    sectionsForLanePath(const Config& cfg, const std::vector<std::string>& lanePath, bool* inherited = nullptr) {
+      if (inherited != nullptr) {
+        *inherited = false;
+      }
+      if (lanePath.size() < 3 || lanePath[0] != "bar") {
+        return {};
+      }
+      const BarConfig* bar = findBar(cfg, lanePath[1]);
+      if (bar == nullptr) {
+        return {};
+      }
+      if (isMonitorWidgetListPath(lanePath)) {
+        const BarMonitorOverride* monitor = findMonitorOverride(*bar, lanePath[3]);
+        if (monitor != nullptr && monitor->sectionsSpecified) {
+          return monitor->sections;
+        }
+        if (inherited != nullptr) {
+          *inherited = !bar->sections.empty();
+        }
+      }
+      return bar->sections;
+    }
+
+    std::vector<BarSectionConfig> legacySectionsForLanePath(
+        const Config& cfg, const std::vector<std::string>& lanePath
+    ) {
+      const BarConfig* bar = lanePath.size() >= 2 ? findBar(cfg, lanePath[1]) : nullptr;
+      const BarCenterAlignment centerAlignment = bar != nullptr ? bar->centerAlignment : BarCenterAlignment::Center;
+      std::vector<BarSectionConfig> sections;
+      sections.push_back({
+          .id = "start",
+          .widgets = barWidgetItemsForPath(cfg, pathWithLastSegment(lanePath, "start")),
+          .anchor = BarCenterAlignment::Start,
+          .alignment = BarCenterAlignment::Start,
+      });
+      sections.push_back({
+          .id = "center",
+          .widgets = barWidgetItemsForPath(cfg, pathWithLastSegment(lanePath, "center")),
+          .anchor = BarCenterAlignment::Center,
+          .alignment = centerAlignment,
+      });
+      sections.push_back({
+          .id = "end",
+          .widgets = barWidgetItemsForPath(cfg, pathWithLastSegment(lanePath, "end")),
+          .anchor = BarCenterAlignment::End,
+          .alignment = BarCenterAlignment::End,
+      });
+      return sections;
+    }
+
+    std::string nextSectionId(const std::vector<BarSectionConfig>& sections) {
+      for (std::size_t suffix = sections.size() + 1;; ++suffix) {
+        const std::string candidate = "section-" + std::to_string(suffix);
+        if (std::ranges::none_of(sections, [&candidate](const BarSectionConfig& section) {
+              return section.id == candidate;
+            })) {
+          return candidate;
+        }
+      }
+    }
+
+    std::string trimSectionText(std::string_view text) {
+      while (!text.empty() && std::isspace(static_cast<unsigned char>(text.front()))) {
+        text.remove_prefix(1);
+      }
+      while (!text.empty() && std::isspace(static_cast<unsigned char>(text.back()))) {
+        text.remove_suffix(1);
+      }
+      return std::string(text);
+    }
+
+    void addSectionControl(
+        Flex& card, std::string_view title, std::string_view subtitle, std::unique_ptr<Node> control, float scale
+    ) {
+      auto row = ui::row({
+          .align = FlexAlign::Center,
+          .gap = Style::spaceMd * scale,
+          .paddingV = Style::spaceXs * scale,
+          .fillWidth = true,
+      });
+      auto labels = ui::column({.align = FlexAlign::Stretch, .gap = 1.0F * scale, .flexGrow = 1.0F});
+      labels->addChild(makeLabel(
+          title, Style::fontSizeCaption * scale, colorSpecFromRole(ColorRole::OnSurface), FontWeight::SemiBold
+      ));
+      if (!subtitle.empty()) {
+        labels->addChild(makeLabel(
+            subtitle, Style::fontSizeMini * scale, colorSpecFromRole(ColorRole::OnSurfaceVariant)
+        ));
+      }
+      row->addChild(std::move(labels));
+      row->addChild(std::move(control));
+      card.addChild(std::move(row));
+    }
+
+    std::unique_ptr<Node> makeOptionalSectionSlider(
+        const BarWidgetEditorContext& ctx, std::optional<float> configured, float inherited, double minValue,
+        double maxValue, double step, std::function<void(std::optional<float>)> onChange
+    ) {
+      const float shown = std::clamp(configured.value_or(inherited), static_cast<float>(minValue), static_cast<float>(maxValue));
+      auto control = ui::row({.align = FlexAlign::Center, .gap = Style::spaceSm * ctx.scale});
+      control->addChild(ui::segmented({
+          .options = std::vector<ui::SegmentedOption>{{.label = "Inherit"}, {.label = "Custom"}},
+          .selectedIndex = configured.has_value() ? 1U : 0U,
+          .scale = ctx.scale,
+          .onChange = [onChange, shown](std::size_t index) {
+            onChange(index == 0 ? std::optional<float>{} : std::optional<float>{shown});
+          },
+      }));
+      control->addChild(makeGroupSliderControl(
+          ctx, shown, minValue, maxValue, step, false,
+          [onChange](double value) { onChange(static_cast<float>(value)); }
+      ));
+      return control;
+    }
+
+    void addNamedSectionEditor(
+        Flex& block, const SettingEntry& entry, const BarWidgetEditorContext& ctx,
+        const std::vector<BarSectionConfig>& sections, bool inherited
+    ) {
+      const std::vector<std::string> overridePath = sectionOverridePath(entry.path);
+      block.addChild(makeLabel(
+          inherited ? "These sections are inherited from the base bar. Editing creates a monitor-specific copy."
+                    : "Sections are ordered independently. Each can be anchored, offset, styled, and bound to actions.",
+          Style::fontSizeMini * ctx.scale, colorSpecFromRole(ColorRole::OnSurfaceVariant)
+      ));
+
+      const auto commit = [setOverride = ctx.setOverride, overridePath](std::vector<BarSectionConfig> next) {
+        setOverride(overridePath, std::move(next));
+      };
+      const BarConfig* owningBar = entry.path.size() >= 2 ? findBar(ctx.config, entry.path[1]) : nullptr;
+      const std::vector<BarWidgetPlacementConfig> currentPlacements =
+          owningBar != nullptr ? owningBar->widgetPlacements : std::vector<BarWidgetPlacementConfig>{};
+      const auto appendWidget = [setOverrides = ctx.setOverrides, overridePath,
+                                 placementPath = std::vector<std::string>{"bar", entry.path[1], "widget_placement"},
+                                 barName = entry.path[1], currentPlacements](
+                                    std::vector<BarSectionConfig> next, std::size_t index, std::string widget
+                                 ) {
+        auto placements = currentPlacements;
+        std::unordered_set<std::string> occupied;
+        for (const auto& placement : placements) occupied.insert(placement.id);
+        std::string id = StringUtils::generateUuid();
+        if (id.empty() || occupied.contains(id)) {
+          id = noctalia::bar::legacyBarWidgetPlacementId(
+              barName, next[index].id, widget, next[index].widgets.size(), occupied
+          );
+        }
+        placements.push_back({.id = id, .widget = std::move(widget)});
+        next[index].widgets.push_back(noctalia::bar::makeBarWidgetPlacementToken(id));
+        setOverrides({{placementPath, placements}, {overridePath, next}});
+      };
+
+      for (std::size_t index = 0; index < sections.size(); ++index) {
+        const BarSectionConfig current = sections[index];
+        auto card = ui::column({
+            .align = FlexAlign::Stretch,
+            .gap = Style::spaceXs * ctx.scale,
+            .padding = Style::spaceSm * ctx.scale,
+            .fill = colorSpecFromRole(ColorRole::SurfaceVariant, 0.42F),
+            .radius = Style::scaledRadiusMd(ctx.scale),
+            .border = colorSpecFromRole(ColorRole::Outline),
+            .fillWidth = true,
+        });
+
+        auto header = ui::row({.align = FlexAlign::Center, .gap = Style::spaceXs * ctx.scale, .fillWidth = true});
+        Input* idInputPtr = nullptr;
+        auto idInput = ui::input({
+            .out = &idInputPtr,
+            .value = current.id,
+            .placeholder = "Unique section name",
+            .fontSize = Style::fontSizeBody * ctx.scale,
+            .controlHeight = Style::controlHeightSm * ctx.scale,
+            .horizontalPadding = Style::spaceSm * ctx.scale,
+            .flexGrow = 1.0F,
+            .onChange = [idInputPtr](const std::string&) { idInputPtr->setInvalid(false); },
+            .onSubmit = [idInputPtr, sections = std::vector<BarSectionConfig>(sections), index, commit](const std::string& text) {
+              const std::string id = trimSectionText(text);
+              const bool duplicate = std::ranges::any_of(sections, [index, &id, i = std::size_t{0}](const BarSectionConfig& section) mutable {
+                return i++ != index && section.id == id;
+              });
+              if (id.empty() || duplicate) {
+                idInputPtr->setInvalid(true);
+                return;
+              }
+              auto next = sections;
+              next[index].id = id;
+              commit(std::move(next));
+            },
+            .submitOnFocusLoss = true,
+        });
+        header->addChild(std::move(idInput));
+        header->addChild(ui::button({
+            .glyph = "chevron-up",
+            .glyphSize = Style::fontSizeCaption * ctx.scale,
+            .enabled = index > 0,
+            .variant = ButtonVariant::Ghost,
+            .tooltip = "Move section earlier",
+            .minWidth = Style::controlHeightSm * ctx.scale,
+            .minHeight = Style::controlHeightSm * ctx.scale,
+            .padding = Style::spaceXs * ctx.scale,
+            .onClick = [sections = std::vector<BarSectionConfig>(sections), index, commit]() mutable {
+              if (index > 0) {
+                std::swap(sections[index - 1], sections[index]);
+                commit(std::move(sections));
+              }
+            },
+        }));
+        header->addChild(ui::button({
+            .glyph = "chevron-down",
+            .glyphSize = Style::fontSizeCaption * ctx.scale,
+            .enabled = index + 1 < sections.size(),
+            .variant = ButtonVariant::Ghost,
+            .tooltip = "Move section later",
+            .minWidth = Style::controlHeightSm * ctx.scale,
+            .minHeight = Style::controlHeightSm * ctx.scale,
+            .padding = Style::spaceXs * ctx.scale,
+            .onClick = [sections = std::vector<BarSectionConfig>(sections), index, commit]() mutable {
+              if (index + 1 < sections.size()) {
+                std::swap(sections[index], sections[index + 1]);
+                commit(std::move(sections));
+              }
+            },
+        }));
+        header->addChild(ui::button({
+            .glyph = "trash",
+            .glyphSize = Style::fontSizeCaption * ctx.scale,
+            .variant = ButtonVariant::Ghost,
+            .tooltip = "Remove section",
+            .minWidth = Style::controlHeightSm * ctx.scale,
+            .minHeight = Style::controlHeightSm * ctx.scale,
+            .padding = Style::spaceXs * ctx.scale,
+            .onClick = [sections = std::vector<BarSectionConfig>(sections), index, commit]() mutable {
+              sections.erase(sections.begin() + static_cast<std::ptrdiff_t>(index));
+              commit(std::move(sections));
+            },
+        }));
+        card->addChild(std::move(header));
+
+        addSectionControl(*card, "Anchor", "Position along the bar", ui::segmented({
+            .options = std::vector<ui::SegmentedOption>{{.label = "Start"}, {.label = "Center"}, {.label = "End"}},
+            .selectedIndex = static_cast<std::size_t>(current.anchor),
+            .scale = ctx.scale,
+            .onChange = [sections = std::vector<BarSectionConfig>(sections), index, commit](std::size_t selected) mutable {
+              sections[index].anchor = static_cast<BarCenterAlignment>(std::min(selected, std::size_t{2}));
+              commit(std::move(sections));
+            },
+        }), ctx.scale);
+        addSectionControl(*card, "Content alignment", "Alignment around the anchor", ui::segmented({
+            .options = std::vector<ui::SegmentedOption>{{.label = "Start"}, {.label = "Center"}, {.label = "End"}},
+            .selectedIndex = static_cast<std::size_t>(current.alignment),
+            .scale = ctx.scale,
+            .onChange = [sections = std::vector<BarSectionConfig>(sections), index, commit](std::size_t selected) mutable {
+              sections[index].alignment = static_cast<BarCenterAlignment>(std::min(selected, std::size_t{2}));
+              commit(std::move(sections));
+            },
+        }), ctx.scale);
+        addSectionControl(*card, "Layout participation", "Free keeps explicit placement; lane roles follow the bar's center and edge policies", ui::segmented({
+            .options = std::vector<ui::SegmentedOption>{{.label = "Free"}, {.label = "Start lane"}, {.label = "Center lane"}, {.label = "End lane"}},
+            .selectedIndex = static_cast<std::size_t>(current.layoutRole),
+            .scale = ctx.scale,
+            .onChange = [sections = std::vector<BarSectionConfig>(sections), index, commit](std::size_t selected) mutable {
+              sections[index].layoutRole = static_cast<BarSectionLayoutRole>(std::min(selected, std::size_t{3}));
+              commit(std::move(sections));
+            },
+        }), ctx.scale);
+        addSectionControl(*card, "Main-axis offset", "Logical pixels along the bar", makeGroupSliderControl(
+            ctx, current.offset, -500.0, 500.0, 1.0, false,
+            [sections = std::vector<BarSectionConfig>(sections), index, commit](double value) mutable {
+              sections[index].offset = static_cast<float>(value);
+              commit(std::move(sections));
+            }
+        ), ctx.scale);
+        addSectionControl(*card, "Cross-axis offset", "Positive values move toward the desktop", makeGroupSliderControl(
+            ctx, current.crossOffset, -200.0, 200.0, 1.0, false,
+            [sections = std::vector<BarSectionConfig>(sections), index, commit](double value) mutable {
+              sections[index].crossOffset = static_cast<float>(value);
+              commit(std::move(sections));
+            }
+        ), ctx.scale);
+        addSectionControl(*card, "Allow overlap", "Permit this section to cross another section", ui::toggle({
+            .checked = current.allowOverlap,
+            .scale = ctx.scale,
+            .onChange = [sections = std::vector<BarSectionConfig>(sections), index, commit](bool enabled) mutable {
+              sections[index].allowOverlap = enabled;
+              commit(std::move(sections));
+            },
+        }), ctx.scale);
+
+        addSectionControl(*card, "Material", "Inherit the bar or choose a native surface", ui::segmented({
+            .options = std::vector<ui::SegmentedOption>{{.label = "Inherit"}, {.label = "Solid"}, {.label = "Glass"}, {.label = "Clear"}},
+            .selectedIndex = static_cast<std::size_t>(current.materialMode),
+            .scale = ctx.scale,
+            .onChange = [sections = std::vector<BarSectionConfig>(sections), index, commit](std::size_t selected) mutable {
+              sections[index].materialMode = static_cast<BarMaterialMode>(std::min(selected, std::size_t{3}));
+              commit(std::move(sections));
+            },
+        }), ctx.scale);
+        addSectionControl(*card, "Shader", "Native section shader preset", ui::segmented({
+            .options = std::vector<ui::SegmentedOption>{{.label = "Inherit"}, {.label = "Flat"}, {.label = "Optical"}},
+            .selectedIndex = static_cast<std::size_t>(current.shader),
+            .scale = ctx.scale,
+            .onChange = [sections = std::vector<BarSectionConfig>(sections), index, commit](std::size_t selected) mutable {
+              sections[index].shader = static_cast<BarSectionShader>(std::min(selected, std::size_t{2}));
+              commit(std::move(sections));
+            },
+        }), ctx.scale);
+        addSectionControl(*card, "Background", "Unset inherits the bar background", makeGroupColorControl(
+            ctx, current.background.has_value() ? colorSpecToConfigString(*current.background) : std::string{}, true,
+            [sections = std::vector<BarSectionConfig>(sections), index, commit](std::optional<ColorSpec> color) mutable {
+              sections[index].background = std::move(color);
+              commit(std::move(sections));
+            }
+        ), ctx.scale);
+        addSectionControl(*card, "Background opacity", "Optional section opacity multiplier", makeOptionalSectionSlider(
+            ctx, current.backgroundOpacity, 1.0F, 0.0, 1.0, 0.05,
+            [sections = std::vector<BarSectionConfig>(sections), index, commit](std::optional<float> value) mutable {
+              sections[index].backgroundOpacity = value;
+              commit(std::move(sections));
+            }
+        ), ctx.scale);
+        addSectionControl(*card, "Border", "Unset inherits the bar outline", makeGroupColorControl(
+            ctx, current.border.has_value() ? colorSpecToConfigString(*current.border) : std::string{}, true,
+            [sections = std::vector<BarSectionConfig>(sections), index, commit](std::optional<ColorSpec> color) mutable {
+              sections[index].border = std::move(color);
+              commit(std::move(sections));
+            }
+        ), ctx.scale);
+        addSectionControl(*card, "Border width", "Optional section outline width", makeOptionalSectionSlider(
+            ctx, current.borderWidth, 0.0F, 0.0, 12.0, 0.5,
+            [sections = std::vector<BarSectionConfig>(sections), index, commit](std::optional<float> value) mutable {
+              sections[index].borderWidth = value;
+              commit(std::move(sections));
+            }
+        ), ctx.scale);
+
+        card->addChild(ui::separator());
+        card->addChild(makeLabel(
+            "Widgets", Style::fontSizeCaption * ctx.scale, colorSpecFromRole(ColorRole::Secondary), FontWeight::Bold
+        ));
+        for (std::size_t widgetIndex = 0; widgetIndex < current.widgets.size(); ++widgetIndex) {
+          const std::string widgetEntry = current.widgets[widgetIndex];
+          const auto resolvedWidget = resolveBarWidgetEntry(ctx.config, entry.path, widgetEntry);
+          const std::string& widgetName = resolvedWidget.first;
+          const auto info = widgetReferenceInfo(ctx.config, widgetName, false);
+          auto widgetRow = ui::row({.align = FlexAlign::Center, .gap = Style::spaceXs * ctx.scale, .fillWidth = true});
+          auto widgetLabel = makeLabel(
+              info.title, Style::fontSizeCaption * ctx.scale, colorSpecFromRole(ColorRole::OnSurface)
+          );
+          widgetLabel->setFlexGrow(1.0F);
+          widgetRow->addChild(std::move(widgetLabel));
+          if (!widgetTypeForReference(ctx.config, widgetName).empty()) {
+            widgetRow->addChild(ui::button({
+                .glyph = "settings",
+                .glyphSize = Style::fontSizeCaption * ctx.scale,
+                .variant = ButtonVariant::Ghost,
+                .tooltip = "Configure widget",
+                .minWidth = Style::controlHeightSm * ctx.scale,
+                .minHeight = Style::controlHeightSm * ctx.scale,
+                .padding = Style::spaceXs * ctx.scale,
+                .onClick = [openWidgetInspector = ctx.openWidgetInspector, lanePath = entry.path, widgetName]() {
+                  if (openWidgetInspector) openWidgetInspector(lanePath, widgetName);
+                },
+            }));
+          }
+          if (ctx.showAdvanced && !resolvedWidget.second.empty()) {
+            const std::string target = noctalia::bar::barWidgetMaterialTarget(resolvedWidget.second);
+            const auto found = ctx.config.shell.materialOverrides.surfaces.find(target);
+            SelectSetting material;
+            material.options = {
+                {.value = "", .label = "Inherit"},
+                {.value = "flat", .label = "Flat"},
+                {.value = "neumorphic", .label = "Raised plateau"},
+                {.value = "liquid_glass", .label = "Optical glass"},
+                {.value = "illustrated", .label = "Illustrated"},
+            };
+            material.selectedValue = found != ctx.config.shell.materialOverrides.surfaces.end()
+                    && found->second.primitive
+                ? std::string(Style::materialPrimitiveName(*found->second.primitive)) : std::string{};
+            material.clearOnEmpty = true;
+            widgetRow->addChild(ctx.makeSelect(
+                material, {"shell", "material_overrides", "surfaces", target, "primitive"}
+            ));
+          }
+          widgetRow->addChild(ui::button({
+              .glyph = "chevron-up",
+              .glyphSize = Style::fontSizeCaption * ctx.scale,
+              .enabled = widgetIndex > 0,
+              .variant = ButtonVariant::Ghost,
+              .tooltip = "Move widget earlier",
+              .minWidth = Style::controlHeightSm * ctx.scale,
+              .minHeight = Style::controlHeightSm * ctx.scale,
+              .padding = Style::spaceXs * ctx.scale,
+              .onClick = [sections = std::vector<BarSectionConfig>(sections), index, widgetIndex, commit]() mutable {
+                if (widgetIndex > 0) {
+                  std::swap(sections[index].widgets[widgetIndex - 1], sections[index].widgets[widgetIndex]);
+                  commit(std::move(sections));
+                }
+              },
+          }));
+          widgetRow->addChild(ui::button({
+              .glyph = "chevron-down",
+              .glyphSize = Style::fontSizeCaption * ctx.scale,
+              .enabled = widgetIndex + 1 < current.widgets.size(),
+              .variant = ButtonVariant::Ghost,
+              .tooltip = "Move widget later",
+              .minWidth = Style::controlHeightSm * ctx.scale,
+              .minHeight = Style::controlHeightSm * ctx.scale,
+              .padding = Style::spaceXs * ctx.scale,
+              .onClick = [sections = std::vector<BarSectionConfig>(sections), index, widgetIndex, commit]() mutable {
+                if (widgetIndex + 1 < sections[index].widgets.size()) {
+                  std::swap(sections[index].widgets[widgetIndex], sections[index].widgets[widgetIndex + 1]);
+                  commit(std::move(sections));
+                }
+              },
+          }));
+          widgetRow->addChild(ui::button({
+              .glyph = "close",
+              .glyphSize = Style::fontSizeCaption * ctx.scale,
+              .variant = ButtonVariant::Ghost,
+              .tooltip = "Remove widget from section",
+              .minWidth = Style::controlHeightSm * ctx.scale,
+              .minHeight = Style::controlHeightSm * ctx.scale,
+              .padding = Style::spaceXs * ctx.scale,
+              .onClick = [sections = std::vector<BarSectionConfig>(sections), index, widgetIndex, commit,
+                          resolvedWidget, owningBar, currentPlacements, setOverrides = ctx.setOverrides,
+                          clearOverride = ctx.clearOverride, overridePath,
+                          placementPath = std::vector<std::string>{"bar", entry.path[1], "widget_placement"}]() mutable {
+                sections[index].widgets.erase(
+                    sections[index].widgets.begin() + static_cast<std::ptrdiff_t>(widgetIndex)
+                );
+                const bool orphan = owningBar != nullptr && !resolvedWidget.second.empty()
+                    && barWidgetPlacementReferenceCount(*owningBar, resolvedWidget.second) == 1;
+                if (!orphan) {
+                  commit(std::move(sections));
+                  return;
+                }
+                auto placements = currentPlacements;
+                std::erase_if(placements, [&resolvedWidget](const auto& placement) {
+                  return placement.id == resolvedWidget.second;
+                });
+                setOverrides({{overridePath, sections}, {placementPath, placements}});
+                clearOverride({"shell", "material_overrides", "surfaces",
+                               noctalia::bar::barWidgetMaterialTarget(resolvedWidget.second)});
+              },
+          }));
+          card->addChild(std::move(widgetRow));
+          if (ctx.showAdvanced && !resolvedWidget.second.empty()) {
+            const auto placement = std::ranges::find(
+                currentPlacements, resolvedWidget.second, &BarWidgetPlacementConfig::id
+            );
+            if (placement != currentPlacements.end()) {
+              const auto colorEditor = [&](bool icon) {
+                const auto configured = icon ? placement->iconForeground : placement->foreground;
+                return makeGroupColorControl(
+                    ctx, configured ? colorSpecToConfigString(*configured) : std::string{}, true,
+                    [placements = currentPlacements, placementId = resolvedWidget.second, icon,
+                     setOverride = ctx.setOverride, barName = entry.path[1]](std::optional<ColorSpec> color) mutable {
+                      const auto row = std::ranges::find(placements, placementId, &BarWidgetPlacementConfig::id);
+                      if (row == placements.end()) return;
+                      if (icon) row->iconForeground = std::move(color);
+                      else row->foreground = std::move(color);
+                      setOverride({"bar", barName, "widget_placement"}, std::move(placements));
+                    }
+                );
+              };
+              addSectionControl(*card, "Widget text color", "Unset inherits widget/bar text",
+                                colorEditor(false), ctx.scale);
+              addSectionControl(*card, "Widget icon color", "Unset inherits widget/bar icon color",
+                                colorEditor(true), ctx.scale);
+            }
+          }
+        }
+        Input* widgetInputPtr = nullptr;
+        auto widgetAddRow = ui::row({.align = FlexAlign::Center, .gap = Style::spaceXs * ctx.scale, .fillWidth = true});
+        widgetAddRow->addChild(ui::input({
+            .out = &widgetInputPtr,
+            .placeholder = "Widget name or type",
+            .fontSize = Style::fontSizeCaption * ctx.scale,
+            .controlHeight = Style::controlHeightSm * ctx.scale,
+            .horizontalPadding = Style::spaceSm * ctx.scale,
+            .flexGrow = 1.0F,
+            .onChange = [widgetInputPtr](const std::string&) { widgetInputPtr->setInvalid(false); },
+            .onSubmit = [widgetInputPtr, sections = std::vector<BarSectionConfig>(sections), index,
+                         appendWidget](const std::string& text) mutable {
+              const std::string widget = trimSectionText(text);
+              if (widget.empty()) {
+                widgetInputPtr->setInvalid(true);
+                return;
+              }
+              appendWidget(std::move(sections), index, widget);
+            },
+        }));
+        widgetAddRow->addChild(ui::button({
+            .text = "Add",
+            .glyph = "add",
+            .fontSize = Style::fontSizeCaption * ctx.scale,
+            .glyphSize = Style::fontSizeCaption * ctx.scale,
+            .variant = ButtonVariant::Ghost,
+            .minHeight = Style::controlHeightSm * ctx.scale,
+            .paddingV = Style::spaceXs * ctx.scale,
+            .paddingH = Style::spaceSm * ctx.scale,
+            .onClick = [widgetInputPtr, sections = std::vector<BarSectionConfig>(sections), index,
+                        appendWidget]() mutable {
+              const std::string widget = trimSectionText(widgetInputPtr->value());
+              if (widget.empty()) {
+                widgetInputPtr->setInvalid(true);
+                return;
+              }
+              appendWidget(std::move(sections), index, widget);
+            },
+        }));
+        card->addChild(std::move(widgetAddRow));
+
+        card->addChild(ui::separator());
+        card->addChild(makeLabel(
+            "Section background actions", Style::fontSizeCaption * ctx.scale,
+            colorSpecFromRole(ColorRole::Secondary), FontWeight::Bold
+        ));
+        card->addChild(makeLabel(
+            "These bindings run only where no child widget handles the pointer.", Style::fontSizeMini * ctx.scale,
+            colorSpecFromRole(ColorRole::OnSurfaceVariant)
+        ));
+        for (const auto gesture : noctalia::bar::allGestures()) {
+          const std::string key(noctalia::bar::gestureConfigKey(gesture));
+          const auto actionIt = current.actionArea.actions.find(key);
+          auto actionInput = ui::input({
+              .value = actionIt != current.actionArea.actions.end() ? actionIt->second : std::string{},
+              .placeholder = "Blank inherits/no action",
+              .fontSize = Style::fontSizeCaption * ctx.scale,
+              .controlHeight = Style::controlHeightSm * ctx.scale,
+              .horizontalPadding = Style::spaceSm * ctx.scale,
+              .width = 280.0F * ctx.scale,
+              .onSubmit = [sections = std::vector<BarSectionConfig>(sections), index, key, commit](const std::string& text) mutable {
+                const std::string action = trimSectionText(text);
+                if (action.empty()) sections[index].actionArea.actions.erase(key);
+                else sections[index].actionArea.actions.insert_or_assign(key, action);
+                commit(std::move(sections));
+              },
+              .submitOnFocusLoss = true,
+          });
+          addSectionControl(
+              *card, i18n::tr(std::string(noctalia::bar::gestureLabelKey(gesture))), {}, std::move(actionInput), ctx.scale
+          );
+        }
+        block.addChild(std::move(card));
+      }
+
+      auto toolbar = ui::row({.align = FlexAlign::Center, .gap = Style::spaceSm * ctx.scale, .fillWidth = true});
+      toolbar->addChild(ui::button({
+          .text = "Add section",
+          .glyph = "add",
+          .fontSize = Style::fontSizeCaption * ctx.scale,
+          .glyphSize = Style::fontSizeCaption * ctx.scale,
+          .variant = ButtonVariant::Default,
+          .minHeight = Style::controlHeightSm * ctx.scale,
+          .paddingV = Style::spaceXs * ctx.scale,
+          .paddingH = Style::spaceSm * ctx.scale,
+          .onClick = [sections = std::vector<BarSectionConfig>(sections), commit]() mutable {
+            BarSectionConfig added;
+            added.id = nextSectionId(sections);
+            added.anchor = BarCenterAlignment::Center;
+            added.alignment = BarCenterAlignment::Center;
+            sections.push_back(std::move(added));
+            commit(std::move(sections));
+          },
+      }));
+      toolbar->addChild(ui::spacer());
+      toolbar->addChild(ui::button({
+          .text = "Use legacy lanes",
+          .fontSize = Style::fontSizeCaption * ctx.scale,
+          .variant = ButtonVariant::Ghost,
+          .tooltip = "Replace named sections with the start, center, and end lane layout",
+          .minHeight = Style::controlHeightSm * ctx.scale,
+          .paddingV = Style::spaceXs * ctx.scale,
+          .paddingH = Style::spaceSm * ctx.scale,
+          .onClick = [commit]() mutable { commit({}); },
+      }));
+      block.addChild(std::move(toolbar));
+    }
+
   } // namespace
 
   bool isBarWidgetListPath(const std::vector<std::string>& path) {
@@ -2662,6 +3571,52 @@ namespace settings {
     );
 
     block->addChild(makeSettingSubtitleLabel(i18n::tr("settings.entities.widget.editor.description"), ctx.scale));
+
+    if (ctx.showAdvanced && entry.path.size() >= 2
+        && !migrateBarWidgetPlacements(ctx.config, entry.path[1]).empty()) {
+      block->addChild(ui::button({
+          .text = "Enable per-widget material controls",
+          .glyph = "sparkles",
+          .fontSize = Style::fontSizeCaption * ctx.scale,
+          .glyphSize = Style::fontSizeCaption * ctx.scale,
+          .variant = ButtonVariant::Ghost,
+          .tooltip = "Save stable instance IDs for this bar; existing module names and order are preserved",
+          .minHeight = Style::controlHeightSm * ctx.scale,
+          .paddingV = Style::spaceXs * ctx.scale,
+          .paddingH = Style::spaceSm * ctx.scale,
+          .onClick = [config = &ctx.config, barName = entry.path[1], setOverrides = ctx.setOverrides]() {
+            auto batch = migrateBarWidgetPlacements(*config, barName);
+            if (!batch.empty()) setOverrides(std::move(batch));
+          },
+      }));
+    }
+
+    bool inheritedSections = false;
+    const std::vector<BarSectionConfig> namedSections =
+        sectionsForLanePath(ctx.config, entry.path, &inheritedSections);
+    if (!namedSections.empty()) {
+      addNamedSectionEditor(*block, entry, ctx, namedSections, inheritedSections);
+      section.addChild(std::move(block));
+      return;
+    }
+
+    block->addChild(
+        ui::button({
+            .text = "Use named sections",
+            .glyph = "add",
+            .fontSize = Style::fontSizeCaption * ctx.scale,
+            .glyphSize = Style::fontSizeCaption * ctx.scale,
+            .variant = ButtonVariant::Default,
+            .tooltip = "Convert the current start, center, and end lanes into independently positioned sections",
+            .minHeight = Style::controlHeightSm * ctx.scale,
+            .paddingV = Style::spaceXs * ctx.scale,
+            .paddingH = Style::spaceSm * ctx.scale,
+            .onClick = [setOverride = ctx.setOverride, path = sectionOverridePath(entry.path), config = &ctx.config,
+                        lanePath = entry.path]() {
+              setOverride(path, legacySectionsForLanePath(*config, lanePath));
+            },
+        })
+    );
 
     static constexpr std::string_view kLaneKeys[] = {"start", "center", "end"};
 
@@ -2838,10 +3793,12 @@ namespace settings {
 
     // Builds a draggable widget card (used for both loose lane widgets and group members).
     auto makeWidgetCard = [&ctx, &wireDrag, &entry, iconSize, iconPad, rowGap](
-                              const std::string& name, std::size_t homeZoneIndex, std::size_t itemIndex, bool inherited,
+                              const std::string& laneEntry, std::size_t homeZoneIndex, std::size_t itemIndex, bool inherited,
                               std::string_view removeGlyph, std::function<void()> removeAction, bool selectable,
                               bool isSelected, std::function<void()> toggleSelect
                           ) -> std::unique_ptr<Flex> {
+      const auto resolved = resolveBarWidgetEntry(ctx.config, entry.path, laneEntry);
+      const std::string& name = resolved.first;
       const auto info = widgetReferenceInfo(ctx.config, name, false);
       auto card = ui::column({
           .align = FlexAlign::Stretch,
@@ -2965,6 +3922,47 @@ namespace settings {
         );
       }
       card->addChild(std::move(row));
+      if (ctx.showAdvanced && !resolved.second.empty()) {
+        const std::string target = noctalia::bar::barWidgetMaterialTarget(resolved.second);
+        const auto found = ctx.config.shell.materialOverrides.surfaces.find(target);
+        SelectSetting material;
+        material.options = {
+            {.value = "", .label = "Inherit"},
+            {.value = "flat", .label = "Flat"},
+            {.value = "neumorphic", .label = "Raised plateau"},
+            {.value = "liquid_glass", .label = "Optical glass"},
+            {.value = "illustrated", .label = "Illustrated"},
+        };
+        material.selectedValue = found != ctx.config.shell.materialOverrides.surfaces.end() && found->second.primitive
+            ? std::string(Style::materialPrimitiveName(*found->second.primitive)) : std::string{};
+        material.clearOnEmpty = true;
+        card->addChild(ctx.makeSelect(material, {"shell", "material_overrides", "surfaces", target, "primitive"}));
+        const BarConfig* bar = entry.path.size() >= 2 ? findBar(ctx.config, entry.path[1]) : nullptr;
+        if (bar != nullptr) {
+          const auto placement = std::ranges::find(bar->widgetPlacements, resolved.second,
+                                                   &BarWidgetPlacementConfig::id);
+          if (placement != bar->widgetPlacements.end()) {
+            const auto colorEditor = [&](std::string_view label, bool icon) {
+              const auto configured = icon ? placement->iconForeground : placement->foreground;
+              return makeGroupColorControl(
+                  ctx, configured ? colorSpecToConfigString(*configured) : std::string{}, true,
+                  [placements = bar->widgetPlacements, placementId = resolved.second, icon,
+                   setOverride = ctx.setOverride, barName = entry.path[1]](std::optional<ColorSpec> color) mutable {
+                    const auto row = std::ranges::find(placements, placementId, &BarWidgetPlacementConfig::id);
+                    if (row == placements.end()) return;
+                    if (icon) row->iconForeground = std::move(color);
+                    else row->foreground = std::move(color);
+                    setOverride({"bar", barName, "widget_placement"}, std::move(placements));
+                  }
+              );
+            };
+            addSectionControl(*card, "Text color", "Unset inherits the widget/bar foreground",
+                              colorEditor("Text color", false), ctx.scale);
+            addSectionControl(*card, "Icon color", "Unset inherits text or the widget/bar icon color",
+                              colorEditor("Icon color", true), ctx.scale);
+          }
+        }
+      }
       return card;
     };
 
@@ -3388,13 +4386,34 @@ namespace settings {
         if (!inherited) {
           auto items = laneItems;
           items.erase(items.begin() + static_cast<std::ptrdiff_t>(i));
-          const bool removeInstance = isGuiManagedNamedWidgetInstance(ctx, entryName)
-              && !widgetHasPlacementAfterLaneEdit(ctx.config, lanePath, items, entryName);
+          const auto resolvedEntry = resolveBarWidgetEntry(ctx.config, lanePath, entryName);
+          const std::string resolvedEntryName = resolvedEntry.first;
+          const bool removeInstance = isGuiManagedNamedWidgetInstance(ctx, resolvedEntryName)
+              && !widgetHasPlacementAfterLaneEdit(ctx.config, lanePath, items, resolvedEntryName);
+          const BarConfig* owningBar = lanePath.size() >= 2 ? findBar(ctx.config, lanePath[1]) : nullptr;
+          const bool removePlacement = owningBar != nullptr && !resolvedEntry.second.empty()
+              && barWidgetPlacementReferenceCount(*owningBar, resolvedEntry.second) == 1;
+          auto placements = owningBar != nullptr ? owningBar->widgetPlacements : std::vector<BarWidgetPlacementConfig>{};
+          if (removePlacement) std::erase_if(placements, [&resolvedEntry](const auto& placement) {
+            return placement.id == resolvedEntry.second;
+          });
           removeClose = [&selectedLaneWidgets = ctx.selectedLaneWidgets, setOverride = ctx.setOverride,
-                         clearOverride = ctx.clearOverride, items = std::move(items), lanePath, entryName,
+                         setOverrides = ctx.setOverrides, clearOverride = ctx.clearOverride,
+                         items = std::move(items), lanePath, placements = std::move(placements),
+                         placementId = resolvedEntry.second, removePlacement,
+                         entryName = resolvedEntryName,
                          removeInstance, laneKey, i]() {
             reindexLaneSelectionAfterRemoval(selectedLaneWidgets, laneKey, i);
-            setOverride(lanePath, items);
+            if (removePlacement) {
+              setOverrides({
+                  {lanePath, items},
+                  {{"bar", lanePath[1], "widget_placement"}, placements},
+              });
+              clearOverride({"shell", "material_overrides", "surfaces",
+                             noctalia::bar::barWidgetMaterialTarget(placementId)});
+            } else {
+              setOverride(lanePath, items);
+            }
             if (removeInstance) {
               clearOverride({"widget", entryName});
             }

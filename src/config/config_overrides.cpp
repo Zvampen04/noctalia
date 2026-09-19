@@ -1,6 +1,7 @@
 #include "config/atomic_file.h"
 #include "config/config_merge.h"
 #include "config/config_service.h"
+#include "config/profile_scope.h"
 #include "config/config_validate.h"
 #include "config/widget_config.h"
 #include "core/files/resource_paths.h"
@@ -212,6 +213,16 @@ namespace {
     if (ovr.radiusBottomRight) {
       resolved.radiusBottomRight = *ovr.radiusBottomRight;
     }
+    if (ovr.sectionBackgrounds)
+      resolved.sectionBackgrounds = *ovr.sectionBackgrounds;
+    if (ovr.centeredSections)
+      resolved.centeredSections = *ovr.centeredSections;
+    if (ovr.centerAlignment)
+      resolved.centerAlignment = *ovr.centerAlignment;
+    if (ovr.edgeClusterPolicy)
+      resolved.edgeClusterPolicy = *ovr.edgeClusterPolicy;
+    if (ovr.materialMode)
+      resolved.materialMode = *ovr.materialMode;
     if (ovr.concaveEdgeCorners) {
       resolved.concaveEdgeCorners = *ovr.concaveEdgeCorners;
     }
@@ -254,6 +265,9 @@ namespace {
     if (ovr.endWidgets) {
       resolved.endWidgets = *ovr.endWidgets;
     }
+    if (ovr.sectionsSpecified) {
+      resolved.sections = ovr.sections;
+    }
     if (ovr.scale) {
       resolved.scale = *ovr.scale;
     }
@@ -287,6 +301,10 @@ namespace {
     }
     if (ovr.widgetCapsuleRadius.has_value()) {
       resolved.widgetCapsuleRadius = std::clamp(*ovr.widgetCapsuleRadius, 0.0, 80.0);
+    }
+    if (ovr.widgetCapsuleContour) resolved.widgetCapsuleContour = *ovr.widgetCapsuleContour;
+    if (ovr.widgetCapsuleContourDepth) {
+      resolved.widgetCapsuleContourDepth = std::clamp(static_cast<float>(*ovr.widgetCapsuleContourDepth), 0.0F, 32.0F);
     }
     if (ovr.widgetCapsuleOpacity) {
       resolved.widgetCapsuleOpacity = std::clamp(static_cast<float>(*ovr.widgetCapsuleOpacity), 0.0F, 1.0F);
@@ -459,12 +477,8 @@ namespace {
     widgetTable.insert_or_assign("box_width", static_cast<double>(widget.boxWidth));
     widgetTable.insert_or_assign("box_height", static_cast<double>(widget.boxHeight));
     widgetTable.insert_or_assign("rotation", static_cast<double>(widget.rotationRad));
-    if (widget.flipX) {
-      widgetTable.insert_or_assign("flip_x", true);
-    }
-    if (widget.flipY) {
-      widgetTable.insert_or_assign("flip_y", true);
-    }
+    widgetTable.insert_or_assign("flip_x", widget.flipX);
+    widgetTable.insert_or_assign("flip_y", widget.flipY);
     if (!widget.enabled) {
       widgetTable.insert_or_assign("enabled", false);
     }
@@ -496,6 +510,7 @@ namespace {
               }
               toml::table shortcut;
               shortcut.insert_or_assign("type", item.type);
+              if (item.id) shortcut.insert_or_assign("id", *item.id);
               array.push_back(std::move(shortcut));
             }
             table.insert_or_assign(key, std::move(array));
@@ -552,6 +567,12 @@ namespace {
               if (item.radius.has_value()) {
                 row.insert_or_assign("radius", static_cast<double>(*item.radius));
               }
+              if (item.contour.has_value()) {
+                row.insert_or_assign("contour", std::string(enumToKey(kBarCapsuleContours, *item.contour)));
+              }
+              if (item.contourDepth.has_value()) {
+                row.insert_or_assign("contour_depth", static_cast<double>(*item.contourDepth));
+              }
               row.insert_or_assign("opacity", static_cast<double>(item.opacity));
               row.insert_or_assign("accordion", item.accordion);
               row.insert_or_assign(
@@ -559,6 +580,52 @@ namespace {
               );
               if (item.widgetSpacing.has_value()) {
                 row.insert_or_assign("widget_spacing", static_cast<std::int64_t>(*item.widgetSpacing));
+              }
+              array.push_back(std::move(row));
+            }
+            table.insert_or_assign(key, std::move(array));
+          } else if constexpr (std::is_same_v<T, std::vector<BarWidgetPlacementConfig>>) {
+            toml::array array;
+            for (const auto& item : concrete) {
+              if (item.id.empty() || item.widget.empty()) continue;
+              toml::table row;
+              row.insert_or_assign("id", item.id);
+              row.insert_or_assign("widget", item.widget);
+              if (item.foreground) row.insert_or_assign("foreground", colorSpecToConfigString(*item.foreground));
+              if (item.iconForeground)
+                row.insert_or_assign("icon_foreground", colorSpecToConfigString(*item.iconForeground));
+              array.push_back(std::move(row));
+            }
+            table.insert_or_assign(key, std::move(array));
+          } else if constexpr (std::is_same_v<T, std::vector<BarSectionConfig>>) {
+            toml::array array;
+            for (const auto& item : concrete) {
+              toml::table row;
+              row.insert_or_assign("id", item.id);
+              toml::array widgets;
+              for (const auto& widget : item.widgets) widgets.push_back(widget);
+              row.insert_or_assign("widgets", std::move(widgets));
+              row.insert_or_assign("anchor", std::string(enumToKey(kBarCenterAlignments, item.anchor)));
+              row.insert_or_assign("alignment", std::string(enumToKey(kBarCenterAlignments, item.alignment)));
+              row.insert_or_assign("layout_role", std::string(enumToKey(kBarSectionLayoutRoles, item.layoutRole)));
+              row.insert_or_assign("offset", static_cast<double>(item.offset));
+              row.insert_or_assign("cross_offset", static_cast<double>(item.crossOffset));
+              row.insert_or_assign("allow_overlap", item.allowOverlap);
+              if (item.background.has_value())
+                row.insert_or_assign("background", colorSpecToConfigString(*item.background));
+              if (item.backgroundOpacity.has_value())
+                row.insert_or_assign("background_opacity", static_cast<double>(*item.backgroundOpacity));
+              if (item.border.has_value())
+                row.insert_or_assign("border", colorSpecToConfigString(*item.border));
+              if (item.borderWidth.has_value())
+                row.insert_or_assign("border_width", static_cast<double>(*item.borderWidth));
+              row.insert_or_assign("material_mode", std::string(enumToKey(kBarMaterialModes, item.materialMode)));
+              row.insert_or_assign("shader", std::string(enumToKey(kBarSectionShaders, item.shader)));
+              if (!item.actionArea.actions.empty()) {
+                toml::table actions;
+                for (const auto& [gesture, action] : item.actionArea.actions)
+                  actions.insert_or_assign(gesture, action);
+                row.insert_or_assign("actions", std::move(actions));
               }
               array.push_back(std::move(row));
             }
@@ -853,7 +920,7 @@ namespace {
       return false;
     }
     const auto& key = path[4];
-    return key == "start" || key == "center" || key == "end";
+    return key == "start" || key == "center" || key == "end" || key == "section";
   }
 
 } // namespace
@@ -927,7 +994,6 @@ void ConfigService::setPluginEnabled(std::string_view pluginId, bool enabled) {
     return;
   }
 
-  m_ownOverridesWritePending = true;
   loadAll();
   fireReloadCallbacks();
 }
@@ -987,7 +1053,6 @@ void ConfigService::addPluginSource(const PluginSourceConfig& source) {
     kLog.warn("failed to write {}", m_overridesPath);
     return;
   }
-  m_ownOverridesWritePending = true;
   loadAll();
   fireReloadCallbacks();
 }
@@ -1024,7 +1089,6 @@ void ConfigService::removePluginSource(std::string_view name) {
     kLog.warn("failed to write {}", m_overridesPath);
     return;
   }
-  m_ownOverridesWritePending = true;
   loadAll();
   fireReloadCallbacks();
 }
@@ -1042,7 +1106,6 @@ void ConfigService::setThemeMode(ThemeMode mode) {
     return;
   }
 
-  m_ownOverridesWritePending = true;
 
   // Rebuild Config and fan out reload callbacks so ThemeService transitions.
   loadAll();
@@ -1102,7 +1165,6 @@ bool ConfigService::setThemeColorScheme(PaletteSource source, std::string_view v
     return false;
   }
 
-  m_ownOverridesWritePending = true;
   loadAll();
   fireReloadCallbacks();
   return true;
@@ -1126,7 +1188,6 @@ void ConfigService::setDockEnabled(bool enabled) {
     return;
   }
 
-  m_ownOverridesWritePending = true;
 
   loadAll();
   fireReloadCallbacks();
@@ -1151,7 +1212,6 @@ void ConfigService::setPluginsAutoUpdate(PluginAutoUpdateMode mode) {
     return;
   }
 
-  m_ownOverridesWritePending = true;
 
   loadAll();
   fireReloadCallbacks();
@@ -1200,6 +1260,8 @@ bool ConfigService::setDesktopWidgetsState(const DesktopWidgetsConfig& desktopWi
   if (!validateOverrideMutation(next)) {
     return false;
   }
+  if (!m_profilePreview && noctalia::profile::subset(next) != noctalia::profile::subset(m_overridesTable))
+    beginProfilePreview();
   toml::table previous = std::move(m_overridesTable);
   m_overridesTable = std::move(next);
 
@@ -1209,7 +1271,6 @@ bool ConfigService::setDesktopWidgetsState(const DesktopWidgetsConfig& desktopWi
     return false;
   }
 
-  m_ownOverridesWritePending = true;
   loadAll();
   fireReloadCallbacks();
   return true;
@@ -1242,7 +1303,6 @@ bool ConfigService::setLockscreenWidgetsState(const LockscreenWidgetsConfig& loc
     return false;
   }
 
-  m_ownOverridesWritePending = true;
   loadAll();
   fireReloadCallbacks();
   return true;
@@ -1659,7 +1719,6 @@ bool ConfigService::createBarOverride(std::string_view name) {
     return false;
   }
 
-  m_ownOverridesWritePending = true;
   loadAll();
   fireReloadCallbacks();
   return true;
@@ -1691,7 +1750,6 @@ bool ConfigService::moveBarOverride(std::string_view name, int direction) {
     return false;
   }
 
-  m_ownOverridesWritePending = true;
   loadAll();
   fireReloadCallbacks();
   return true;
@@ -1772,7 +1830,6 @@ bool ConfigService::createMonitorOverride(std::string_view barName, std::string_
     return false;
   }
 
-  m_ownOverridesWritePending = true;
   loadAll();
   fireReloadCallbacks();
   return true;
@@ -1934,6 +1991,13 @@ bool ConfigService::mutateOverrides(
     insertOverrideValue(*table, path.back(), value);
   }
 
+  // Invalid values may parse to their defaults. Validate the complete requested
+  // transaction before redundancy pruning can erase that evidence (or a prior
+  // valid override), including a batch that mixes valid and invalid edits.
+  if (!validateOverrideMutation(next)) {
+    return false;
+  }
+
   // An override that now matches the merged config carries no information; drop it so the file only
   // holds real deviations.
   for (const auto& [path, value] : overrides) {
@@ -1972,7 +2036,6 @@ bool ConfigService::commitOverrideTable(toml::table next, bool* changed) {
     return false;
   }
 
-  m_ownOverridesWritePending = true;
   if (changed != nullptr) {
     *changed = true;
   }
@@ -2126,7 +2189,6 @@ bool ConfigService::renameOverrideTable(
     return false;
   }
 
-  m_ownOverridesWritePending = true;
   loadAll();
   fireReloadCallbacks();
   return true;
@@ -2257,7 +2319,6 @@ void ConfigService::setWallpaperPath(const std::optional<std::string>& connector
     return;
   }
 
-  m_ownOverridesWritePending = true;
   if (m_wallpaperBatchDepth > 0) {
     m_wallpaperBatchDirty = true;
     return;
@@ -2349,29 +2410,14 @@ void ConfigService::syncWallpaperFavoritesToOverridesTable() {
     entry.insert("theme_mode", std::string(enumToKey(kThemeModes, favorite.themeMode)));
     if (favorite.paletteSource.has_value()) {
       entry.insert("palette_source", std::string(enumToKey(kPaletteSources, *favorite.paletteSource)));
-      switch (*favorite.paletteSource) {
-      case PaletteSource::Builtin:
-        if (!favorite.builtinPalette.empty()) {
-          entry.insert("builtin_palette", favorite.builtinPalette);
-        }
-        break;
-      case PaletteSource::Wallpaper:
-        if (!favorite.wallpaperScheme.empty()) {
-          entry.insert("wallpaper_scheme", favorite.wallpaperScheme);
-        }
-        break;
-      case PaletteSource::Community:
-        if (!favorite.communityPalette.empty()) {
-          entry.insert("community_palette", favorite.communityPalette);
-        }
-        break;
-      case PaletteSource::Custom:
-        if (!favorite.customPalette.empty()) {
-          entry.insert("custom_palette", favorite.customPalette);
-        }
-        break;
-      }
     }
+    // A favorite keeps its saved selections even while another palette source
+    // is active or the source is inherited. Renaming/reloading must round-trip
+    // the complete record rather than silently deleting its dormant metadata.
+    if (!favorite.builtinPalette.empty()) entry.insert("builtin_palette", favorite.builtinPalette);
+    if (!favorite.wallpaperScheme.empty()) entry.insert("wallpaper_scheme", favorite.wallpaperScheme);
+    if (!favorite.communityPalette.empty()) entry.insert("community_palette", favorite.communityPalette);
+    if (!favorite.customPalette.empty()) entry.insert("custom_palette", favorite.customPalette);
     favoritesArray.push_back(std::move(entry));
   }
   wallpaperTbl->insert_or_assign("favorite", std::move(favoritesArray));
@@ -2401,47 +2447,62 @@ const WallpaperFavorite* ConfigService::wallpaperFavorite(std::string_view path)
   return nullptr;
 }
 
-void ConfigService::addWallpaperFavorite(std::string path, std::optional<WallpaperFavorite> preset) {
+bool ConfigService::commitWallpaperFavorites(std::vector<WallpaperFavorite> favorites) {
   if (m_overridesPath.empty()) {
-    return;
+    m_lastMutationError = "No settings file is available";
+    return false;
   }
-
-  path = FileUtils::normalizeWallpaperPath(path);
-  if (path.empty()) {
-    return;
-  }
-
-  std::erase_if(m_wallpaperFavorites, [&](const WallpaperFavorite& favorite) { return favorite.path == path; });
-  WallpaperFavorite favorite = preset.value_or(WallpaperFavorite{});
-  favorite.path = std::move(path);
-  m_wallpaperFavorites.push_back(std::move(favorite));
-
+  // Reuse the guarded native mutation path: failure must preserve both the
+  // in-memory favorites and disk, including during an appearance preview.
+  auto previousFavorites = std::move(m_wallpaperFavorites);
+  auto previousOverrides = m_overridesTable;
+  m_wallpaperFavorites = std::move(favorites);
   syncWallpaperFavoritesToOverridesTable();
-  if (!writeOverridesToFile()) {
-    kLog.warn("failed to write {}", m_overridesPath);
-    return;
-  }
-  m_ownOverridesWritePending = true;
+  auto next = std::move(m_overridesTable);
+  m_overridesTable = std::move(previousOverrides);
+  m_wallpaperFavorites = std::move(previousFavorites);
+  return commitOverrideTable(std::move(next), nullptr);
 }
 
-void ConfigService::removeWallpaperFavorite(std::string_view path) {
-  if (m_overridesPath.empty()) {
-    return;
+bool ConfigService::addWallpaperFavorite(std::string path, std::optional<WallpaperFavorite> preset) {
+  path = FileUtils::normalizeWallpaperPath(path);
+  if (path.empty()) {
+    m_lastMutationError = "A wallpaper path is required";
+    return false;
   }
+  auto next = m_wallpaperFavorites;
+  // Starring an existing entry without a theme must not reset its stored theme.
+  if (!preset && isWallpaperFavorite(path)) return true;
+  std::erase_if(next, [&](const WallpaperFavorite& favorite) { return favorite.path == path; });
+  WallpaperFavorite favorite = preset.value_or(WallpaperFavorite{});
+  favorite.path = std::move(path);
+  next.push_back(std::move(favorite));
+  return commitWallpaperFavorites(std::move(next));
+}
 
-  const std::string normalized = FileUtils::normalizeWallpaperPath(path);
-  const auto before = m_wallpaperFavorites.size();
-  std::erase_if(m_wallpaperFavorites, [&](const WallpaperFavorite& favorite) { return favorite.path == normalized; });
-  if (m_wallpaperFavorites.size() == before) {
-    return;
-  }
+bool ConfigService::removeWallpaperFavorite(std::string_view path) {
+  const auto normalized = FileUtils::normalizeWallpaperPath(path);
+  auto next = m_wallpaperFavorites;
+  std::erase_if(next, [&](const WallpaperFavorite& favorite) { return favorite.path == normalized; });
+  if (next.size() == m_wallpaperFavorites.size()) return true;
+  return commitWallpaperFavorites(std::move(next));
+}
 
-  syncWallpaperFavoritesToOverridesTable();
-  if (!writeOverridesToFile()) {
-    kLog.warn("failed to write {}", m_overridesPath);
-    return;
+bool ConfigService::moveWallpaperFavorite(std::string_view original, std::string_view destination) {
+  const auto from = FileUtils::normalizeWallpaperPath(original);
+  const auto to = FileUtils::normalizeWallpaperPath(destination);
+  if (from.empty() || to.empty()) {
+    m_lastMutationError = "Both wallpaper paths are required";
+    return false;
   }
-  m_ownOverridesWritePending = true;
+  if (from == to || !isWallpaperFavorite(from)) return true;
+  if (isWallpaperFavorite(to)) {
+    m_lastMutationError = "The destination already has a wallpaper favorite; it was preserved";
+    return false;
+  }
+  auto next = m_wallpaperFavorites;
+  for (auto& favorite : next) if (favorite.path == from) favorite.path = to;
+  return commitWallpaperFavorites(std::move(next));
 }
 
 void ConfigService::setWallpaperFavoriteThemeMode(std::string_view path, ThemeMode themeMode) {
@@ -2470,7 +2531,6 @@ void ConfigService::setWallpaperFavoriteThemeMode(std::string_view path, ThemeMo
     kLog.warn("failed to write {}", m_overridesPath);
     return;
   }
-  m_ownOverridesWritePending = true;
 }
 
 void ConfigService::setWallpaperFavoritePaletteSource(std::string_view path, std::optional<PaletteSource> source) {
@@ -2527,7 +2587,6 @@ void ConfigService::setWallpaperFavoritePaletteSource(std::string_view path, std
     kLog.warn("failed to write {}", m_overridesPath);
     return;
   }
-  m_ownOverridesWritePending = true;
 }
 
 void ConfigService::setWallpaperFavoritePaletteSelection(std::string_view path, std::string_view value) {
@@ -2579,7 +2638,6 @@ void ConfigService::setWallpaperFavoritePaletteSelection(std::string_view path, 
     kLog.warn("failed to write {}", m_overridesPath);
     return;
   }
-  m_ownOverridesWritePending = true;
 }
 
 void ConfigService::applyWallpaperSelection(
@@ -2683,7 +2741,6 @@ void ConfigService::applyWallpaperSelection(
     return;
   }
 
-  m_ownOverridesWritePending = true;
   loadAll();
   fireReloadCallbacks();
   if (m_wallpaperChangeCallback) {
@@ -2693,24 +2750,59 @@ void ConfigService::applyWallpaperSelection(
 
 bool ConfigService::writeOverridesToFile() {
   if (m_overridesPath.empty()) {
+    m_lastMutationError = "No settings file is available";
     return false;
   }
-  if (!validateOverrideMutation(m_overridesTable, &m_persistedOverridesTable)) {
-    m_overridesTable = m_persistedOverridesTable;
+  if (!validateOverrideMutation(m_overridesTable, &m_persistedOverridesTable)) return false;
+  if (m_profileTransactionsReady && !m_profilePreview && !m_profileCommitting
+      && noctalia::profile::subset(m_overridesTable) != noctalia::profile::subset(m_persistedOverridesTable))
+    beginProfilePreview();
+  toml::table latestPersisted = m_persistedOverridesTable;
+  // Inotify may still have an external edit queued. Rebase before any disk
+  // write, including unrelated service settings edited during a preview.
+  try {
+    const auto incoming = std::filesystem::exists(m_overridesPath)
+        ? toml::parse_file(m_overridesPath) : toml::table{};
+    if (incoming != m_persistedOverridesTable) {
+      auto merged = incoming;
+      if (!noctalia::profile::rebaseUnrelated(merged, m_persistedOverridesTable, m_overridesTable, incoming)) {
+        m_lastMutationError = "The same setting changed outside this editor; reload before applying";
+        return false;
+      }
+      if (m_profilePreview) {
+        if (noctalia::profile::subset(incoming) != noctalia::profile::subset(m_persistedOverridesTable))
+          m_profileConflict = true;
+        noctalia::profile::replace(merged, m_overridesTable);
+        m_profileBaseline = incoming;
+      }
+      m_overridesTable = std::move(merged);
+      latestPersisted = incoming;
+      if (m_profileCommitting && m_profileConflict) {
+        m_lastMutationError = "Appearance changed outside this preview; cancel before saving";
+        return false;
+      }
+    }
+  } catch (const toml::parse_error&) {
+    m_lastMutationError = "Settings changed on disk and cannot be parsed; the file was preserved";
     return false;
   }
   toml::table output = m_overridesTable;
-
+  if (m_profilePreview && !m_profileCommitting) noctalia::profile::replace(output, m_profileBaseline);
+  if (output == latestPersisted) {
+    m_persistedOverridesTable = std::move(latestPersisted);
+    m_lastMutationError.clear();
+    ++m_profileRevision;
+    return true;
+  }
   std::ostringstream out;
   out << toml::toml_formatter{output, toml::toml_formatter::default_flags & ~toml::format_flags::allow_literal_strings};
-  if (!out.good()) {
-    m_overridesTable = m_persistedOverridesTable;
+  if (!out.good() || !writeTextFileAtomic(m_overridesPath, out.str())) {
+    m_lastMutationError = "Cannot persist settings; the preview is still available";
     return false;
   }
-  if (!writeTextFileAtomic(m_overridesPath, out.str())) {
-    m_overridesTable = m_persistedOverridesTable;
-    return false;
-  }
-  m_persistedOverridesTable = m_overridesTable;
+  m_persistedOverridesTable = std::move(output);
+  m_ownOverridesWritePending = m_inotify.fd() >= 0 && m_overridesWatchWd >= 0;
+  ++m_profileRevision;
+  m_lastMutationError.clear();
   return true;
 }

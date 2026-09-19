@@ -4,6 +4,7 @@
 #include "render/scene/rect_node.h"
 #include "ui/palette.h"
 #include "ui/style.h"
+#include "ui/surface_material.h"
 
 #include <algorithm>
 #include <memory>
@@ -24,7 +25,7 @@ ProgressBar::ProgressBar() {
 
   setTrack(colorSpecFromRole(ColorRole::SurfaceVariant));
   setFill(colorSpecFromRole(ColorRole::Primary));
-  setRadius(Style::scaledRadiusSm());
+  m_materialConn = Style::surfaceMaterialChanged().connect([this] { applyPalette(); });
   m_paletteConn = paletteChanged().connect([this] { applyPalette(); });
 }
 
@@ -51,12 +52,9 @@ void ProgressBar::setTrack(const Color& color) { setTrackColor(color); }
 void ProgressBar::setTrackColor(const Color& color) { setTrackColor(fixedColorSpec(color)); }
 
 void ProgressBar::setRadius(float radius) {
-  auto style = m_track->style();
-  style.radius = radius;
-  m_track->setStyle(style);
-  auto fillStyle = m_fill->style();
-  fillStyle.radius = radius;
-  m_fill->setStyle(fillStyle);
+  const float scale = Style::cornerRadiusScale();
+  m_unscaledRadius = scale > 0.0001F ? radius / scale : radius;
+  applyPalette();
 }
 
 void ProgressBar::setSoftness(float softness) {
@@ -87,12 +85,14 @@ void ProgressBar::applyPalette() {
   auto trackStyle = m_track->style();
   trackStyle.fill = resolveColorSpec(m_trackColor);
   trackStyle.fillMode = FillMode::Solid;
-  m_track->setStyle(trackStyle);
+  trackStyle.radius = Style::scaledRadius(m_unscaledRadius.value_or(Style::radiusSm));
+  m_track->setStyle(SurfaceMaterial::styled(*m_track, trackStyle, -0.5F, MaterialBackdrop::Inherited, "progress"));
 
   auto fillStyle = m_fill->style();
   fillStyle.fill = resolveColorSpec(m_fillColor);
   fillStyle.fillMode = FillMode::Solid;
-  m_fill->setStyle(fillStyle);
+  fillStyle.radius = trackStyle.radius;
+  m_fill->setStyle(SurfaceMaterial::styled(*m_fill, fillStyle, 0.4F, MaterialBackdrop::Inherited, "progress"));
 }
 
 void ProgressBar::updateGeometry() {

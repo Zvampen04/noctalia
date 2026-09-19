@@ -27,7 +27,7 @@ using namespace control_center;
 
 namespace {
 
-  constexpr float kRowMinHeight = Style::controlHeightLg;
+  const auto kRowMinHeight = []() -> float { return Style::controlHeightLg; };
 
   // Label and wire value in one row, so the visible dropdown order and the value
   // sent to NetworkManager cannot drift apart.
@@ -245,7 +245,7 @@ public:
     setAlign(FlexAlign::Center);
     setGap(Style::spaceSm * scale);
     setPadding(Style::spaceSm * scale, Style::spaceMd * scale);
-    setMinHeight(kRowMinHeight * scale);
+    setMinHeight(kRowMinHeight() * scale);
     setRadius(Style::scaledRadiusMd(scale));
     setFill(colorSpecFromRole(ColorRole::Surface));
     clearBorder();
@@ -412,7 +412,7 @@ namespace {
       setAlign(FlexAlign::Center);
       setGap(Style::spaceSm * scale);
       setPadding(Style::spaceSm * scale, Style::spaceMd * scale);
-      setMinHeight(kRowMinHeight * scale);
+      setMinHeight(kRowMinHeight() * scale);
       setRadius(Style::scaledRadiusMd(scale));
       setFill(colorSpecFromRole(ColorRole::Surface));
       clearBorder();
@@ -542,7 +542,7 @@ public:
     setAlign(FlexAlign::Center);
     setGap(Style::spaceSm * scale);
     setPadding(Style::spaceSm * scale, Style::spaceMd * scale);
-    setMinHeight(kRowMinHeight * scale);
+    setMinHeight(kRowMinHeight() * scale);
     setRadius(Style::scaledRadiusMd(scale));
     setFill(colorSpecFromRole(ColorRole::Surface));
     clearBorder();

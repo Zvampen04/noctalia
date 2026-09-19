@@ -3,6 +3,9 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
 #include <vector>
 
 struct Mat3;
@@ -99,6 +102,15 @@ public:
   [[nodiscard]] bool participatesInLayout() const noexcept { return m_participatesInLayout; }
   [[nodiscard]] bool paintDirty() const noexcept { return m_paintDirty; }
   [[nodiscard]] bool layoutDirty() const noexcept { return m_layoutDirty; }
+  [[nodiscard]] bool materialBackdropLocal() const noexcept {
+    return m_materialBackdropLocal || (m_parent && m_parent->materialBackdropLocal());
+  }
+  void setMaterialBackdropLocal(bool local) {
+    if (m_materialBackdropLocal==local) return;
+    m_materialBackdropLocal=local;
+    markPaintDirty();
+  }
+  [[nodiscard]] bool bypassParentPaintClip() const noexcept { return m_bypassParentPaintClip; }
   [[nodiscard]] bool clipChildren() const noexcept { return m_clipChildren; }
   [[nodiscard]] bool paintContained() const noexcept { return m_paintContained; }
   [[nodiscard]] bool hitTestVisible() const noexcept { return m_hitTestVisible; }
@@ -115,6 +127,16 @@ public:
   [[nodiscard]] Node* parent() const noexcept { return m_parent; }
   [[nodiscard]] const std::vector<std::unique_ptr<Node>>& children() const noexcept { return m_children; }
 
+  // Empty scope inherits the nearest ancestor's semantic surface identity.
+  void setMaterialSurface(std::string_view surface);
+  [[nodiscard]] std::string_view materialSurfaceName() const noexcept;
+  // Scene-thread only. Geometry inheritance never changes layout or hitboxes.
+  static void setDefaultCornerPower(float power);
+  [[nodiscard]] static float defaultCornerPower() noexcept;
+  void setCornerPower(std::optional<float> power);
+  [[nodiscard]] float cornerPower() const noexcept;
+
+
   void setPosition(float x, float y);
   virtual void setSize(float width, float height);
   void setFrameSize(float width, float height);
@@ -127,6 +149,8 @@ public:
   void setVisible(bool visible);
   void setParticipatesInLayout(bool participatesInLayout);
   void setClipChildren(bool clipChildren);
+  // Owned background only: retain ancestor clips and normal hit testing.
+  void setBypassParentPaintClip(bool bypass);
   // Promises that every node in this subtree paints within its own bounds (plus a small slack).
   // Lets the renderer skip subtrees entirely outside the active clip.
   void setPaintContained(bool paintContained);
@@ -179,6 +203,7 @@ public:
   void clearDirty();
 
 protected:
+  virtual void doMaterialSurfaceChanged() {}
   virtual void doLayout(Renderer& renderer);
   virtual LayoutSize doMeasure(Renderer& renderer, const LayoutConstraints& constraints);
   virtual void doArrange(Renderer& renderer, const LayoutRect& rect);
@@ -188,6 +213,10 @@ protected:
   [[nodiscard]] virtual bool containsLocalPoint(float localX, float localY, bool includeHitOutset) const;
 
 private:
+  void refreshMaterialSurface();
+  std::string m_materialSurface;
+  std::optional<float> m_cornerPower;
+  void invalidateCornerPower(bool notify = true);
   static bool
   pointInsideNode(const Node* node, float sceneX, float sceneY, float& localX, float& localY, bool includeHitOutset);
   static Node* hitTestImpl(Node* node, float px, float py, bool allowOverflow, const Mat3& parentTransform);
@@ -209,6 +238,8 @@ private:
   bool m_paintDirty = true;
   bool m_layoutDirty = true;
   bool m_clipChildren = false;
+  bool m_bypassParentPaintClip = false;
+  bool m_materialBackdropLocal = false;
   bool m_paintContained = false;
   bool m_excludeSubtreeFromTabOrder = false;
   bool m_hitTestVisible = true;
@@ -240,8 +271,12 @@ public:
   }
 
   void setSource(const Node* source) noexcept { m_source = source; }
-  [[nodiscard]] const Node* source() const noexcept { return m_source; }
+  // Resolve on the scene thread at paint time when the source can be rebuilt by
+  // another surface. No pointer survives a source-tree replacement.
+  void setSourceProvider(std::function<const Node*()> provider) { m_sourceProvider=std::move(provider);markPaintDirty(); }
+  [[nodiscard]] const Node* source() const { return m_sourceProvider?m_sourceProvider():m_source; }
 
 private:
   const Node* m_source = nullptr;
+  std::function<const Node*()> m_sourceProvider;
 };

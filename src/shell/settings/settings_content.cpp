@@ -1,4 +1,6 @@
 #include "shell/settings/settings_content.h"
+#include "shell/control_center/shortcut_identity.h"
+#include "util/string_utils.h"
 
 #include "config/config_service.h"
 #include "config/config_types.h"
@@ -7,6 +9,7 @@
 #include "shell/settings/bar_widget_editor.h"
 #include "shell/settings/settings_content_common.h"
 #include "shell/settings/settings_control_factory.h"
+#include "shell/settings/custom_effect_asset_service.h"
 #include "ui/builders.h"
 #include "ui/controls/button.h"
 #include "ui/controls/flex.h"
@@ -18,10 +21,12 @@
 #include "ui/controls/select.h"
 #include "ui/controls/toggle.h"
 #include "ui/dialogs/glyph_picker_dialog.h"
+#include "ui/dialogs/file_dialog.h"
 #include "ui/palette.h"
 #include "ui/style.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cstddef>
 #include <functional>
 #include <memory>
@@ -38,6 +43,16 @@
 
 namespace settings {
   namespace {
+    std::string customEffectStableId(std::string_view target) {
+      std::string result = "user.";
+      for (const unsigned char value : target) {
+        if (result.size() >= 92) break;
+        result.push_back(std::isalnum(value) || value == '-' || value == '_' || value == '.'
+            ? static_cast<char>(value) : '-');
+      }
+      if (result == "user.") result += "effect";
+      return result;
+    }
 
     bool isDockLauncherIconPath(const std::vector<std::string>& path) {
       return path.size() == 2 && path[0] == "dock" && path[1] == "launcher_icon";
@@ -140,7 +155,7 @@ namespace settings {
   }
 
   std::size_t
-  addSettingsContentSections(Flex& content, const std::vector<SettingEntry>& registry, SettingsContentContext ctx) {
+  addSettingsContentSections(Flex& content, const std::vector<SettingEntry>& registry, SettingsContentContext ctx, bool showEmpty) {
     const float scale = ctx.scale;
 
     const auto sectionLabel = [](SettingsSection section) { return i18n::tr(settingsSectionLabelKey(section)); };
@@ -765,7 +780,9 @@ namespace settings {
         if (value.empty() || std::ranges::contains(items, value, &ShortcutConfig::type)) {
           return;
         }
-        items.push_back(ShortcutConfig{std::move(value)});
+        control_center_material::materializeShortcutIds(items, [] { return StringUtils::generateUuid(); });
+        items.push_back(ShortcutConfig{.type = std::move(value)});
+        control_center_material::materializeShortcutIds(items, [] { return StringUtils::generateUuid(); });
         setOverride(path, items);
       });
       listEditor->setOnRemoveRequested([setOverride = ctx.setOverride, items = shortcuts.items,
@@ -773,6 +790,7 @@ namespace settings {
         if (index >= items.size()) {
           return;
         }
+        control_center_material::materializeShortcutIds(items, [] { return StringUtils::generateUuid(); });
         items.erase(items.begin() + static_cast<std::ptrdiff_t>(index));
         setOverride(path, items);
       });
@@ -781,6 +799,7 @@ namespace settings {
         if (from >= items.size() || to >= items.size() || from == to) {
           return;
         }
+        control_center_material::materializeShortcutIds(items, [] { return StringUtils::generateUuid(); });
         std::swap(items[from], items[to]);
         setOverride(path, items);
       });
@@ -1143,7 +1162,9 @@ namespace settings {
       return std::visit(
           [&](const auto& control) -> std::unique_ptr<Node> {
             using T = std::decay_t<decltype(control)>;
-            if constexpr (std::is_same_v<T, ToggleSetting>) {
+            if constexpr (std::is_same_v<T, CurveSetting>) {
+              return factory.makeCurve(control);
+            } else if constexpr (std::is_same_v<T, ToggleSetting>) {
               return makeToggle(control.checked, control.enabled, entry.path);
             } else if constexpr (std::is_same_v<T, SelectSetting>) {
               return makeSelect(control, entry.path);
@@ -1188,6 +1209,90 @@ namespace settings {
               return nullptr;
             } else if constexpr (std::is_same_v<T, NotificationFiltersSetting>) {
               return nullptr;
+            } else if constexpr (std::is_same_v<T, CustomEffectSetting>) {
+              auto column = ui::column({.align = FlexAlign::Stretch, .gap = Style::spaceXs * scale});
+              auto actions = ui::row({.align = FlexAlign::Center, .gap = Style::spaceSm * scale});
+              auto basePath = entry.path;
+              if (!basePath.empty()) basePath.pop_back();
+              actions->addChild(ui::button({
+                  .text = control.stableId.empty() ? "Import effect" : "Replace effect",
+                  .glyph = "file-upload",
+                  .fontSize = Style::fontSizeBody * scale,
+                  .glyphSize = Style::fontSizeBody * scale,
+                  .variant = ButtonVariant::Default,
+                  .minHeight = Style::controlHeight * scale,
+                  .paddingV = Style::spaceSm * scale,
+                  .paddingH = Style::spaceMd * scale,
+                  .radius = Style::scaledRadiusMd(scale),
+                  .onClick = [setOverrides = ctx.setOverrides, showStatus = ctx.showStatus,
+                              requestRebuild = ctx.requestRebuild, basePath,
+                              stableId = control.stableId.empty()
+                                  ? customEffectStableId(control.targetId) : control.stableId,
+                              radius = control.sampleRadiusPx]() {
+                    FileDialogOptions options;
+                    options.mode = FileDialogMode::Open;
+                    options.defaultViewMode = FileDialogViewMode::List;
+                    options.title = "Import custom background effect";
+                    options.extensions = {".glsl", ".frag"};
+                    (void)FileDialog::open(std::move(options),
+                        [setOverrides, showStatus, requestRebuild, basePath, stableId, radius]
+                        (std::optional<std::filesystem::path> picked) {
+                          if (!picked) return;
+                          auto imported = custom_effect_assets::importFile(*picked, stableId, radius);
+                          if (!imported) {
+                            if (showStatus) showStatus(imported.error, true);
+                            if (requestRebuild) requestRebuild();
+                            return;
+                          }
+                          auto path = [&basePath](std::string key) {
+                            auto result = basePath;
+                            result.push_back(std::move(key));
+                            return result;
+                          };
+                          setOverrides({
+                              {path("custom_effect"), ConfigOverrideValue{imported.asset->stableId}},
+                              {path("custom_effect_digest"), ConfigOverrideValue{imported.asset->sha256Digest}},
+                              {path("custom_sample_radius"), ConfigOverrideValue{static_cast<double>(
+                                  imported.asset->maxSampleRadiusPx)}},
+                          });
+                          if (showStatus) showStatus("Custom background effect imported", false);
+                          if (requestRebuild) requestRebuild();
+                        });
+                  },
+              }));
+              if (!control.stableId.empty()) {
+                actions->addChild(ui::button({
+                    .text = "Reset",
+                    .glyph = "restore",
+                    .fontSize = Style::fontSizeBody * scale,
+                    .glyphSize = Style::fontSizeBody * scale,
+                    .variant = ButtonVariant::Secondary,
+                    .minHeight = Style::controlHeight * scale,
+                    .paddingV = Style::spaceSm * scale,
+                    .paddingH = Style::spaceMd * scale,
+                    .radius = Style::scaledRadiusMd(scale),
+                    .onClick = [clearOverrides = ctx.clearOverrides, basePath]() {
+                      std::vector<std::vector<std::string>> paths;
+                      for (const auto key : {"custom_effect", "custom_effect_digest", "custom_sample_radius"}) {
+                        auto path = basePath;
+                        path.emplace_back(key);
+                        paths.push_back(std::move(path));
+                      }
+                      constexpr std::string_view components = "xyzw";
+                      for (std::size_t index = 0; index < Style::kCustomEffectParameterCount; ++index) {
+                        auto path = basePath;
+                        path.push_back("custom_p" + std::to_string(index / 4) + "_" + components[index % 4]);
+                        paths.push_back(std::move(path));
+                      }
+                      clearOverrides(std::move(paths));
+                    },
+                }));
+              }
+              column->addChild(std::move(actions));
+              if (!control.diagnostic.empty())
+                column->addChild(makeLabel(control.diagnostic, Style::fontSizeCaption * scale,
+                                           colorSpecFromRole(ColorRole::Error), FontWeight::Normal));
+              return column;
             } else if constexpr (std::is_same_v<T, ButtonSetting>) {
               if (control.glyph.empty()) {
                 return ui::button({
@@ -1309,20 +1414,14 @@ namespace settings {
       expandedGroups = &pageIt->second;
     }
 
-    std::unordered_map<std::string, Button*> pillByGroup;
+    // One retained popup selector bounds header height independently of group count.
+    auto groupJumps = std::make_shared<std::vector<SettingsGroupJump>>();
+    std::unordered_map<std::string, std::size_t> jumpIndex;
     if (collapsibleGroups && ctx.groupJumpRow != nullptr) {
+      groupJumps->reserve(pageGroupKeys.size());
       for (const auto& group : pageGroupKeys) {
-        Button* pill = nullptr;
-        ctx.groupJumpRow->addChild(
-            ui::button({
-                .out = &pill,
-                .text = groupLabel(group),
-                .fontSize = Style::fontSizeCaption * scale,
-                .variant = expandedGroups->contains(group) ? ButtonVariant::Primary : ButtonVariant::Default,
-                .radius = Style::scaledRadiusMd(scale),
-            })
-        );
-        pillByGroup.emplace(group, pill);
+        jumpIndex.emplace(group, groupJumps->size());
+        groupJumps->push_back({group, groupLabel(group), {}});
       }
     }
 
@@ -1376,28 +1475,20 @@ namespace settings {
                     .title = groupLabel(entry.group),
                     .scale = scale,
                     .expandedGroups = *expandedGroups,
-                    .pill = pillByGroup[entry.group],
                     .scrollToTop = ctx.scrollContentToTop,
+                    .connectedRows = ctx.config.shell.settingsConnectedRows,
+                    .jumpAction = jumpIndex.contains(entry.group)
+                        ? &(*groupJumps)[jumpIndex.at(entry.group)].activate : nullptr,
                 }
             );
           } else if (!entry.group.empty()) {
-            activeGroupBody = addSettingsCard(*activeSection, groupLabel(entry.group), scale);
+            activeGroupBody = addSettingsCard(*activeSection, groupLabel(entry.group), scale, ctx.config.shell.settingsConnectedRows);
           } else {
             addGroupLabel(*activeSection, groupLabel(entry.group), isFirstGroup);
             activeGroupBody = activeSection;
           }
           if (entry.section == SettingsSection::Power && entry.group == "idle") {
             addIdleLiveStatusPanel(*activeGroupBody, ctx, scale);
-          }
-          if (entry.section == SettingsSection::Screenshot && entry.group == "screenshot-output") {
-            activeGroupBody->addChild(
-                ui::label({
-                    .text = i18n::tr("settings.schema.shell.screenshot-output.description"),
-                    .fontSize = Style::fontSizeBody * scale,
-                    .color = colorSpecFromRole(ColorRole::OnSurfaceVariant),
-                    .maxLines = 0,
-                })
-            );
           }
         }
         if (!std::holds_alternative<KeybindListSetting>(entry.control)) {
@@ -1452,9 +1543,20 @@ namespace settings {
       }
     }
 
+    if (!groupJumps->empty()) {
+      std::string* selected = ctx.selectedGroupsByPage ? &(*ctx.selectedGroupsByPage)[pageKey] : nullptr;
+      if (selected && selected->empty()) {
+        const auto expanded = std::ranges::find_if(pageGroupKeys, [&](const auto& group) {
+          return expandedGroups->contains(group);
+        });
+        *selected = expanded == pageGroupKeys.end() ? pageGroupKeys.front() : *expanded;
+      }
+      ctx.groupJumpRow->addChild(makeSettingsGroupNavigator(std::move(groupJumps), selected, scale));
+    }
+
     // The Plugins section has no registry entries — it renders fully custom
     // content (addSettingsPlugins), so suppress the "no settings found" state.
-    if (visibleEntries == 0 && ctx.selectedSection != "plugins") {
+    if (showEmpty && visibleEntries == 0 && ctx.selectedSection != "plugins") {
       auto emptyState = ui::column(
           {.align = FlexAlign::Center,
            .justify = FlexJustify::Center,

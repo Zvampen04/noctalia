@@ -125,6 +125,9 @@ private:
   Label* m_badgeLabel = nullptr;
   InputArea* m_inputArea = nullptr;
   std::uint32_t m_animId = 0;
+  std::uint32_t m_reliefAnimId = 0;
+  float m_displayRelief = 1.0F;
+  float m_targetRelief = 1.0F;
   std::function<void()> m_onClick;
   std::function<void()> m_onRightClick;
   std::function<void(float, float, std::uint32_t, std::uint32_t)> m_onRightClickWithPointer;
@@ -152,6 +155,8 @@ private:
   bool m_hoveredVisual = false;
   bool m_pressedVisual = false;
   bool m_visualStateInitialized = false;
+  Signal<>::ScopedConnection m_surfaceMaterialConn;
+  Signal<>::ScopedConnection m_motionConn;
   Signal<>::ScopedConnection m_paletteConn;
   Signal<>::ScopedConnection m_buttonBordersConn;
 };

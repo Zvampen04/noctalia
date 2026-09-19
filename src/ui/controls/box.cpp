@@ -4,14 +4,20 @@
 #include "render/scene/rect_node.h"
 #include "ui/palette.h"
 #include "ui/style.h"
+#include "ui/control_settings_palette.h"
 
 #include <memory>
+#include <algorithm>
 
 Box::Box() {
   auto rect = std::make_unique<RectNode>();
   m_rect = static_cast<RectNode*>(addChild(std::move(rect)));
   m_style = m_rect->style();
   m_paletteConn = paletteChanged().connect([this] { applyPalette(); });
+  m_materialConn = Style::surfaceMaterialChanged().connect([this] {
+    if (m_cardScale) setCardStyle(*m_cardScale, m_cardOpacity, m_cardBorder);
+    else syncStyle();
+  });
 }
 
 const RoundedRectStyle& Box::style() const noexcept { return m_style; }
@@ -68,6 +74,11 @@ void Box::setLogicalInset(const RectInsets& inset) {
   syncStyle();
 }
 
+void Box::setSegmentContour(const SegmentContour& contour) {
+  m_style.segmentContour = contour;
+  syncStyle();
+}
+
 void Box::setSoftness(float softness) {
   m_style.softness = softness;
   syncStyle();
@@ -78,14 +89,54 @@ void Box::setNoAa(bool noAa) {
   syncStyle();
 }
 
+void Box::setMaterialBackdrop(MaterialBackdrop backdrop) {
+  m_style.materialBackdrop = backdrop;
+  syncStyle();
+}
+
+void Box::setMaterialIdentity(std::string_view role, std::string_view family, std::string_view surface) {
+  m_cardOwnsFamily = false;
+  if (m_materialSurfacePath.empty()
+      && m_materialRole == role && m_materialFamily == family && materialSurfaceName() == surface) return;
+  m_materialSurfacePath.clear();
+  m_materialRole = role;
+  m_materialFamily = family;
+  setMaterialSurface(surface);
+  syncStyle();
+}
+
+void Box::setMaterialIdentityPath(
+    std::string_view role, std::string_view family, std::vector<std::string> surfaces) {
+  m_cardOwnsFamily = false;
+  if (m_materialRole == role && m_materialFamily == family && m_materialSurfacePath == surfaces) return;
+  m_materialRole = role;
+  m_materialFamily = family;
+  m_materialSurfacePath = std::move(surfaces);
+  setMaterialSurface(m_materialSurfacePath.empty() ? std::string_view{} : m_materialSurfacePath.back());
+  syncStyle();
+}
+
+void Box::setMaterialPrimitive(std::optional<noctalia::material::Primitive> primitive) {
+  if (m_materialPrimitive == primitive) return;
+  m_materialPrimitive = primitive;
+  syncStyle();
+}
+
+void Box::setSurfaceRelief(float relief) {
+  m_surfaceRelief = std::clamp(relief, -4.0F, 4.0F);
+  syncStyle();
+}
+
 void Box::setSize(float w, float h) {
   Node::setSize(w, h);
   m_rect->setFrameSize(w, h);
+  syncStyle();
 }
 
 void Box::setFrameSize(float w, float h) {
   Node::setFrameSize(w, h);
   m_rect->setFrameSize(w, h);
+  syncStyle();
 }
 
 void Box::applyPalette() {
@@ -101,6 +152,7 @@ void Box::applyPalette() {
 }
 
 void Box::setFlatStyle() {
+  m_surfaceRelief = 0.0F;
   m_fill = colorSpecFromRole(ColorRole::Surface);
   m_border = colorSpecFromRole(ColorRole::Outline);
   m_borderWidth = 0.0F;
@@ -118,6 +170,7 @@ void Box::setFlatStyle() {
 }
 
 void Box::setPanelStyle(bool showBorder) {
+  m_surfaceRelief = 0.35F;
   m_fill = colorSpecFromRole(ColorRole::Surface);
   if (showBorder) {
     m_border = colorSpecFromRole(ColorRole::Outline);
@@ -141,9 +194,21 @@ void Box::setPanelStyle(bool showBorder) {
 
 void Box::setDialogStyle() { setPanelStyle(true); }
 
-void Box::setCardStyle(float scale, float fillOpacity, bool showBorder) {
+void Box::setCardStyle(float scale, float fillOpacity, std::optional<bool> showBorder) {
+  m_cardScale = scale; m_cardOpacity = fillOpacity; m_cardBorder = showBorder;
+  const auto& controls = Style::controls();
+  if (controls.card_variant == Style::CardTreatment::Raised) {
+    if (m_materialFamily == "container") { m_materialFamily = "card"; m_cardOwnsFamily = true; }
+    setSurfaceRelief(controls.card_relief);
+    setFill(colorSpecFromRole(controlColorRole(controls.card_face_role), fillOpacity));
+    clearBorder();
+    setRadius(Style::scaledRadius(controls.card_radius, scale));
+    return;
+  }
+  if (m_cardOwnsFamily) { m_materialFamily = "container"; m_cardOwnsFamily = false; }
+  m_surfaceRelief = 0.75F;
   setFill(colorSpecFromRole(ColorRole::SurfaceVariant, fillOpacity));
-  if (showBorder) {
+  if (showBorder.value_or(Style::cardBordersEnabled())) {
     setBorder(colorSpecFromRole(ColorRole::Outline), Style::borderWidth);
   } else {
     clearBorder();
@@ -151,4 +216,11 @@ void Box::setCardStyle(float scale, float fillOpacity, bool showBorder) {
   setRadius(Style::scaledRadiusXl(scale));
 }
 
-void Box::syncStyle() { m_rect->setStyle(m_style); }
+void Box::syncStyle() {
+  if (m_materialSurfacePath.empty())
+    m_material.sync(*this, *m_rect, m_style, m_surfaceRelief, m_materialRole, m_materialFamily, {}, m_materialPrimitive);
+  else
+    m_material.syncPath(
+        *this, *m_rect, m_style, m_surfaceRelief, m_materialRole, m_materialFamily,
+        m_materialSurfacePath, m_materialPrimitive);
+}

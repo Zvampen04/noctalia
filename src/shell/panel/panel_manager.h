@@ -1,9 +1,12 @@
 #pragma once
+#include "ui/palette.h"
 
 #include "core/timer_manager.h"
 #include "render/animation/animation_manager.h"
 #include "render/scene/input_dispatcher.h"
 #include "shell/panel/attached_panel_context.h"
+#include "shell/panel/attached_panel_morph.h"
+#include "shell/panel/attached_panel_layout.h"
 #include "shell/panel/panel_click_shield.h"
 #include "shell/panel/persistent_panel_host.h"
 #include "ui/dialogs/layer_popup_host.h"
@@ -26,8 +29,10 @@ class IpcService;
 class FocusGrab;
 class LayerSurface;
 class Node;
+class RenderProxyNode;
 class Panel;
 class RenderContext;
+class Renderer;
 class Surface;
 class WaylandConnection;
 enum class LayerShellLayer : std::uint32_t;
@@ -44,6 +49,7 @@ struct PanelOpenRequest {
   bool hasAnchorPosition = false;
   std::string_view context;
   std::string_view sourceBarName;
+  AttachedPanelSource source;
 };
 
 class PanelManager : public PopupGrabHost {
@@ -89,6 +95,13 @@ public:
   void setAttachedPanelAvailabilityCallback(std::function<bool(wl_output*, std::string_view)> callback);
   void setAttachedPanelLayerProvider(std::function<std::optional<std::string>(wl_output*, std::string_view)> provider);
   void setAttachedPanelBarSettledCallback(std::function<bool(wl_output*, std::string_view)> callback);
+  void setAttachedSourceGeometryProvider(
+      std::function<std::optional<AttachedPanelSource>(wl_output*, std::string_view, const AttachedPanelSource&)> provider) {
+    m_attachedSourceGeometryProvider = std::move(provider);
+  }
+  void setAttachedSourceContentProvider(std::function<const Node*(wl_output*,std::string_view,const AttachedPanelSource&)> provider) {
+    m_attachedSourceContentProvider=std::move(provider);
+  }
   // Called when an auto-hide bar finishes revealing for an attached panel open.
   void onAttachedBarRevealSettled(wl_output* output, std::string_view barName);
 
@@ -115,6 +128,7 @@ public:
   // Bar that opened the active panel; empty when none was recorded.
   [[nodiscard]] std::string_view attachedSourceBarName() const noexcept;
   [[nodiscard]] const std::string& activePanelId() const noexcept;
+  [[nodiscard]] std::string_view activePanelContext() const noexcept;
   [[nodiscard]] Panel* activePanel() const noexcept { return m_activePanel; }
   // True when a panel is open and it reports the given context as active (e.g. control-center tab).
   [[nodiscard]] bool isActivePanelContext(std::string_view context) const noexcept;
@@ -133,8 +147,8 @@ public:
   void clearActivePopup();
 
   void refresh();
-  // Re-read preferredWidth/Height on the active detached panel and request a new
-  // layer-shell size (e.g. polkit growing when a password field appears).
+  // Re-read preferredWidth/Height without replacing the active content tree.
+  // Attached panels retain their bar anchor, input and evolving material geometry.
   void relayoutActivePanelPreferredSize();
   // Refresh a single panel by id, whichever host owns it. Used by content that
   // knows which panel it belongs to (e.g. a plugin panel's new UI tree).
@@ -173,9 +187,40 @@ public:
   void registerIpc(IpcService& ipc);
 
 private:
+  friend class PanelManagerLayoutTestAccess;
+  struct PlacementRequest {
+    std::uint32_t anchor = 0;
+    int top = 0, right = 0, bottom = 0, left = 0, exclusiveZone = 0;
+    bool operator==(const PlacementRequest&) const = default;
+  };
+  struct RetainedPlacement {
+    bool attached = true;
+    bool islandMorph = false;
+    bool anchoredRight = false, anchoredBottom = false;
+    bool fillWidth = false, fillHeight = false;
+    std::string barName;
+    std::string position;
+    attached_panel::BodyRect body{};
+    int insetX = 0, insetY = 0, trailingX = 0, trailingY = 0;
+    std::uint32_t surfaceWidth = 1, surfaceHeight = 1;
+    int barOriginX = 0, barOriginY = 0;
+    LayerShellLayer layer = LayerShellLayer::Top;
+    ColorSpec background = colorSpecFromRole(ColorRole::Surface);
+    float opacity = 1.0F;
+    bool contactShadow = false;
+    AttachedRevealDirection detachedDirection = AttachedRevealDirection::Down;
+    std::optional<PlacementRequest> request;
+  };
+  void refreshPanelPlacement();
+  void queuePanelPlacement(RetainedPlacement placement, std::uint32_t anchor,
+                           int top, int right, int bottom, int left, int exclusiveZone);
+  void applyAttachmentMode(bool attached);
+  void applyPanelPlacement(std::uint32_t width, std::uint32_t height);
+  void onSurfaceConfigured();
   static PanelManager* s_instance;
 
   void buildScene(std::uint32_t width, std::uint32_t height);
+  void layoutScene(Renderer& renderer, std::uint32_t width, std::uint32_t height);
   void prepareFrame(bool needsUpdate, bool needsLayout);
   void applyPendingPanelFocus();
   void destroyPanel();
@@ -188,6 +233,10 @@ private:
   void activateFocusGrab();
   void deactivateOutsideClickHandlers();
   void applyAttachedReveal(float progress);
+  void applyAttachedMorph(float progress);
+  [[nodiscard]] bool attachedMorphEnabled() const;
+  [[nodiscard]] float attachedAnimationDuration() const;
+  [[nodiscard]] attached_panel::MorphGeometry attachedMorphGeometry(float progress) const;
   void applyDetachedReveal(float progress);
   void startAttachedOpenAnimation();
   void publishAttachedPanelGeometry(float revealProgress);
@@ -196,7 +245,7 @@ private:
   // Safe to call any time after buildScene has run.
   void applyAttachedDecorationStyle();
   // Submit a wl_region matching the panel body after applying the current reveal clip.
-  void applyPanelCompositorBlur(int bodyX, int bodyY, int bodyW, int bodyH, int clipX, int clipY, int clipW, int clipH);
+  void applyPanelCompositorBlur(int bodyX, int bodyY, int bodyW, int bodyH, int clipX, int clipY, int clipW, int clipH, float shapeRadius = -1.0F);
 
   CompositorPlatform* m_platform = nullptr;
   ConfigService* m_config = nullptr;
@@ -234,6 +283,10 @@ private:
   Node* m_detachedRevealContentNode = nullptr;
   Node* m_attachedRevealClipNode = nullptr;
   Node* m_attachedRevealContentNode = nullptr;
+  Node* m_attachedContentClipNode = nullptr;
+  RenderProxyNode* m_islandOpenerProxy = nullptr;
+  std::function<std::optional<AttachedPanelSource>(wl_output*, std::string_view, const AttachedPanelSource&)> m_attachedSourceGeometryProvider;
+  std::function<const Node*(wl_output*,std::string_view,const AttachedPanelSource&)> m_attachedSourceContentProvider;
   Box* m_panelShadowNode = nullptr;
   Box* m_panelContactShadowNode = nullptr;
   InputDispatcher m_inputDispatcher;
@@ -258,6 +311,9 @@ private:
   bool m_panelFillHeight = false;
   std::int32_t m_detachedBleedRight = 0;
   std::int32_t m_detachedBleedBottom = 0;
+  std::int32_t m_attachedBleedRight=0,m_attachedBleedBottom=0;
+  std::int32_t m_attachedBarOriginX=0,m_attachedBarOriginY=0;
+  ColorSpec m_attachedBackground = colorSpecFromRole(ColorRole::Surface);
   float m_attachedBackgroundOpacity = 1.0F;
   bool m_attachedContactShadow = false;
   float m_attachedRevealProgress = 1.0F;
@@ -266,7 +322,20 @@ private:
   AttachedRevealDirection m_detachedRevealDirection = AttachedRevealDirection::Down;
   Timer m_keyboardRelaxTimer;
   std::string m_attachedBarPosition; // "top" / "bottom" / "left" / "right" while attached, empty otherwise
-  std::string m_sourceBarName;       // name of the bar that opened the current panel
+  bool m_attachedHasAnchor = false;
+  bool m_attachedAnchorAvailable = false;
+  std::string m_openingSourceBarName;
+  std::optional<RetainedPlacement> m_attachedPlacement;
+  std::uint64_t m_attachedPlacementGeneration = 0;
+  bool m_attachedPlacementPending = false;
+  bool m_attachedAwaitingConfigure = false;
+  bool m_refreshingRetainedPlacement = false;
+  bool m_sceneGeometryDirty = false;
+  float m_attachedAnchorX = 0.0F;
+  float m_attachedAnchorY = 0.0F;
+  std::string m_sourceBarName;       // resolved bar currently owning the attached join
+  AttachedPanelSource m_attachedSource;
+  bool m_islandMorph = false;
   std::optional<AttachedPanelGeometry> m_attachedPanelGeometry;
   bool m_pointerInside = false;
   bool m_inTransition = false;

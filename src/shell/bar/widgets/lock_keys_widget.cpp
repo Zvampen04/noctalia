@@ -83,8 +83,8 @@ void LockKeysWidget::doLayout(Renderer& renderer, float containerWidth, float co
     return;
   }
 
-  constexpr float kSpacing = Style::spaceXs;
-  const float spacing = kSpacing * m_contentScale;
+  const auto kSpacing = []() -> float { return Style::spaceXs; };
+  const float spacing = kSpacing() * m_contentScale;
   float x = 0.0F;
   float y = 0.0F;
   float h = 0.0F;

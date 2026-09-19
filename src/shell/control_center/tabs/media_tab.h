@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/timer_manager.h"
+#include "ui/signal.h"
 #include "dbus/mpris/mpris_service.h"
 #include "shell/control_center/tab.h"
 
@@ -22,6 +23,7 @@ class PipeWireSpectrum;
 class RenderContext;
 class Slider;
 class AudioVisualizer;
+class FancyAudioVisualizer;
 class ConfigService;
 class WaylandConnection;
 
@@ -32,6 +34,7 @@ public:
       WaylandConnection* wayland, RenderContext* renderContext
   );
   ~MediaTab() override;
+  void setCompactMini(bool mini) noexcept { m_compactMini = mini; }
 
   std::unique_ptr<Flex> create() override;
   void onFrameTick(float deltaMs) override;
@@ -47,6 +50,16 @@ private:
   void commitPendingSeek(double valueSeconds);
 
   void openPlayerMenu();
+  void syncComposition();
+  bool m_compactMini = false;
+  void layoutCompact(Renderer& renderer, float width, float height);
+  Flex* m_nowHeader = nullptr;
+  Flex* m_metadata = nullptr;
+  Flex* m_controlsRow = nullptr;
+  Image* m_artBackdrop = nullptr;
+  Label* m_elapsedLabel = nullptr;
+  Label* m_durationLabel = nullptr;
+  void syncSpectrumSubscription();
 
   // Guard token for deferred callbacks that run on the next main-loop tick.
   // Callbacks capture a weak_ptr so they can detect destruction without
@@ -61,20 +74,25 @@ private:
   RenderContext* m_renderContext = nullptr;
   std::uint64_t m_spectrumListenerId = 0;
   bool m_active = false;
+  Signal<>::ScopedConnection m_motionConnection;
 
   Flex* m_rootLayout = nullptr;
   Flex* m_mediaColumn = nullptr;
   Flex* m_visualizerColumn = nullptr;
   Flex* m_visualizerBody = nullptr;
   AudioVisualizer* m_visualizerSpectrum = nullptr;
+  FancyAudioVisualizer* m_visualizerRadial = nullptr;
+  Button* m_equalizerButton = nullptr;
   Image* m_artwork = nullptr;
   Flex* m_artworkRow = nullptr;
   Flex* m_nowCard = nullptr;
   Flex* m_mediaStack = nullptr;
+  Flex* m_controls = nullptr;
   Button* m_playerMenuButton = nullptr;
   std::unique_ptr<ContextMenuPopup> m_playerMenuPopup;
   Label* m_trackTitle = nullptr;
   Label* m_trackArtist = nullptr;
+  Label* m_trackSource = nullptr;
   Label* m_trackAlbum = nullptr;
   Slider* m_progressSlider = nullptr;
   Button* m_prevButton = nullptr;

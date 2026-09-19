@@ -16,6 +16,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 class AnimationManager;
 class Box;
@@ -106,6 +107,9 @@ public:
   [[nodiscard]] const std::string& labelFontFamily() const noexcept { return m_labelFontFamily; }
   void setConfigName(std::string name) { m_configName = std::move(name); }
   [[nodiscard]] std::string_view configName() const noexcept { return m_configName; }
+  void setBarMaterialSurfaces(std::vector<std::string> surfaces) { m_barMaterialSurfaces = std::move(surfaces); }
+  [[nodiscard]] const std::vector<std::string>& barMaterialSurfaces() const noexcept { return m_barMaterialSurfaces; }
+  [[nodiscard]] bool hasBarMaterialSurface() const noexcept { return !m_barMaterialSurfaces.empty(); }
   void setAnchor(bool anchor) noexcept { m_anchor = anchor; }
   [[nodiscard]] bool isAnchor() const noexcept { return m_anchor; }
 
@@ -171,6 +175,7 @@ protected:
   FontWeight m_labelFontWeight = FontWeight::Medium;
   std::string m_labelFontFamily; // empty = inherit renderer-global family
   std::string m_configName;
+  std::vector<std::string> m_barMaterialSurfaces;
   bool m_anchor = false;
   AnimationManager* m_animations = nullptr;
   UpdateCallback m_updateCallback;

@@ -453,7 +453,8 @@ namespace shell::dock {
       return nullptr;
     }
 
-    popup_chrome::setContentInputRegion(*menu->surface, menu->chrome);
+    popup_chrome::setContentInputRegion(
+        *menu->surface, menu->chrome, Style::scaledRadiusLg(), Style::cornerPower);
     menu->wlSurface = menu->surface->wlSurface();
     return menu;
   }

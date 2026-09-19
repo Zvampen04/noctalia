@@ -14,13 +14,13 @@
 namespace {
 
   constexpr float kMenuPadding = 6.0F;
-  constexpr float kItemHeight = Style::controlHeightSm;
+  const auto kItemHeight = []() -> float { return Style::controlHeightSm; };
   constexpr float kSeparatorHeight = 10.0F;
   constexpr float kItemGap = 0.0F;
-  constexpr float kMenuFontSize = Style::fontSizeCaption;
-  constexpr float kMenuGlyphSize = Style::fontSizeCaption - 1.0F;
+  const auto kMenuFontSize = []() -> float { return Style::fontSizeCaption; };
+  const auto kMenuGlyphSize = []() -> float { return Style::fontSizeCaption - 1.0F; };
   // Leading check/radio column: the glyph plus a small gap before the label (or leading visual).
-  constexpr float kToggleSlot = kMenuGlyphSize + Style::spaceXs;
+  const auto kToggleSlot = []() -> float { return kMenuGlyphSize() + Style::spaceXs; };
 
   float safeScale(float scale) noexcept { return std::max(0.1F, scale); }
 
@@ -42,12 +42,12 @@ namespace {
   float leadingVisualSlot(const ContextMenuControlEntry& entry, float scale) {
     if (!entry.swatchPreview.empty()) {
       ColorSwatchPreviewStrip strip;
-      strip.setMetricsFromFontSize(kMenuFontSize * scale);
+      strip.setMetricsFromFontSize(kMenuFontSize() * scale);
       strip.setPreview(entry.swatchPreview);
       return strip.preferredWidth() + Style::spaceSm * scale;
     }
     if (entry.indicatorColor.has_value()) {
-      return std::round(kMenuFontSize * scale) + Style::spaceSm * scale;
+      return std::round(kMenuFontSize() * scale) + Style::spaceSm * scale;
     }
     return 0.0F;
   }
@@ -218,9 +218,9 @@ float ContextMenuControl::preferredWidth(
     if (entry.separator || entry.label.empty()) {
       continue;
     }
-    const float toggleSlot = hasToggle(entry) ? kToggleSlot * scale : 0.0F;
+    const float toggleSlot = hasToggle(entry) ? kToggleSlot() * scale : 0.0F;
     const FontWeight weight = entry.header ? FontWeight::Bold : FontWeight::Normal;
-    const float textWidth = std::ceil(renderer.measureText(entry.label, kMenuFontSize * scale, weight).width);
+    const float textWidth = std::ceil(renderer.measureText(entry.label, kMenuFontSize() * scale, weight).width);
     // Mirrors rebuildRows: 8px label inset each side, 30px right when a chevron is drawn.
     const float sidePadding = (entry.hasSubmenu ? 30.0F : 16.0F) * scale;
     maxRowWidth = std::max(
@@ -241,7 +241,7 @@ float ContextMenuControl::preferredHeight(
 
   float contentHeight = 0.0F;
   for (std::size_t i = 0; i < visibleEntries; ++i) {
-    contentHeight += (entries[i].separator ? kSeparatorHeight : kItemHeight) * scale;
+    contentHeight += (entries[i].separator ? kSeparatorHeight : kItemHeight()) * scale;
   }
   return kMenuPadding * scale * 2.0F + contentHeight + kItemGap * scale * static_cast<float>(visibleEntries - 1);
 }
@@ -271,7 +271,7 @@ void ContextMenuControl::rebuild(Renderer& renderer) {
 void ContextMenuControl::rebuildRows(Renderer& renderer) {
   const float scale = m_contentScale;
   const float menuPadding = kMenuPadding * scale;
-  const float itemHeight = kItemHeight * scale;
+  const float itemHeight = kItemHeight() * scale;
   const float separatorHeight = kSeparatorHeight * scale;
   const float itemGap = kItemGap * scale;
   const std::size_t visibleItems = std::min(m_entries.size(), m_maxVisible);
@@ -327,14 +327,14 @@ void ContextMenuControl::rebuildRows(Renderer& renderer) {
       );
 
       const bool toggleVisible = hasToggle(entry);
-      const float toggleSlot = toggleVisible ? kToggleSlot * scale : 0.0F;
+      const float toggleSlot = toggleVisible ? kToggleSlot() * scale : 0.0F;
       const float indent = entryIndent(entry, scale);
       const std::string toggleGlyph = toggleGlyphName(entry);
       if (!toggleGlyph.empty()) {
         auto glyph = ui::glyph({
             .out = &togglePtr,
             .glyph = toggleGlyph,
-            .glyphSize = kMenuGlyphSize * scale,
+            .glyphSize = kMenuGlyphSize() * scale,
             .color = entry.enabled ? enabledItemColor() : disabledItemColor(),
         });
         glyph->measure(renderer);
@@ -345,19 +345,20 @@ void ContextMenuControl::rebuildRows(Renderer& renderer) {
       const float leadingSlot = leadingVisualSlot(entry, scale);
       if (!entry.swatchPreview.empty()) {
         auto strip = std::make_unique<ColorSwatchPreviewStrip>();
-        strip->setMetricsFromFontSize(kMenuFontSize * scale);
+        strip->setMetricsFromFontSize(kMenuFontSize() * scale);
         strip->setPreview(entry.swatchPreview);
         strip->setPosition(
             8.0F * scale + indent + toggleSlot, std::round((rowHeight - strip->preferredHeight()) * 0.5F)
         );
         row->addChild(std::move(strip));
       } else if (entry.indicatorColor.has_value()) {
-        const float dotSize = std::round(kMenuFontSize * scale);
+        const float dotSize = std::round(kMenuFontSize() * scale);
         auto dot = std::make_unique<Box>();
         dot->setFill(*entry.indicatorColor);
         dot->setBorder(colorSpecFromRole(ColorRole::Outline), 1.5F);
         dot->setFrameSize(dotSize, dotSize);
         dot->setRadius(dotSize * 0.5F);
+        dot->setCornerPower(2.0F);
         dot->setPosition(8.0F * scale + indent + toggleSlot, std::round((rowHeight - dotSize) * 0.5F));
         row->addChild(std::move(dot));
       }
@@ -365,7 +366,7 @@ void ContextMenuControl::rebuildRows(Renderer& renderer) {
       auto label = ui::label({
           .out = &labelPtr,
           .text = entry.label,
-          .fontSize = kMenuFontSize * scale,
+          .fontSize = kMenuFontSize() * scale,
           .fontWeight = entry.header ? FontWeight::Bold : FontWeight::Normal,
           .color = entry.header ? colorSpecFromRole(ColorRole::OnSurfaceVariant)
               : entry.enabled   ? enabledItemColor()
@@ -383,7 +384,7 @@ void ContextMenuControl::rebuildRows(Renderer& renderer) {
         auto chevron = ui::glyph({
             .out = &chevronPtr,
             .glyph = m_submenuDirection == ContextSubmenuDirection::Right ? "chevron-right" : "chevron-left",
-            .glyphSize = kMenuGlyphSize * scale,
+            .glyphSize = kMenuGlyphSize() * scale,
             .color = entry.enabled ? enabledItemColor() : disabledItemColor(),
         });
         chevron->measure(renderer);
@@ -405,7 +406,7 @@ void ContextMenuControl::rebuildRows(Renderer& renderer) {
           ui::label({
               .out = &labelPtr,
               .text = "",
-              .fontSize = kMenuFontSize * scale,
+              .fontSize = kMenuFontSize() * scale,
               .color = colorSpecFromRole(ColorRole::OnSurfaceVariant),
           })
       );

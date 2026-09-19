@@ -88,6 +88,64 @@ int main() {
     // A mutation that changes nothing must not commit, so consumers are not woken for a no-op.
     expect(config.mutateOverrides({}, {serverUrlPath}, nullptr), "clearing an absent key succeeds");
     expect(reloads == 1, "no-op mutation does not reach the config");
+
+    std::vector<BarSectionConfig> sections;
+    for (int i = 0; i < 4; ++i) {
+      BarSectionConfig section;
+      section.id = "section-" + std::to_string(i);
+      section.widgets = {"clock"};
+      section.anchor = i == 0 ? BarCenterAlignment::Start
+                              : i == 3 ? BarCenterAlignment::End : BarCenterAlignment::Center;
+      section.offset = static_cast<float>(i * 12);
+      sections.push_back(std::move(section));
+    }
+    const std::vector<std::string> sectionPath{"bar", "default", "section"};
+    expect(config.setOverride(sectionPath, sections), "ordered four-section override writes");
+    expect(config.hasOverride(sectionPath), "section vector is retained as one atomic override");
+    const auto barIt = std::ranges::find(config.config().bars, std::string("default"), &BarConfig::name);
+    expect(barIt != config.config().bars.end(), "default bar remains available after section override");
+    if (barIt != config.config().bars.end()) {
+      expect(barIt->sections == sections, "ordered section vector round-trips into effective config");
+    }
+
+    const std::vector<BarWidgetPlacementConfig> placements{
+        {.id = "meter-a", .widget = "cpu", .foreground = colorSpecFromRole(ColorRole::OnPrimary)},
+        {.id = "meter-b", .widget = "cpu", .iconForeground = colorSpecFromRole(ColorRole::Primary)},
+    };
+    const std::vector<std::string> placementPath{"bar", "default", "widget_placement"};
+    expect(config.setOverride(placementPath, placements), "stable widget placement override writes");
+    const auto placementBar = std::ranges::find(config.config().bars, std::string("default"), &BarConfig::name);
+    expect(placementBar != config.config().bars.end() && placementBar->widgetPlacements == placements,
+           "same-type widget placements retain distinct stable IDs");
+    expect(config.setOverride({"bar", "default", "start"},
+                              std::vector<std::string>{"@widget:meter-b", "@widget:meter-a"}),
+           "placement tokens reorder independently of widget type");
+    const auto reorderedBar = std::ranges::find(config.config().bars, std::string("default"), &BarConfig::name);
+    expect(reorderedBar != config.config().bars.end()
+            && reorderedBar->startWidgets == std::vector<std::string>{"@widget:meter-b", "@widget:meter-a"}
+            && reorderedBar->widgetPlacements == placements,
+           "reorder preserves placement identity and material target ownership");
+    auto duplicatePlacements = placements;
+    duplicatePlacements.back().id = duplicatePlacements.front().id;
+    expect(!config.setOverride(placementPath, duplicatePlacements),
+           "duplicate stable widget placement IDs are rejected atomically");
+
+    auto duplicate = sections;
+    duplicate.back().id = duplicate.front().id;
+    expect(!config.setOverride(sectionPath, duplicate), "duplicate section ids are rejected");
+    auto emptyId = sections;
+    emptyId.front().id.clear();
+    expect(!config.setOverride(sectionPath, emptyId), "empty section ids are rejected");
+    const auto afterRejected = std::ranges::find(config.config().bars, std::string("default"), &BarConfig::name);
+    expect(afterRejected != config.config().bars.end() && afterRejected->sections == sections
+            && config.hasOverride(sectionPath),
+           "invalid section batches leave the prior ordered override intact");
+
+    const std::vector<std::string> monitorSectionPath{"bar", "default", "monitor", "DP-1", "section"};
+    expect(config.setOverride(monitorSectionPath, std::vector<BarSectionConfig>{}),
+           "explicit empty monitor section replacement writes");
+    expect(config.hasOverride(monitorSectionPath),
+           "explicit empty monitor section replacement is distinct from inheritance");
   }
 
   std::filesystem::remove_all(root);

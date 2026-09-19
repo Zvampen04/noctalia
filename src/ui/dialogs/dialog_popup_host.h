@@ -4,11 +4,15 @@
 #include "render/scene/input_dispatcher.h"
 #include "ui/dialogs/layer_popup_host.h"
 #include "ui/popup_chrome.h"
+#include "ui/popup_transition.h"
+#include "ui/signal.h"
+#include "ui/material_target_catalog.h"
 #include "wayland/popup_surface.h"
 
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <string>
 
 class Box;
 class ConfigService;
@@ -82,7 +86,7 @@ protected:
   // state it needs (e.g. FileDialog constructs `m_dialog` first so it can
   // query `preferredWidth/Height`). Returns true on success; on failure,
   // automatically calls `destroyPopup()`.
-  [[nodiscard]] bool openPopup(std::uint32_t width, std::uint32_t height);
+  [[nodiscard]] bool openPopup(std::uint32_t width, std::uint32_t height, wl_surface* explicitParent = nullptr);
 
   // Build the PopupSurface as a child of an xdg parent. Uses the same scene/
   // input/prepareFrame plumbing as openPopup() but bypasses LayerPopupHostRegistry
@@ -94,8 +98,9 @@ protected:
   void destroyPopup();
 
   // Subclass `accept(T)` calls this before invoking its facade's
-  // `complete(T)`. Wraps `destroyPopup()` so the sheet teardown happens
-  // before the facade is notified.
+  // `complete(T)`. Logical sheet/input teardown still happens before the
+  // facade is notified; when the host survives that callback, the inert paint
+  // tree may fade before the PopupSurface is released.
   void closeAfterAccept();
 
   // Tear the popup down and notify the facade via `cancelToFacade()`.
@@ -182,16 +187,21 @@ protected:
   std::unique_ptr<PopupSurface> m_surface;
   popup_chrome::Geometry m_chrome;
   AnimationManager m_animations;
+  popup_transition::Transition m_transition;
   std::unique_ptr<Node> m_sceneRoot;
+  Node* m_transitionRoot = nullptr;
   Box* m_bgNode = nullptr;
   RectNode* m_panelShadow = nullptr;
   Node* m_contentNode = nullptr;
   InputDispatcher m_inputDispatcher;
   bool m_attachedToHost = false;
   wl_surface* m_parentSurface = nullptr;
+  std::string m_materialSurface;
   bool m_pointerInside = false;
   bool m_openInProgress = false;
   bool m_closeRequestedDuringOpen = false;
+  bool m_sheetClosed = true;
+  bool m_grabbingPopup = false;
 
 private:
   // Tear down any popup parented to this one (e.g. a glyph/color/file picker
@@ -202,6 +212,17 @@ private:
   void closeChildPopups();
 
   void prepareFrame(bool needsUpdate, bool needsLayout);
+  void refreshChrome();
+  void deferCancel();
+  void cancelImmediately();
+  [[nodiscard]] bool beginVisualClose();
+  std::uint64_t m_popupGeneration = 0;
+  PopupSurfaceConfig m_basePopupConfig;
+  bool m_styleDirty = false;
+  ShellConfig::ShadowConfig m_liveShadow;
+  std::shared_ptr<bool> m_alive = std::make_shared<bool>(true);
+  Signal<>::ScopedConnection m_styleConnection;
+  Style::MaterialTargetRegistration m_materialRegistration;
   void buildScene(std::uint32_t width, std::uint32_t height);
   void layoutScene(float width, float height);
   [[nodiscard]] bool mapPointerEvent(const PointerEvent& event, float& localX, float& localY) const noexcept;

@@ -131,6 +131,23 @@ int main() {
   checkDefinition("clipboard", clipboardWidgetDefinition);
   checkDefinition("clock", clockWidgetDefinition);
   checkDefinition("control-center", controlCenterWidgetDefinition);
+  {
+    WidgetConfig config;
+    config.type = "control-center";
+    config.settings["icon_source"] = std::string("system_updates");
+    config.settings["ring"] = true;
+    config.settings["ring_source"] = std::string("ram");
+    const auto options = controlCenterWidgetDefinition().resolve(&config, "control-center");
+    if (options.iconSource != ControlCenterWidget::IconSource::SystemUpdates
+        || !options.ring || options.ringSource != ControlCenterWidget::RingSource::Ram) {
+      fail("control-center", "system-update icon and RAM ring settings did not resolve");
+    }
+    if (!ControlCenterWidget::consumesSystemUpdates(options.iconSource, true)
+        || ControlCenterWidget::consumesSystemUpdates(options.iconSource, false)
+        || ControlCenterWidget::consumesSystemUpdates(ControlCenterWidget::IconSource::Static, true)) {
+      fail("control-center", "system-update consumer did not follow the live glyph");
+    }
+  }
   checkDefinition("custom_button", customButtonWidgetDefinition);
   checkDefinition("keyboard_layout", keyboardLayoutWidgetDefinition);
   checkDefinition("launcher", launcherWidgetDefinition);

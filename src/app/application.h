@@ -36,6 +36,8 @@
 #include "security/storage_key_provider.h"
 #include "shell/backdrop/backdrop.h"
 #include "shell/bar/bar.h"
+#include "shell/activity/transient_activity.h"
+#include "shell/activity/transient_activity_popup.h"
 #include "shell/desktop/desktop_widgets_controller.h"
 #include "shell/dock/dock.h"
 #include "shell/hot_corners/hot_corners.h"
@@ -96,6 +98,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <set>
 #include <vector>
 
 namespace sdbus {
@@ -310,9 +313,15 @@ private:
   GlSharedContext m_glShared;
   SharedTextureCache m_sharedTextureCache;
   RenderContext m_renderContext;
+  // Config membership owns only asset-cache diagnostics. Renderer lifetime is
+  // reconciled independently from actual per-surface scene consumers.
+  std::set<std::string, std::less<>> m_configuredCustomEffectAssets;
+  bool m_customEffectStatusCallbackInstalled = false;
   ThumbnailService m_thumbnailService;
   WallpaperScanner m_wallpaperScanner;
   Bar m_bar;
+  TransientActivityPopup m_transientActivityPopup;
+  TransientActivityService m_transientActivity;
   Dock m_dock;
   DesktopWidgetsController m_desktopWidgetsController;
   LockScreen m_lockScreen;

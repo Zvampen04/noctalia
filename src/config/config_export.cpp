@@ -149,6 +149,8 @@ namespace config_export {
         resolved.layer = *ovr.layer;
       if (ovr.thickness)
         resolved.thickness = *ovr.thickness;
+      if (ovr.background)
+        resolved.background = *ovr.background;
       if (ovr.backgroundOpacity)
         resolved.backgroundOpacity = *ovr.backgroundOpacity;
       if (ovr.border)
@@ -170,6 +172,25 @@ namespace config_export {
         resolved.radiusBottomLeft = *ovr.radiusBottomLeft;
       if (ovr.radiusBottomRight)
         resolved.radiusBottomRight = *ovr.radiusBottomRight;
+      if (ovr.sectionBackgrounds)
+        resolved.sectionBackgrounds = *ovr.sectionBackgrounds;
+      if (ovr.islandHoverGrow) resolved.islandHoverGrow = *ovr.islandHoverGrow;
+      if (ovr.islandHoverOffset) resolved.islandHoverOffset = *ovr.islandHoverOffset;
+      if (ovr.islandOutward) resolved.islandOutward = *ovr.islandOutward;
+      if (ovr.islandPanelOffset) resolved.islandPanelOffset = *ovr.islandPanelOffset;
+      if (ovr.maxLength) resolved.maxLength = *ovr.maxLength;
+      if (ovr.centeredSections)
+        resolved.centeredSections = *ovr.centeredSections;
+      if (ovr.centerAlignment)
+        resolved.centerAlignment = *ovr.centerAlignment;
+      if (ovr.edgeClusterPolicy)
+        resolved.edgeClusterPolicy = *ovr.edgeClusterPolicy;
+      if (ovr.materialMode)
+        resolved.materialMode = *ovr.materialMode;
+      if (ovr.islandMorph)
+        resolved.islandMorph = *ovr.islandMorph;
+      if (ovr.islandMorphGap)
+        resolved.islandMorphGap = *ovr.islandMorphGap;
       if (ovr.concaveEdgeCorners)
         resolved.concaveEdgeCorners = *ovr.concaveEdgeCorners;
       if (ovr.marginEnds)
@@ -223,6 +244,10 @@ namespace config_export {
       if (ovr.widgetCapsuleRadius.has_value()) {
         resolved.widgetCapsuleRadius = ovr.widgetCapsuleRadius;
       }
+      if (ovr.widgetCapsuleContour)
+        resolved.widgetCapsuleContour = *ovr.widgetCapsuleContour;
+      if (ovr.widgetCapsuleContourDepth)
+        resolved.widgetCapsuleContourDepth = static_cast<float>(*ovr.widgetCapsuleContourDepth);
       if (ovr.widgetCapsuleOpacity)
         resolved.widgetCapsuleOpacity = static_cast<float>(*ovr.widgetCapsuleOpacity);
       if (ovr.hoverHighlight)
@@ -272,7 +297,9 @@ namespace config_export {
       gridTable.insert_or_assign("major_interval", static_cast<std::int64_t>(grid.majorInterval));
       table.insert_or_assign("grid", std::move(gridTable));
 
-      if (!widgets.empty()) {
+      // Empty collections are explicit replacement values. Omitting these
+      // fields would retain widgets from a lower config layer on re-import.
+      {
         toml::array order;
         toml::table widgetTable;
         for (const auto& widget : widgets) {
@@ -290,12 +317,8 @@ namespace config_export {
           item.insert_or_assign("box_width", static_cast<double>(widget.boxWidth));
           item.insert_or_assign("box_height", static_cast<double>(widget.boxHeight));
           item.insert_or_assign("rotation", static_cast<double>(widget.rotationRad));
-          if (widget.flipX) {
-            item.insert_or_assign("flip_x", true);
-          }
-          if (widget.flipY) {
-            item.insert_or_assign("flip_y", true);
-          }
+          item.insert_or_assign("flip_x", widget.flipX);
+          item.insert_or_assign("flip_y", widget.flipY);
           item.insert_or_assign("enabled", widget.enabled);
 
           toml::table settings;

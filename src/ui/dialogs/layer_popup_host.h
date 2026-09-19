@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <functional>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -20,6 +21,7 @@ struct LayerPopupParentContext {
   std::uint32_t width = 0;
   std::uint32_t height = 0;
   bool usedFallback = false;
+  std::string materialSurface{};
 
   [[nodiscard]] std::pair<std::int32_t, std::int32_t> centeringOffset(WaylandConnection& wayland) const;
 };

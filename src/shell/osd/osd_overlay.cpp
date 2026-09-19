@@ -1,5 +1,7 @@
 #include "shell/osd/osd_overlay.h"
 
+#include "render/animation/motion_service.h"
+
 #include "config/config_service.h"
 #include "config/config_types.h"
 #include "core/deferred_call.h"
@@ -11,6 +13,8 @@
 #include "render/render_context.h"
 #include "render/scene/node.h"
 #include "shell/surface/edge_inset.h"
+#include "shell/surface/shadow.h"
+#include "shell/activity/transient_activity.h"
 #include "ui/builders.h"
 #include "ui/palette.h"
 #include "ui/style.h"
@@ -21,10 +25,20 @@
 #include <cmath>
 
 namespace {
+  float materialPadX() {
+    const auto b=shell::surface_shadow::bleed(false, ShellConfig::ShadowConfig{}, "osd", "osd");
+    return static_cast<float>(std::max(b.left,b.right));
+  }
+  float materialPadY() {
+    const auto b=shell::surface_shadow::bleed(false, ShellConfig::ShadowConfig{}, "osd", "osd");
+    return static_cast<float>(std::max(b.up,b.down));
+  }
+
 
   constexpr Logger kLog("osd");
 
-  constexpr int kHideDelayMs = Style::animSlow * 3 + Style::animFast * 2;
+  // Readability timeout is functional timing, independent of visual motion.
+  constexpr float kHideDelayMs = 1400.0F;
 
   enum class OsdRevealDir { FromLeft, FromRight, FromTop, FromBottom };
 
@@ -133,7 +147,7 @@ namespace {
   }
 
   [[nodiscard]] std::uint32_t osdSurfaceHeight(float s, const std::string& orientation, bool showProgress) {
-    const float h = cardHeight(s, orientation, showProgress) + Style::spaceLg * s;
+    const float h = cardHeight(s, orientation, showProgress) + Style::spaceLg * s + 2.0F * materialPadY();
     return static_cast<std::uint32_t>(std::max(1, static_cast<int>(std::ceil(h))));
   }
 
@@ -171,12 +185,12 @@ namespace {
 
   float cardBaseYForPosition(const std::string& position, float surfaceHeight, float cardH) {
     if (isBottomPosition(position)) {
-      return std::max(0.0F, surfaceHeight - cardH);
+      return std::max(materialPadY(), surfaceHeight - cardH - materialPadY());
     }
     if (isCenterPosition(position)) {
       return (surfaceHeight - cardH) * 0.5F;
     }
-    return 0.0F;
+    return materialPadY();
   }
 
   OsdRevealDir revealDirForPosition(const std::string& position) {
@@ -268,6 +282,69 @@ void OsdOverlay::show(const OsdContent& content) {
     return;
   }
 
+  std::optional<TransientActivityKind> activityKind;
+  std::string sourceKey;
+  switch (content.kind) {
+  case OsdKind::Volume:
+    activityKind = TransientActivityKind::VolumeOutput;
+    sourceKey = "volume-output";
+    break;
+  case OsdKind::Microphone:
+    activityKind = TransientActivityKind::VolumeInput;
+    sourceKey = "volume-input";
+    break;
+  case OsdKind::Brightness:
+    activityKind = TransientActivityKind::Brightness;
+    sourceKey = "brightness";
+    break;
+  default: break;
+  }
+  if (activityKind && m_activityService != nullptr && m_config != nullptr) {
+    const std::string openContext = content.kind == OsdKind::Brightness ? "brightness" : "audio";
+    TransientActivityViewModel model{
+        .sourceKey = std::move(sourceKey),
+        .kind = *activityKind,
+        .priority = kTransientActivityPriorityDevice,
+        .icon = content.icon,
+        .value = content.value,
+        .progress = content.progress,
+        .showProgress = content.showProgress,
+        .overLimit = content.overLimit,
+        .inactive = content.inactive,
+        .openContext = openContext,
+        .setProgress = content.setProgress,
+        .activate = m_openContext
+            ? std::function<void()>{[open = m_openContext, openContext]() { open(openContext); }}
+            : std::function<void()>{},
+    };
+    if (m_activityService->publish(
+            std::move(model), resolveTransientActivityRoute(m_config->config().osd.activity, *activityKind))) {
+      destroySurfaces();
+      return;
+    }
+  }
+
+  showStandalone(content);
+}
+
+void OsdOverlay::showActivityFallback(const TransientActivityViewModel& activity) {
+  OsdKind kind = OsdKind::Volume;
+  if (activity.kind == TransientActivityKind::VolumeInput) kind = OsdKind::Microphone;
+  if (activity.kind == TransientActivityKind::Brightness) kind = OsdKind::Brightness;
+  showStandalone({
+      .kind = kind,
+      .icon = activity.icon,
+      .value = activity.value,
+      .progress = activity.progress,
+      .showProgress = activity.showProgress,
+      .overLimit = activity.overLimit,
+      .inactive = activity.inactive,
+  });
+}
+
+void OsdOverlay::showStandalone(const OsdContent& content) {
+  if (m_wayland == nullptr || m_renderContext == nullptr || !isEnabled()) return;
+
   m_content = content;
   ensureSurfaces();
   for (auto& inst : m_instances) {
@@ -287,9 +364,10 @@ bool OsdOverlay::isVisible() const {
 
 OsdOverlay::SurfaceMargins OsdOverlay::surfaceMarginsForPosition(const std::string& position) const {
   const int marginH = (m_config != nullptr) ? std::max(0, m_config->config().osd.offsetX) : 0;
-  const int marginV = (m_config != nullptr) ? std::max(0, m_config->config().osd.offsetY) : 0;
+  const int marginV = ((m_config != nullptr) ? std::max(0, m_config->config().osd.offsetY) : 0) - static_cast<int>(materialPadY());
   const float layoutScale = osdUiScale(m_config);
-  const std::int32_t sideMargin = shell::surface_edge_inset::resolve(marginH, Style::spaceMd * layoutScale).layerMargin;
+  const std::int32_t sideMargin = marginH - static_cast<std::int32_t>(std::max(materialPadX(),
+      shell::surface_edge_inset::resolve(marginH, Style::spaceMd * layoutScale).innerPadding));
 
   SurfaceMargins margins{
       .top = marginV,
@@ -397,13 +475,10 @@ void OsdOverlay::ensureSurfaces() {
     destroySurfaces();
   }
 
-  if (!m_instances.empty() && std::abs(Style::cornerRadiusScale() - m_lastCornerRadiusScale) > 1.0e-4F) {
-    destroySurfaces();
-  }
 
   const int marginH = (m_config != nullptr) ? std::max(0, m_config->config().osd.offsetX) : 0;
   const float horizontalInnerPad =
-      shell::surface_edge_inset::resolve(marginH, Style::spaceMd * layoutScale).innerPadding;
+      std::max(materialPadX(), shell::surface_edge_inset::resolve(marginH, Style::spaceMd * layoutScale).innerPadding);
   const auto surfaceWidth = osdSurfaceWidth(layoutScale, orientation, horizontalInnerPad);
   const auto surfaceHeight = osdSurfaceHeight(layoutScale, orientation, showProgress);
   const SurfaceMargins margins = surfaceMarginsForPosition(position);
@@ -559,12 +634,28 @@ void OsdOverlay::prepareFrame(Instance& inst, bool needsUpdate, bool needsLayout
       || static_cast<std::uint32_t>(std::round(inst.sceneRoot->height())) != height;
   if (needsSceneBuild) {
     UiPhaseScope layoutPhase(UiPhase::Layout);
-    buildScene(inst, width, height);
+    if (inst.sceneRoot != nullptr) {
+      const float s=inst.uiLayoutScale;
+      const bool horizontal=revealDirForPosition(m_lastPosition)==OsdRevealDir::FromLeft
+          || revealDirForPosition(m_lastPosition)==OsdRevealDir::FromRight;
+      const float reveal=inst.background==nullptr ? 1.0F : horizontal
+          ? inst.background->width()/cardWidth(s,m_lastOrientation)
+          : inst.background->height()/cardHeight(s,m_lastOrientation,m_lastShowProgress);
+      inst.sceneRoot->setFrameSize(static_cast<float>(width),static_cast<float>(height));
+      applyReveal(inst,reveal);
+    } else buildScene(inst, width, height);
   }
 
   if ((needsUpdate || needsLayout || needsSceneBuild) && inst.sceneRoot != nullptr) {
     UiPhaseScope layoutPhase(UiPhase::Layout);
     updateInstanceContent(inst);
+    if (inst.background) {
+      const float s=inst.uiLayoutScale;
+      const auto direction=revealDirForPosition(m_lastPosition);
+      const bool horizontal=direction==OsdRevealDir::FromLeft || direction==OsdRevealDir::FromRight;
+      applyReveal(inst,horizontal ? inst.background->width()/cardWidth(s,m_lastOrientation)
+          : inst.background->height()/cardHeight(s,m_lastOrientation,m_lastShowProgress));
+    }
   }
 
   if (inst.sceneRoot != nullptr && inst.background != nullptr) {
@@ -608,6 +699,7 @@ void OsdOverlay::buildScene(Instance& inst, std::uint32_t width, std::uint32_t h
   const float gap = innerGap(s);
 
   inst.sceneRoot = ui::node({});
+  inst.sceneRoot->setMaterialSurface("osd");
   inst.sceneRoot->setSize(w, h);
   inst.sceneRoot->setOpacity(1.0F);
   inst.surface->setSceneRoot(inst.sceneRoot.get());
@@ -624,6 +716,7 @@ void OsdOverlay::buildScene(Instance& inst, std::uint32_t width, std::uint32_t h
           .width = cw,
           .height = ch,
           .configure = [cardX, cardY, cw, ch, s, border, backgroundOpacity](Box& box) {
+            box.setMaterialIdentity("surface", "osd");
             box.setCardStyle();
             box.setFill(colorSpecFromRole(ColorRole::Surface, backgroundOpacity));
             box.setBorder(colorSpecFromRole(ColorRole::Outline), border);
@@ -775,7 +868,7 @@ void OsdOverlay::updateBlurRegion(Instance& inst) const {
   const int rw = std::max(1, static_cast<int>(std::ceil(inst.background->width())));
   const int rh = std::max(1, static_cast<int>(std::ceil(inst.background->height())));
   const float radius = osdCardRadius(inst.background->width(), inst.background->height(), inst.uiLayoutScale);
-  inst.surface->setBlurRegion(Surface::tessellateRoundedRect(rx, ry, rw, rh, radius));
+  inst.surface->setBlurRegion(Surface::tessellateRoundedRect(rx, ry, rw, rh, radius, 1, inst.background->cornerPower()));
 }
 
 void OsdOverlay::applyReveal(Instance& inst, float reveal) {

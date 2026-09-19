@@ -17,7 +17,9 @@ namespace {
 } // namespace
 
 SelectDropdownPopup::SelectDropdownPopup(WaylandConnection& wayland, RenderContext& renderContext)
-    : m_popup(wayland, renderContext) {}
+    : m_popup(wayland, renderContext) {
+  m_popup.setMaterialClassTarget("popup.select-dropdown");
+}
 
 SelectDropdownPopup::~SelectDropdownPopup() = default;
 
@@ -107,6 +109,7 @@ void SelectDropdownPopup::openSelectDropdown(const DropdownRequest& request, Dro
                   .layerSurface = m_parentLayerSurface,
                   .xdgSurface = m_parentXdgSurface,
                   .output = m_parentOutput,
+                  .materialSurface = request.materialSurface,
               },
           .pointerParentSurface = m_parentWlSurface,
       }

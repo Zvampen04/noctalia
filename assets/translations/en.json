@@ -1,4 +1,23 @@
 {
+  "portal": {
+    "share": {
+      "title": "Choose what to share",
+      "accept": "Share",
+      "display": "Entire display: ",
+      "window": "Window: ",
+      "restore": "Allow this selection to be restored",
+      "region": "Select region…",
+      "display-unavailable": "The selected display is no longer available",
+      "region-one-display": "Select a region contained within one display"
+    },
+    "app": {
+      "title": "Open with"
+    },
+    "file": {
+      "replace": "Replace file",
+      "loading": "Loading…"
+    }
+  },
   "auth": {
     "fingerprint": {
       "disconnected": "Fingerprint reader disconnected",
@@ -28,7 +47,6 @@
   },
   "bar": {
     "annotate": {
-      "capture-new-region": "Capture new region (discards the current edit)",
       "close": "Close without delivering (Esc)",
       "color-black": "Black",
       "color-blue": "Blue",
@@ -39,10 +57,7 @@
       "color-white": "White",
       "color-yellow": "Yellow",
       "copy": "Copy the annotated image (Ctrl+C)",
-      "cursor": "Show captured pointer (P)",
-      "cursor-capture-failed": "Pointer toggle unavailable: the compositor could not provide a separate cursor image",
-      "cursor-live": "Freeze the screen first to change the captured pointer (F)",
-      "cursor-not-captured": "Pointer toggle unavailable: this compositor does not support separate cursor capture",
+      "cursor": "Show the pointer captured with the screen (p)",
       "done": "Apply the screenshot settings (Enter)",
       "fill-off": "Shape fill: off",
       "fill-on": "Shape fill: on",
@@ -104,7 +119,6 @@
       "network": {
         "active": "Active",
         "band": "Band",
-        "cellular": "Cellular",
         "connected": "Connected",
         "connecting": "Connecting",
         "download": "Download",
@@ -118,10 +132,8 @@
         "not-connected": "Not connected",
         "off": "Off",
         "on": "On",
-        "operator": "Operator",
         "scanning": "Scanning",
         "signal": "Signal",
-        "technology": "Technology",
         "upload": "Upload",
         "vpn": "VPN",
         "wan-ip": "WAN IP",
@@ -310,6 +322,13 @@
         "fetching": "Fetching forecast…"
       }
     },
+    "todo": {
+      "title": "Tasks",
+      "empty": "No tasks",
+      "add": "Add task",
+      "add-placeholder": "New task",
+      "save-error": "Could not save tasks"
+    },
     "media": {
       "active-player": "Active player",
       "nothing-playing": "Nothing Playing",
@@ -317,39 +336,15 @@
       "start-playback": "Start playback in an MPRIS app"
     },
     "network": {
-      "anonymous-identity": "Anonymous identity (optional)",
       "available": "Available",
-      "ca-certificate": "CA certificate path (optional)",
-      "cellular": "Cellular",
-      "cellular-connected": "Connected",
-      "cellular-connecting": "Connecting…",
-      "cellular-connection": "Cellular connection",
-      "cellular-enabling": "Turning on…",
-      "cellular-failed": "Failed",
-      "cellular-locked": "SIM locked",
-      "cellular-no-service": "No service",
-      "cellular-off": "Off",
-      "cellular-registered": "Registered",
-      "cellular-searching": "Searching…",
       "connect": "Connect",
       "current-connection": "Current Connection",
-      "domain-suffix-match": "Server domain suffix",
-      "eap-method": "EAP method",
-      "enterprise-prompt-for": "Sign in to {ssid}",
-      "error-ca-not-absolute": "The certificate path must be absolute, starting with /.",
-      "error-certificate-required": "This network requires certificate-based authentication (EAP-TLS), which is not supported yet.",
-      "error-enterprise-unsupported": "The active network backend cannot configure 802.1X networks.",
-      "error-missing-identity": "Enter the identity your organization issued you.",
-      "error-missing-password": "Enter your password.",
-      "error-unsupported-phase2": "PEAP requires MSCHAPv2 inner authentication.",
       "external-ip": "WAN {ip}",
-      "identity": "Identity",
       "no-networks": "No networks in range",
       "not-connected": "Not connected",
       "password": "Password",
       "password-prompt": "Enter password",
       "password-prompt-for": "Enter password for {ssid}",
-      "phase2-auth": "Inner authentication",
       "saved": "Saved",
       "unavailable-detail": "Install and enable NetworkManager, wpa_supplicant, or iwd to manage networks from here.",
       "unavailable-title": "Network service unavailable",
@@ -443,7 +438,9 @@
       "power-profile": "Power",
       "screen-time": "Screen Time",
       "session": "Session",
+      "settings": "Settings",
       "system": "System",
+      "system-updates": "System updates",
       "wallpaper": "Wallpaper",
       "weather": "Weather",
       "wifi": "Wi-Fi"
@@ -532,7 +529,60 @@
     }
   },
   "desktop-widgets": {
+    "context": {
+      "show-widget": "Show {name}",
+      "edit": "Edit desktop widgets…",
+      "move-resize": "Move or resize…",
+      "hide-all": "Hide native desktop widgets",
+      "show-all": "Show native desktop widgets",
+      "apps-loading": "Loading application widgets…",
+      "apps-unavailable": "Application widgets unavailable"
+    },
     "editor": {
+      "geometry": {
+        "title": "Position and size",
+        "hint": "Position is measured from the top-left before rotation. Arrow keys move selected widgets by 1 px; Shift + Arrow moves them by 10 px when no control has focus.",
+        "unavailable": "Show this widget on a connected display before editing its position and size."
+      },
+      "external": {
+        "show": "Show widget",
+        "output": "Output",
+        "order": "Stacking order (0 is on top)",
+        "default-output": "App default output",
+        "disconnected-output": "{name} (disconnected)",
+        "x": "X (px)",
+        "y": "Y (px)",
+        "width": "Width (px)",
+        "height": "Height (px)",
+        "default-size": "Use app’s default size",
+        "default-size-hint": "Use the app’s default size. Enter a value to set a custom size.",
+        "resize-hint": "Resizing scales the widget and its contents.",
+        "live-resize-unavailable": "Live resizing is unavailable. You can still edit the saved size.",
+        "invalid-reported-size": "The app reported an invalid size. Use its default size or enter a valid size.",
+        "choose-connected-output": "Choose a connected display to move or resize this widget.",
+        "missing-app-size": "The app has not provided a size. Enter a custom size or keep its default.",
+        "pending-apply": "Wait for the current Apply or Cancel to finish",
+        "errors": {
+          "invalid-appearance": "Invalid widget appearance",
+          "visibility-type": "Widget visibility must be true or false",
+          "output-type": "Choose a display for the widget",
+          "output-name": "Invalid display name",
+          "output-disconnected": "The selected display is no longer connected",
+          "geometry-fields": "Position and size need X, Y, width and height",
+          "geometry-numbers": "Position and size must contain finite numbers",
+          "geometry-range": "Position or size exceeds the supported range",
+          "order-type": "Stacking order must be a whole number",
+          "order-range": "Stacking order must be between 0 and 1000000",
+          "unsupported-property": "This widget property cannot be changed here"
+        }
+      },
+      "templates": {
+        "rounded-spectrum": "Rounded spectrum"
+      },
+      "errors": {
+        "conflict": "Widget settings changed elsewhere. Cancel and reopen the editor to use the latest layout.",
+        "write": "The layout could not be applied. Your edits are still here; retry or cancel."
+      },
       "actions": {
         "add": "Add",
         "clone": "Duplicate (Ctrl+C, Ctrl+V to copy/paste)",
@@ -610,6 +660,7 @@
         "primary-color": "Primary Color",
         "reset-defaults": "Reset to Defaults",
         "reversed": "Reversed",
+        "respect-global-motion": "Follow Global Motion",
         "ring-opacity": "Ring Opacity",
         "rotation-speed": "Rotation Speed",
         "scroll-step": "Scroll Step",
@@ -663,7 +714,8 @@
         "visualization-mode-wave": "Wave",
         "visualization-mode-wave-rings": "Wave + Rings",
         "wave-thickness": "Wave Thickness",
-        "widget-section": "Widget"
+        "widget-section": "Widget",
+        "behind-wallpaper-foreground": "Behind wallpaper foreground"
       },
       "state": {
         "grid": "Grid"
@@ -672,6 +724,8 @@
       "title-lockscreen": "Lockscreen Widgets",
       "types": {
         "audio-visualizer": "Audio Visualizer",
+        "battery": "Battery",
+        "brightness": "Brightness",
         "button": "Button",
         "calendar": "Calendar",
         "clock": "Clock",
@@ -681,6 +735,7 @@
         "media-player": "Media Player",
         "sticker": "Sticker",
         "system-monitor": "System Monitor",
+        "todo": "Tasks",
         "volume": "Volume",
         "weather": "Weather"
       }
@@ -1089,6 +1144,10 @@
           "accordion-description": "Show only the first widget; hovering the capsule reveals the rest",
           "accordion-direction": "Reveal direction",
           "accordion-direction-description": "Side of the first widget where the hidden widgets unfold",
+          "contour": "Contour",
+          "contour-description": "Rounded or diagonal powerline edges for this capsule group",
+          "contour-depth": "Powerline depth",
+          "contour-depth-description": "Depth of each diagonal edge",
           "action": "Group",
           "border": "Border",
           "border-description": "Capsule outline color role; leave on Default for no outline",
@@ -1324,9 +1383,7 @@
         "providers": "Providers",
         "screen-corners": "Screen Corners",
         "screen-time": "Screen Time",
-        "screenshot-annotation": "Annotation",
-        "screenshot-capture": "Capture",
-        "screenshot-output": "Output",
+        "screenshot": "Screenshot",
         "security": "Security",
         "session-panel": "Session Panel",
         "shape": "Shape",
@@ -1339,8 +1396,37 @@
         "weather": "Weather",
         "widget-list": "Widget List",
         "widgets": "Widgets",
-        "window-switcher": "Window Switcher"
+        "window-switcher": "Window Switcher",
+        "controls-button": "Buttons",
+        "controls-toggle": "Switches",
+        "controls-checkbox": "Checkboxes",
+        "controls-card": "Cards",
+        "controls-segmented": "Segmented controls",
+        "material-Lighting": "Material lighting",
+        "material-Plateau": "Raised and inset surfaces",
+        "material-Optical": "Glass optics",
+        "material-Illustration": "Illustrated surfaces",
+        "material-overrides": "Surface and control overrides",
+        "material-override-Lighting": "Custom lighting",
+        "material-override-Plateau": "Custom surface depth",
+        "material-override-Optical": "Custom glass optics",
+        "material-override-Illustration": "Custom illustration",
+        "design-geometry": "Geometry",
+        "design-motion": "Motion timing",
+        "design-contrast": "Contrast",
+        "design-spacing": "Spacing",
+        "design-typography": "Typography",
+        "design-settings": "Settings layout",
+        "caret": "Text cursor",
+        "settings": "Settings window",
+        "frame": "Desktop frame",
+        "terminal": "Terminals",
+        "activity": "Activity presentation",
+        "activity-volume": "Volume activity",
+        "activity-brightness": "Brightness activity",
+        "activity-notification": "Notification activity"
       },
+      "jump-to-section": "Section",
       "sections": {
         "accessibility": "Accessibility",
         "appearance": "Appearance",
@@ -1360,7 +1446,6 @@
         "plugins": "Plugins",
         "popups": "Popups",
         "power": "Power",
-        "screenshot": "Screenshot",
         "security": "Security",
         "services": "Services",
         "shell": "Shell",
@@ -1399,9 +1484,20 @@
       }
     },
     "options": {
+      "alignment": {
+        "start": "Start",
+        "center": "Middle",
+        "end": "End"
+      },
       "accordion-direction": {
         "end": "After first widget",
         "start": "Before first widget"
+      },
+      "capsule-contour": {
+        "rounded": "Rounded",
+        "powerline": "Powerline middle",
+        "powerline-start": "Powerline start",
+        "powerline-end": "Powerline end"
       },
       "bar": {
         "auto-hide": {
@@ -1434,6 +1530,23 @@
         "left": "Left",
         "right": "Right",
         "top": "Top"
+      },
+      "edge-cluster": {
+        "follow-center": "Next to center",
+        "equidistant": "Equidistant",
+        "edge": "At edges"
+      },
+      "material-mode": {
+        "inherit": "Inherit",
+        "solid": "Solid",
+        "glass": "Glass",
+        "transparent": "Transparent"
+      },
+      "section-layout-role": {
+        "free": "Free position",
+        "start": "Start lane",
+        "center": "Center lane",
+        "end": "End lane"
       },
       "font-weight": {
         "bold": "Bold",
@@ -1608,6 +1721,20 @@
       },
       "settings": {
         "empty": "No settings available."
+      },
+      "style-gallery": {
+        "badge-built-in": "Built in",
+        "badge-reference": "Reference",
+        "badge-saved": "Saved",
+        "built-in": "Built-in styles",
+        "choose": "Choose a style",
+        "motion": "motion",
+        "reference": "Reference replicas",
+        "reference-states": "Reference states ({count})",
+        "saved": "Saved styles",
+        "search": "Search styles",
+        "still": "still",
+        "unavailable": "Style gallery unavailable. Use the style search control."
       },
       "sources": {
         "add": "Add Source",
@@ -1823,6 +1950,14 @@
           "description": "Default corner radius for widget capsules, workspace pills, and taskbar workspace groups; leave blank for automatic pill shape, or set 0 for square corners",
           "label": "Capsule Radius"
         },
+        "capsule-contour": {
+          "description": "Shape used by widget capsule segments along the bar",
+          "label": "Capsule Contour"
+        },
+        "capsule-contour-depth": {
+          "description": "Depth of each diagonal powerline edge",
+          "label": "Powerline Depth"
+        },
         "capsule-thickness": {
           "description": "Capsule size across the bar as a fraction of the bar thickness (1.0 fills the bar)",
           "label": "Capsule Thickness"
@@ -1903,6 +2038,14 @@
         "panel-overlap": {
           "description": "Pixels an attached panel overlaps the bar edge to hide the seam (adjust if you see a line or gap)",
           "label": "Panel Overlap"
+        },
+        "island-morph": {
+          "description": "Let an attached panel expand its source island and move neighbouring islands without changing their gap",
+          "label": "Expand Source Island"
+        },
+        "island-morph-gap": {
+          "description": "Minimum gap kept between islands while an attached panel expands",
+          "label": "Expanded Island Gap"
         },
         "position": {
           "description": "Which screen edge the bar sits on"
@@ -1999,6 +2142,42 @@
           "button": "Toggle Editor",
           "description": "Add, move, and resize desktop widgets",
           "label": "Widget Editor"
+        },
+        "frame": {
+          "enabled": "Desktop frame",
+          "description": "A continuous material frame around the wallpaper. Reference dimensions of zero use logical pixels; set both dimensions to scale the frame with a reference layout.",
+          "left": "Left inset",
+          "top": "Top inset",
+          "right": "Right inset",
+          "bottom": "Bottom inset",
+          "radius": "Corner radius",
+          "reference_width": "Reference width",
+          "reference_height": "Reference height",
+          "left_shelf": "Left shelf",
+          "top_shelf": "Top shelf",
+          "right_shelf": "Right shelf",
+          "bottom_shelf": "Bottom shelf",
+          "shelf-description": "Join a shelf into this edge. Start and end are fractions of the output edge.",
+          "extra-shelf": "Additional shelf",
+          "extra-shelf-description": "Optional connected shelf slot. Choose an edge, then set its span and depth.",
+          "border-layer": "Additional border band",
+          "border-layer-description": "Optional colored band measured into the filled frame from the final aperture contour.",
+          "edge": "Edge",
+          "color": "Color",
+          "width": "Band width",
+          "offset": "Gap from aperture",
+          "start": "Start",
+          "end": "End",
+          "depth": "Depth",
+          "shoulder": "Join width",
+          "chamfered": "Angled frame corners",
+          "chamfer_top_left": "Top-left cut",
+          "chamfer_top_right": "Top-right cut",
+          "chamfer_bottom_right": "Bottom-right cut",
+          "chamfer_bottom_left": "Bottom-left cut",
+          "fill": "Frame surface color",
+          "border": "Frame outline color",
+          "border_width": "Frame outline width"
         }
       },
       "dock": {
@@ -2413,8 +2592,12 @@
           "label": "Control Center Tabs"
         },
         "control-center-width": {
-          "description": "Width of the Control Center panel in pixels (compact and no-sidebar modes scale down from this)",
+          "description": "Control Center width in logical pixels; compact and no-sidebar modes scale it unless Exact Width is enabled",
           "label": "Control Center Width"
+        },
+        "control-center-literal-width": {
+          "description": "Use the configured width as the final panel width for every sidebar mode",
+          "label": "Exact Width"
         },
         "floating-layer": {
           "description": "Use Top if input method candidate windows are hidden behind floating panels; Overlay keeps panels above fullscreen content",
@@ -3104,57 +3287,50 @@
           "label": "Reset Screen Time Data"
         },
         "screenshot-annotate": {
-          "description": "Open screenshots in the annotation editor before applying the output actions",
-          "label": "Edit Before Saving or Copying"
-        },
-        "screenshot-close-on-copy": {
-          "description": "Close after a successful copy from the editor, including when opened directly",
-          "label": "Close Editor After Copying"
+          "description": "Open the annotation editor on every screenshot; Done applies the save, clipboard, and pipe settings",
+          "label": "Annotate Before Delivering"
         },
         "screenshot-confirm-region": {
-          "description": "Wait for Enter or Space after selecting a region",
-          "label": "Confirm Region Selection"
+          "description": "After drawing a region, keep the overlay open until you confirm with Enter or Space",
+          "label": "Confirm Region"
         },
         "screenshot-copy-to-clipboard": {
-          "description": "Copy the screenshot as a PNG image, ready to paste into another app",
+          "description": "Place the captured PNG on the clipboard selection",
           "label": "Copy to Clipboard"
         },
         "screenshot-directory": {
-          "description": "Folder for saved PNG files, including the editor's Save action; leave empty to use the standard Pictures folder",
-          "label": "Save Folder",
+          "description": "Folder for saved PNG files; leave empty to use the standard XDG Pictures directory",
+          "label": "Output Directory",
           "placeholder": "XDG Pictures directory"
         },
         "screenshot-filename-pattern": {
-          "description": "Filename format for all saved screenshots, including the editor's Save action; uses strftime tokens without the .png extension",
+          "description": "strftime pattern without extension (.png is added); use %s for unix epoch",
           "label": "Filename Pattern"
         },
         "screenshot-freeze-screen": {
-          "description": "Keep the desktop still while choosing a region",
-          "label": "Freeze During Region Selection"
-        },
-        "screenshot-output": {
-          "description": "Actions applied after capture, or when you choose Done in the annotation editor."
+          "description": "Capture the desktop before region selection so moving content stays still",
+          "label": "Freeze Screen"
         },
         "screenshot-pipe-command": {
-          "description": "Shell command that receives the PNG image on standard input, for example an external editor or uploader",
-          "label": "Command",
+          "description": "Command run as /bin/sh -lc with the PNG on stdin; for annotators or uploaders (for example: swappy -f - or satty -f -)",
+          "label": "Pipe Command",
           "placeholder": "swappy -f -"
         },
         "screenshot-pipe-to-command": {
-          "description": "Run a shell command with the PNG image on standard input",
-          "label": "Run Command"
+          "description": "Send the captured PNG to a shell command on stdin",
+          "label": "Pipe to Command"
         },
         "screenshot-remember-last-region": {
-          "description": "Pre-select the previous region on the next capture, including after cancelling",
+          "description": "Pre-select the last region (including after cancel) on the next region screenshot",
           "label": "Remember Last Region"
         },
         "screenshot-save-to-file": {
-          "description": "Save the screenshot as a PNG file in the save folder",
+          "description": "Write screenshots as PNG files to the output directory",
           "label": "Save to File"
         },
         "screenshot-show-cursor": {
-          "description": "Show the mouse pointer initially; change it per capture when the compositor supports separate cursor capture",
-          "label": "Include Mouse Pointer"
+          "description": "Include the mouse pointer in screenshots",
+          "label": "Show Cursor"
         },
         "settings-window-translucent": {
           "description": "Make the Settings background translucent for compositor effects",
@@ -3290,6 +3466,12 @@
         "transitions": {
           "description": "Effects available when changing wallpaper (one is picked at random per change)",
           "label": "Transition Effects"
+        },
+        "foreground-masks": {
+          "label": "Wallpaper foreground masks",
+          "description": "Associate each wallpaper path with a grayscale mask of the same dimensions. White hides widgets behind the foreground; black leaves them visible. Style changes preserve these associations.",
+          "wallpaper-path": "Absolute wallpaper path",
+          "mask-path": "Absolute grayscale mask path"
         }
       }
     },
@@ -3457,16 +3639,16 @@
             "label": "Exit desktop widget editor"
           },
           "desktop-widgets-hide": {
-            "description": "Hide desktop widgets now (runtime only; does not change the saved setting)",
-            "label": "Hide desktop widgets"
+            "description": "Hide native desktop widgets now (runtime only; does not change the saved setting)",
+            "label": "Hide native desktop widgets"
           },
           "desktop-widgets-show": {
-            "description": "Show desktop widgets now (runtime only; does not change the saved setting)",
-            "label": "Show desktop widgets"
+            "description": "Show native desktop widgets now (runtime only; does not change the saved setting)",
+            "label": "Show native desktop widgets"
           },
           "desktop-widgets-toggle": {
-            "description": "Toggle desktop widgets visibility (runtime only; does not change the saved setting)",
-            "label": "Toggle desktop widgets"
+            "description": "Toggle native desktop widgets visibility (runtime only; does not change the saved setting)",
+            "label": "Toggle native desktop widgets"
           },
           "desktop-widgets-toggle-edit": {
             "description": "Toggle desktop widgets edit mode",
@@ -3676,6 +3858,10 @@
             "description": "Run a built-in session action",
             "label": "Session action"
           },
+          "image-swipe-open": {
+            "description": "Open or focus the native Image Swipe application, optionally at a folder",
+            "label": "Open Image Swipe"
+          },
           "settings-close": {
             "description": "Close the settings window",
             "label": "Close settings"
@@ -3843,6 +4029,7 @@
         "after": "After",
         "always": "Always",
         "auto": "Auto",
+        "battery": "Battery",
         "before": "Before",
         "both": "Both",
         "compact": "Compact",
@@ -3892,6 +4079,8 @@
         "shared": "Shared",
         "short": "Short",
         "swap-percent": "Swap %",
+        "static-icon": "Configured icon",
+        "system-updates": "System updates",
         "text": "Text",
         "text-only": "Text Only",
         "time": "Time",
@@ -3974,6 +4163,14 @@
           "label": "Capsule Radius",
           "taskbar-description": "Corner radius for the widget capsule, workspace disc indicators, and workspace group capsules; leave blank for automatic pill shape, or set 0 for square corners",
           "workspaces-description": "Corner radius for this widget capsule and workspace pills; leave blank for automatic pill shape, or set 0 for square corners"
+        },
+        "capsule-contour": {
+          "description": "Rounded or diagonal powerline edges for this widget capsule",
+          "label": "Capsule Contour"
+        },
+        "capsule-contour-depth": {
+          "description": "Depth of each diagonal powerline edge",
+          "label": "Powerline Depth"
         },
         "centered": {
           "description": "Center visualizer bars instead of aligning them to the edge",
@@ -4530,6 +4727,7 @@
       "filter-overridden": "Overridden",
       "legacy-config-warning": "Legacy setting: {issue}. Edit this source entry; Noctalia is applying the replacement only temporarily. Run noctalia config validate to list every required change.",
       "native-title": "Noctalia Settings",
+      "retry-application-appearance": "Retry application appearance",
       "no-results": "No settings found",
       "no-results-hint": "Try a different setting name or config key.",
       "offline-mode-notice": {

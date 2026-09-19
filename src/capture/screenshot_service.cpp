@@ -1247,12 +1247,7 @@ void ScreenshotService::ensureAnnotationOverlay() {
     options.annotate = false;
     const std::optional<std::filesystem::path> destPath =
         options.saveToFile ? std::optional(makeScreenshotPath(options, "annotated")) : std::nullopt;
-    const bool delivered = finishDelivery(std::move(image), options, destPath);
-    if (delivered
-        && action == capture::AnnotationExport::Copy
-        && m_configService.config().shell.screenshot.closeOnCopy) {
-      DeferredCall::callLater([this]() { m_annotationOverlay->cancel(); });
-    }
+    finishDelivery(std::move(image), options, destPath);
   });
 }
 

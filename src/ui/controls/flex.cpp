@@ -4,6 +4,7 @@
 #include "render/scene/rect_node.h"
 #include "ui/palette.h"
 #include "ui/style.h"
+#include "ui/control_settings_palette.h"
 
 #include <algorithm>
 #include <cmath>
@@ -117,6 +118,10 @@ namespace {
 
 Flex::Flex() {
   m_paletteConn = paletteChanged().connect([this] { applyPalette(); });
+  m_materialConn = Style::surfaceMaterialChanged().connect([this] {
+    if (m_cardScale) setCardStyle(*m_cardScale, m_cardOpacity, m_cardBorder);
+    else syncSurfaceMaterial();
+  });
 }
 
 void Flex::setSize(float width, float height) {
@@ -128,6 +133,7 @@ void Flex::setSize(float width, float height) {
   if (m_background != nullptr) {
     m_background->setPosition(0.0F, 0.0F);
     m_background->setFrameSize(width, height);
+    syncSurfaceMaterial();
   }
 }
 
@@ -140,6 +146,7 @@ void Flex::setFrameSize(float width, float height) {
   if (m_background != nullptr) {
     m_background->setPosition(0.0F, 0.0F);
     m_background->setFrameSize(width, height);
+    syncSurfaceMaterial();
   }
 }
 
@@ -203,6 +210,57 @@ void Flex::setPadding(float all) { setPadding(all, all, all, all); }
 
 void Flex::setPadding(float vertical, float horizontal) { setPadding(vertical, horizontal, vertical, horizontal); }
 
+void Flex::setMaterialBackdrop(MaterialBackdrop backdrop) {
+  ensureBackground();
+  auto style = m_background->style();
+  style.materialBackdrop = backdrop;
+  m_background->setStyle(style);
+  syncSurfaceMaterial();
+}
+
+void Flex::setMaterialIdentity(std::string_view role, std::string_view family, std::string_view surface) {
+  m_cardOwnsFamily = false;
+  if (m_materialSurfacePath.empty()
+      && m_materialRole == role && m_materialFamily == family && materialSurfaceName() == surface) return;
+  m_materialSurfacePath.clear();
+  m_materialRole = role;
+  m_materialFamily = family;
+  setMaterialSurface(surface);
+  syncSurfaceMaterial();
+}
+
+void Flex::setMaterialIdentityPath(
+    std::string_view role, std::string_view family, std::vector<std::string> surfaces) {
+  m_cardOwnsFamily = false;
+  if (m_materialRole == role && m_materialFamily == family && m_materialSurfacePath == surfaces) return;
+  m_materialRole = role;
+  m_materialFamily = family;
+  m_materialSurfacePath = std::move(surfaces);
+  setMaterialSurface(m_materialSurfacePath.empty() ? std::string_view{} : m_materialSurfacePath.back());
+  syncSurfaceMaterial();
+}
+
+void Flex::setSurfaceRelief(float relief) {
+  if (m_surfaceRelief == relief) return;
+  m_surfaceRelief = std::clamp(relief, -4.0F, 4.0F);
+  ensureBackground();
+  syncSurfaceMaterial();
+}
+
+void Flex::syncSurfaceMaterial() {
+  if (m_background == nullptr) return;
+  auto style = m_background->style();
+  style.relief = 0.0F;
+  style.fill = resolveColorSpec(m_fill);
+  if (m_materialSurfacePath.empty()) {
+    m_material.sync(*this, *m_background, style, m_surfaceRelief, m_materialRole, m_materialFamily);
+  } else {
+    m_material.syncPath(
+        *this, *m_background, style, m_surfaceRelief, m_materialRole, m_materialFamily, m_materialSurfacePath
+    );
+  }
+}
+
 void Flex::setFill(const ColorSpec& color) {
   m_fill = color;
   ensureBackground();
@@ -223,6 +281,7 @@ void Flex::setRadius(float radius) {
   auto style = m_background->style();
   style.radius = radius;
   m_background->setStyle(style);
+  syncSurfaceMaterial();
 }
 
 void Flex::setRadii(const Radii& radii) {
@@ -230,6 +289,7 @@ void Flex::setRadii(const Radii& radii) {
   auto style = m_background->style();
   style.radius = radii;
   m_background->setStyle(style);
+  syncSurfaceMaterial();
 }
 
 void Flex::setBorder(const ColorSpec& color, float width) {
@@ -238,6 +298,7 @@ void Flex::setBorder(const ColorSpec& color, float width) {
   auto style = m_background->style();
   style.borderWidth = width;
   m_background->setStyle(style);
+  syncSurfaceMaterial();
   applyPalette();
 }
 
@@ -249,6 +310,7 @@ void Flex::clearBorder() {
     auto style = m_background->style();
     style.borderWidth = 0.0F;
     m_background->setStyle(style);
+  syncSurfaceMaterial();
     applyPalette();
   }
 }
@@ -262,6 +324,7 @@ void Flex::applyPalette() {
   style.border = resolveColorSpec(m_border);
   style.fillMode = FillMode::Solid;
   m_background->setStyle(style);
+  syncSurfaceMaterial();
 }
 
 void Flex::setSoftness(float softness) {
@@ -269,11 +332,25 @@ void Flex::setSoftness(float softness) {
   auto style = m_background->style();
   style.softness = softness;
   m_background->setStyle(style);
+  syncSurfaceMaterial();
 }
 
-void Flex::setCardStyle(float scale, float fillOpacity, bool showBorder) {
+void Flex::setCardStyle(float scale, float fillOpacity, std::optional<bool> showBorder) {
+  m_cardScale = scale; m_cardOpacity = fillOpacity; m_cardBorder = showBorder;
+  const auto& controls = Style::controls();
+  if (controls.card_variant == Style::CardTreatment::Raised) {
+    if (m_materialFamily == "container") { m_materialFamily = "card"; m_cardOwnsFamily = true; }
+    setSurfaceRelief(controls.card_relief);
+    setFill(colorSpecFromRole(controlColorRole(controls.card_face_role), fillOpacity));
+    clearBorder();
+    setRadius(Style::scaledRadius(controls.card_radius, scale));
+    setPadding(Style::cardPadding * scale);
+    return;
+  }
+  if (m_cardOwnsFamily) { m_materialFamily = "container"; m_cardOwnsFamily = false; }
+  setSurfaceRelief(0.75F);
   setFill(colorSpecFromRole(ColorRole::SurfaceVariant, fillOpacity));
-  if (showBorder) {
+  if (showBorder.value_or(Style::cardBordersEnabled())) {
     setBorder(colorSpecFromRole(ColorRole::Outline), Style::borderWidth);
   } else {
     clearBorder();
@@ -383,6 +460,7 @@ void Flex::ensureBackground() {
       }
   );
   m_background = static_cast<RectNode*>(addChild(std::move(rect)));
+  m_background->setBypassParentPaintClip(true);
   m_background->setZIndex(-1);
   m_background->setParticipatesInLayout(false);
   m_background->setFrameSize(width(), height());
@@ -742,6 +820,7 @@ LayoutSize Flex::runLayout(Renderer& renderer, const LayoutConstraints& constrai
   if (m_background != nullptr) {
     m_background->setPosition(0.0F, 0.0F);
     m_background->setSize(width(), height());
+    syncSurfaceMaterial();
   }
 
   return LayoutSize{.width = width(), .height = height()};

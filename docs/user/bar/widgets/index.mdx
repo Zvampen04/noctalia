@@ -38,6 +38,45 @@ end = ["clock", "clock-seconds"]   # two clock widgets, different formats
 
 Configure click, scroll, and thumb-button bindings under [Widget Actions](/noctalia/bar/actions/). Configure shared capsule styling under [Bar → Widget Capsule](/noctalia/bar/#widget-capsule).
 
+Interactive widgets use the bar's module hover highlight unless they render item-level feedback: workspaces, taskbar, and tray highlight the item under the pointer instead. A widget may also show a tooltip when it has more detail to report. Set `interactive = false` to disable its hover feedback and tooltip and let pointer input pass through to its section. Middle-click opens that widget's settings unless the widget reserves middle-click for one of its own items. Explicit `[widget.<name>.actions]` bindings replace the defaults below.
+
+| Widget | Extra hover behavior | Default pointer actions |
+|--------|----------------------|-------------------------|
+| `active_window` | Shows the full window title as a tooltip. `title_scroll = "on_hover"` scrolls a clipped title while hovered. | Middle-click opens widget settings. |
+| `audio_visualizer` | Uses the shared highlight while the visualizer is visible. | Middle-click opens widget settings. |
+| `battery` | The tooltip reports charge, state, remaining time, and device details. | Left-click opens Control Center → Power. |
+| `bluetooth` | The tooltip reports adapter and connected-device state. | Left-click opens Control Center → Bluetooth; right-click toggles Bluetooth. |
+| `brightness` | The tooltip reports the current output brightness. | Left-click opens Control Center → Monitor; wheel adjusts brightness. |
+| `caffeine` | The active highlight indicates that idle inhibition is enabled. | Left-click toggles the idle inhibitor. |
+| `clipboard` | Uses the shared highlight. | Left-click opens Clipboard. |
+| `clock` | Shows the configured tooltip date/time format. | Left-click opens Control Center → Calendar. |
+| `control-center` | The glyph and optional ring can report Wi-Fi, update, battery, RAM, CPU, or GPU state without changing the hit area. | Left-click opens Control Center → Home. |
+| `custom_button` | Shows its configured tooltip. | Middle-click opens widget settings; any configured actions also run on their gestures. |
+| `keyboard_layout` | The tooltip shows the complete layout name. | Left-click cycles keyboard layouts. |
+| `launcher` | Uses the shared highlight. | Left-click opens Launcher. |
+| `lock_keys` | State color identifies active locks. | Middle-click opens widget settings. |
+| `media` | Shows player/track detail; `title_scroll = "on_hover"` scrolls clipped text while hovered. | Left-click opens Control Center → Media; right-click toggles play/pause; wheel and forward/back mouse buttons change track. |
+| `network` | The tooltip reports the active connection and signal. | Left-click opens Control Center → Network; right-click toggles networking. |
+| `nightlight` | State color identifies active night light. | Left-click toggles night light; right-click toggles its always-on override. |
+| `notifications` | The bell, off glyph, and unread dot report notification and Do Not Disturb state. | Left-click opens Control Center → Notifications; right-click toggles Do Not Disturb. |
+| `power_profile` | Its glyph identifies the active profile. | Left-click or wheel up selects the next profile; right-click or wheel down selects the previous one. |
+| `privacy` | Each active sensor indicator has its own tooltip. | Middle-click opens widget settings. |
+| `screenshot` | Uses the shared highlight. | Left-click starts region capture; right-click opens the capture menu. |
+| `session` | Uses the shared highlight. | Left-click opens Session. |
+| `settings` | Uses the shared highlight. | Left-click opens Settings. |
+| `spacer` | No feedback by default because spacers default to `interactive = false`. | Passive by default; when made interactive, middle-click opens widget settings. |
+| `sysmon` | The tooltip reports the selected resource value. | Left-click opens Control Center → System. |
+| `taskbar` | Each task tile highlights independently and shows its window/app detail. | Left-click activates a task; middle-click closes it; wheel cycles tasks. |
+| `text` | Uses the shared highlight when interactive. | Middle-click opens widget settings. |
+| `theme_mode` | State color follows the current theme. | Left-click toggles light/dark mode. |
+| `tray` | Each tray item highlights independently and shows its application tooltip. | Left-click activates an item; right-click opens its menu. |
+| `volume` | The tooltip reports the selected output or microphone level. | Left-click opens Control Center → Audio; right-click mutes; wheel adjusts the selected output or microphone. |
+| `wallpaper` | Uses the shared highlight. | Left-click opens Wallpaper. |
+| `weather` | The tooltip reports the configured location and conditions. | Left-click opens Control Center → Weather. |
+| `workspaces` | Each workspace pill highlights independently. | Left-click activates a workspace; wheel switches to the previous/next workspace. |
+
+Plugin widgets receive the same shared hover and middle-click behavior. Their manifest may declare additional default actions and their script may provide a tooltip or handle pointer events inside the widget.
+
 ## Built-in widgets
 
 ### Layout & windows

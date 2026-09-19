@@ -1,5 +1,7 @@
 #include "shell/control_center/tabs/weather_tab.h"
 
+#include "render/animation/motion_service.h"
+
 #include "config/config_service.h"
 #include "i18n/i18n.h"
 #include "render/animation/animation.h"
@@ -26,7 +28,7 @@ namespace {
   // Set to a specific effect to bypass weather-code detection. Reset to None when done testing.
   constexpr EffectType kTestEffect = EffectType::None;
 
-  constexpr float kCurrentGlyphSize = Style::controlHeightLg * 2.2F;
+  const auto kCurrentGlyphSize = []() -> float { return Style::controlHeightLg * 2.2F; };
 
   std::string windDirectionLabel(int degrees) {
     static constexpr std::array<const char*, 8> kDirs = {"N", "NE", "E", "SE", "S", "SW", "W", "NW"};
@@ -94,7 +96,7 @@ std::unique_ptr<Flex> WeatherTab::create() {
       ui::glyph({
           .out = &m_currentGlyph,
           .glyph = "weather-cloud",
-          .glyphSize = kCurrentGlyphSize * scale,
+          .glyphSize = kCurrentGlyphSize() * scale,
           .color = colorSpecFromRole(ColorRole::Primary),
       })
   );
@@ -539,7 +541,7 @@ void WeatherTab::doLayout(Renderer& renderer, float contentWidth, float bodyHeig
     const float cardInnerHeight =
         std::max(0.0F, m_currentCard->height() - (m_currentCard->paddingTop() + m_currentCard->paddingBottom()));
     const float desiredGlyph =
-        std::max(Style::controlHeightLg * 1.8F * scale, std::min(kCurrentGlyphSize * scale, cardInnerHeight * 0.8F));
+        std::max(Style::controlHeightLg * 1.8F * scale, std::min(kCurrentGlyphSize() * scale, cardInnerHeight * 0.8F));
     m_currentGlyph->setGlyphSize(desiredGlyph);
   }
 
@@ -1011,7 +1013,7 @@ void WeatherTab::sync(Renderer& renderer) {
     m_effectNode->setEffectType(m_activeEffect);
     m_effectNode->setBgColor(colorForRole(ColorRole::Surface));
     m_effectNode->setRadius(Style::scaledRadiusXl(contentScale()));
-    m_effectNode->setVisible(m_activeEffect != EffectType::None);
+    m_effectNode->setVisible(MotionService::instance().enabled() && m_activeEffect != EffectType::None);
   }
 }
 
@@ -1184,6 +1186,10 @@ void WeatherTab::hideEffect() {
 }
 
 void WeatherTab::onFrameTick(float deltaMs) {
+  if (m_effectNode != nullptr) {
+    m_effectNode->setVisible(MotionService::instance().enabled() && m_activeEffect != EffectType::None);
+  }
+  if (!MotionService::instance().enabled()) return;
   if (m_effectNode == nullptr || !m_effectNode->visible() || m_activeEffect == EffectType::None) {
     return;
   }

@@ -30,6 +30,11 @@ private:
   void applyState();
 
   Box* m_box = nullptr;
+  Box* m_plateau = nullptr;
+  float m_checkedProgress = 0.0F;
+  std::uint32_t m_animId = 0;
+  Signal<>::ScopedConnection m_materialConn;
+  Signal<>::ScopedConnection m_paletteConn;
   Glyph* m_checkGlyph = nullptr;
   InputArea* m_inputArea = nullptr;
   std::function<void(bool)> m_onChange;

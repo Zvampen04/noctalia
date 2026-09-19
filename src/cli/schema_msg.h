@@ -33,6 +33,10 @@ namespace noctalia::cli {
       Command{"custom", "Use a custom palette", {}, {}, {}, kMsgColorSchemeSetCustomPositionals, {}, false},
   };
 
+  inline constexpr std::array kMsgProfilePositionals{
+      Positional{"request", {}, {}, true, true, false},
+  };
+
   inline constexpr std::array kMsgPluginsEnablePositionals{
       Positional{"author/plugin", {}, {}, true, false, false, "plugins_disabled"},
   };
@@ -373,6 +377,7 @@ namespace noctalia::cli {
         kMsgColorSchemeSetSubcommands,
         false
     };
+    inline constexpr Command profile{"profile", "Preview, inspect or commit desktop appearance", {}, {}, {}, kMsgProfilePositionals, {}, false};
     inline constexpr Command configReload{"config-reload", "Reload the config file", {}, {}, {}, {}, {}, false};
     inline constexpr Command desktopWidgetsEdit{
         "desktop-widgets-edit", "Open the desktop widgets editor", {}, {}, {}, {}, {}, false
@@ -846,6 +851,7 @@ namespace noctalia::cli {
       msg::colorSchemeGet,
       msg::colorSchemeSet,
       msg::configReload,
+      msg::profile,
       msg::desktopWidgetsEdit,
       msg::desktopWidgetsExit,
       msg::desktopWidgetsHide,

@@ -52,7 +52,12 @@ namespace {
 
 std::vector<ShortcutConfig> defaultControlCenterShortcuts() {
   return {
-      {"wifi"}, {"bluetooth"}, {"caffeine"}, {"nightlight"}, {"notification"}, {"power_profile"},
+      {.type = "wifi", .id = "shortcut-wifi"},
+      {.type = "bluetooth", .id = "shortcut-bluetooth"},
+      {.type = "caffeine", .id = "shortcut-caffeine"},
+      {.type = "nightlight", .id = "shortcut-nightlight"},
+      {.type = "notification", .id = "shortcut-notification"},
+      {.type = "power_profile", .id = "shortcut-power-profile"},
   };
 }
 
@@ -350,6 +355,17 @@ WidgetBarCapsuleSpec resolveWidgetBarCapsuleSpec(const BarConfig& bar, const Wid
   if (bar.widgetCapsuleRadius.has_value()) {
     spec.radius = std::clamp(static_cast<float>(*bar.widgetCapsuleRadius), 0.0F, 80.0F);
   }
+  spec.contour = bar.widgetCapsuleContour;
+  spec.contourDepth = bar.widgetCapsuleContourDepth;
+  if (widget != nullptr && widget->hasSetting("capsule_contour")) {
+    const auto key = widget->getString("capsule_contour", "rounded");
+    spec.contour = enumFromKey(kBarCapsuleContours, key).value_or(BarCapsuleContour::Rounded);
+  }
+  if (widget != nullptr && widget->hasSetting("capsule_contour_depth")) {
+    spec.contourDepth = std::clamp(
+        static_cast<float>(widget->getDouble("capsule_contour_depth", spec.contourDepth)), 0.0F, 32.0F
+    );
+  }
   if (widget != nullptr) {
     const auto radius = widget->settings.find("capsule_radius");
     if (radius != widget->settings.end()
@@ -493,6 +509,8 @@ WidgetBarCapsuleSpec capsuleSpecFromGroup(const BarConfig& bar, const BarCapsule
     spec.radius = std::nullopt;
   }
   spec.opacity = group.opacity;
+  spec.contour = group.contour.value_or(bar.widgetCapsuleContour);
+  spec.contourDepth = group.contourDepth.value_or(bar.widgetCapsuleContourDepth);
   spec.accordion = group.accordion;
   spec.accordionDirection = group.accordionDirection;
   spec.widgetSpacing =

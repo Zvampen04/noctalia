@@ -17,6 +17,7 @@
 #include "render/scene/input_area.h"
 #include "scripting/plugin_registry.h"
 #include "shell/control_center/shortcut_registry.h"
+#include "shell/control_center/shortcut_identity.h"
 #include "shell/panel/panel_button_style.h"
 #include "shell/panel/panel_manager.h"
 #include "shell/profile/avatar_path.h"
@@ -38,6 +39,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <unordered_map>
 
 using namespace control_center;
 
@@ -289,6 +291,7 @@ std::unique_ptr<Flex> HomeTab::create() {
           .out = &m_userAvatar,
           .fit = ImageFit::Cover,
           .radius = avatarSize * 0.5F,
+          .cornerPower = 2.0F,
           .padding = 1.0F * scale,
           .width = avatarSize,
           .height = avatarSize,
@@ -518,7 +521,10 @@ std::unique_ptr<Flex> HomeTab::create() {
   // --- Shortcuts (right of media + clock) ---
   const auto& shortcuts =
       m_config != nullptr ? m_config->config().controlCenter.shortcuts : std::vector<ShortcutConfig>{};
-  const std::size_t count = std::min(shortcuts.size(), std::size_t{6});
+  const std::size_t count = shortcuts.size();
+  std::unordered_map<std::string, std::size_t> shortcutTotals;
+  std::unordered_map<std::string, std::size_t> shortcutOrdinals;
+  for (const auto& shortcut : shortcuts) ++shortcutTotals[shortcut.type];
 
   auto grid = std::make_unique<GridView>();
   grid->setColumns(kHomeShortcutGridColumns);
@@ -582,6 +588,9 @@ std::unique_ptr<Flex> HomeTab::create() {
 
     const bool showLabels = m_config != nullptr ? m_config->config().controlCenter.showShortcutLabels : true;
     const std::string label = shortcut->displayLabel();
+    const std::size_t shortcutOrdinal = ++shortcutOrdinals[sc.type];
+    const std::string materialLabel = "Quick Settings: " + label
+        + (shortcutTotals[sc.type] > 1 ? " (" + std::to_string(shortcutOrdinal) + ")" : "");
     const bool enabled = shortcut->enabled();
     const bool isActive = shortcut->isToggle() && shortcut->active();
 
@@ -627,6 +636,13 @@ std::unique_ptr<Flex> HomeTab::create() {
             },
     });
 
+    const std::string materialTarget = control_center_material::shortcutTargetId(sc, i);
+    btn->setMaterialIdentityPath("surface", "button",
+        control_center_material::shortcutSurfacePath(materialTarget));
+    auto materialRegistration = Style::MaterialTargetCatalog::instance().registerInstance(
+        control_center_material::descriptor(materialTarget, materialLabel, "button",
+            control_center_material::shortcutSurfacePath(materialTarget)));
+
     Button* btnPtr = btn.get();
     if (auto* ia = btnPtr->inputArea(); ia != nullptr) {
       ia->setOnAxisHandler([this, padIdx](const InputArea::PointerData& data) -> bool {
@@ -647,6 +663,7 @@ std::unique_ptr<Flex> HomeTab::create() {
     pad.button = btnPtr;
     pad.glyph = btnPtr->glyph();
     pad.label = btnPtr->label();
+    pad.materialRegistration = std::move(materialRegistration);
     m_shortcutPads.push_back(std::move(pad));
     grid->addChild(std::move(btn));
   }
@@ -1346,6 +1363,7 @@ void HomeTab::onClose() {
     pad.button = nullptr;
     pad.glyph = nullptr;
     pad.label = nullptr;
+    pad.materialRegistration.reset();
   }
 }
 

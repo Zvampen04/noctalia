@@ -9,6 +9,7 @@
 #include "cursor-shape-v1-client-protocol.h"
 #include "ipc/ipc_service.h"
 #include "render/animation/animation.h"
+#include "render/animation/motion_service.h"
 #include "render/backend/render_backend.h"
 #include "render/core/render_styles.h"
 #include "render/core/shared_texture_cache.h"
@@ -1439,17 +1440,16 @@ void Wallpaper::startTransitionAnimation(
   setTransitionTime(instance, fromTime);
 
   const float durationMs = std::abs(toTime - fromTime) * wpConfig.transitionDurationMs;
-  if (durationMs <= 0.0F) {
+  if (durationMs <= 0.0F || !MotionService::instance().enabled()) {
     setTransitionTime(instance, toTime);
     finishTransition(instance);
     return;
   }
 
   auto* inst = &instance;
-  // The transition runs on its own configured duration, decoupled from the global
-  // motion system: animateTimer ignores both the animation-speed multiplier and the
-  // animations-enabled toggle (disabling animations must not skip the crossfade).
-  instance.transitionAnimId = instance.animations.animateTimer(
+  // The motion-aware scheduler applies the global speed and curve, and settles
+  // an in-flight transition when the user disables motion.
+  instance.transitionAnimId = instance.animations.animate(
       fromTime, toTime, durationMs, Easing::Linear, [inst](float time) { setTransitionTime(*inst, time); },
       [this, inst]() { finishTransition(*inst); }
   );

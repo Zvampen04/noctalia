@@ -196,3 +196,65 @@ text lives in the same `translations/<lang>.json` files as script strings, so a 
   "settings.interval.description": "How often the service refreshes data."
 }
 ```
+
+
+## Grouped Bézier curve editor
+
+Four plugin-level `double` settings can share a native curve graph. Add `curve`
+metadata to the first X coordinate's existing `[[setting]]` table:
+
+```toml
+curve = { keys = ["open_x1", "open_y1", "open_x2", "open_y2"], label_key = "open_curve.label", description_key = "open_curve.description", activation_key = "window_policy", activation_value = "configured" }
+```
+
+Declare all four referenced fields normally, with X bounds `min = 0, max = 1`
+and Y bounds `min = -2, max = 2`. The first key must be the containing field's
+key. Keys must be distinct and cannot be shared between curve groups. This
+metadata is supported on plugin-level fields; per-entry fields reject it.
+`label_key` is required; `description_key` is optional. Both use the plugin's
+translation catalog. The native editor displays one graph before the existing
+four numeric controls, preserving their independent configuration paths.
+
+`activation_key` and `activation_value` are optional together. When provided,
+the key must refer to an existing select field and the value must be one of its
+options. Editing the graph sends all four coordinates and that selection in one
+configuration batch. Escape restores the coordinates and selection captured at
+the start of the editor session. The grouped reset also resets all four fields
+and the optional selection. For a policy shared by several phase graphs, this
+selection reset applies to every phase governed by that policy.
+
+Graph updates use the normal configuration preview transaction. They do not
+commit a preset. Keyboard and pointer gestures defer settings reconstruction
+until the gesture ends. Tab focus distinguishes the graph from its first numeric
+control. Advanced-field visibility, tabs, search, and overridden-only filtering
+apply to the graph. The graph is hidden if any coordinate is unavailable or
+hidden; numeric controls retain their ordinary visibility rules.
+
+
+## Native setting ownership routing
+
+An ownership rule can keep an integrated setting under one backend's authority:
+
+```toml
+[[settings_ownership]]
+path = ["shell", "animation", "enabled"]
+when = "integration_enabled"
+setting = "desktop_animations"
+```
+
+`when` and the optional `setting` must name plugin-level boolean fields. Without
+`setting`, ownership retains its existing hide-only behavior and supports wildcard
+path components. With `setting`, `path` must identify an exact native boolean
+field. Native settings UI writes and resets to that path then target
+`plugin_settings.<plugin-id>.<setting>` while `when` is true. Direct backend
+configuration writes bypass this UI adapter, so an acknowledged compositor state
+can still update its native mirror without a feedback loop.
+
+Compound selectors can declare false/true presentations for their linked
+boolean. They show the owner's requested value while acknowledgment is pending;
+a backend correction replaces that view after rejection. The rendered shell
+continues to use the backend's acknowledged native value. Resets use the plugin
+field's declared default. A preset transition uses the same backend transaction
+as edits made through the plugin's own controls: preview changes the running
+state, Save persists the preset, and Cancel restores and mirrors its baseline.
+The route introduces no second compositor writer or independent save operation.

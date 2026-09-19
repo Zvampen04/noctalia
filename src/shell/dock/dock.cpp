@@ -6,6 +6,7 @@
 #include "core/deferred_call.h"
 #include "core/log.h"
 #include "ipc/ipc_service.h"
+#include "render/animation/motion_service.h"
 #include "render/scene/node.h"
 #include "shell/dock/dock_context_menu.h"
 #include "shell/dock/dock_geometry.h"
@@ -312,6 +313,15 @@ bool Dock::initialize(CompositorPlatform& platform, ConfigService* config, Rende
       }
     }
     requestRedraw();
+  });
+
+  m_motionConn = MotionService::instance().changed().connect([this]() {
+    for (const auto& instance : m_instances) {
+      if (instance != nullptr && instance->surface != nullptr) {
+        instance->surface->requestFrameTick();
+        instance->surface->requestRedraw();
+      }
+    }
   });
 
   m_lastDockConfig = cfg;

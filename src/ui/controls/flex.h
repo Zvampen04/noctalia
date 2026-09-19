@@ -3,9 +3,13 @@
 #include "render/scene/node.h"
 #include "ui/palette.h"
 #include "ui/style.h"
+#include "ui/surface_material.h"
 
 #include <optional>
+#include <string>
+#include <string_view>
 #include <unordered_set>
+#include <vector>
 
 class Renderer;
 class RectNode;
@@ -51,6 +55,10 @@ public:
   void setPadding(float vertical, float horizontal);
   void setMirrorInRtl(bool mirror);
 
+  void setSurfaceRelief(float relief);
+  void setMaterialIdentity(std::string_view role, std::string_view family, std::string_view surface = {});
+  void setMaterialIdentityPath(std::string_view role, std::string_view family, std::vector<std::string> surfaces);
+  void setMaterialBackdrop(MaterialBackdrop backdrop);
   void setFill(const ColorSpec& color);
   // Explicit fixed color.
   void setFill(const Color& color);
@@ -66,7 +74,7 @@ public:
   // Default app card chrome: filled surface variant with a soft outline.
   // Section card background. The outline follows the [shell].card_borders
   // toggle unless a caller passes an explicit showBorder.
-  void setCardStyle(float scale = 1.0F, float fillOpacity = 1.0F, bool showBorder = Style::cardBordersEnabled());
+  void setCardStyle(float scale = 1.0F, float fillOpacity = 1.0F, std::optional<bool> showBorder = std::nullopt);
 
   void setMinWidth(float minWidth);
   void setMinHeight(float minHeight);
@@ -107,6 +115,7 @@ public:
   void setFrameSize(float width, float height);
 
 protected:
+  void doMaterialSurfaceChanged() override { syncSurfaceMaterial(); }
   void doLayout(Renderer& renderer) override;
   LayoutSize doMeasure(Renderer& renderer, const LayoutConstraints& constraints) override;
   void doArrange(Renderer& renderer, const LayoutRect& rect) override;
@@ -127,6 +136,17 @@ private:
   LayoutSize runLayout(Renderer& renderer, const LayoutConstraints& constraints, bool arrangeChildren);
 
   RectNode* m_background = nullptr;
+  SurfaceMaterial m_material;
+  std::string m_materialRole = "surface";
+  std::string m_materialFamily = "container";
+  std::vector<std::string> m_materialSurfacePath;
+  std::optional<float> m_cardScale;
+  float m_cardOpacity = 1.0F;
+  std::optional<bool> m_cardBorder;
+  bool m_cardOwnsFamily = false;
+  float m_surfaceRelief = 0.55F;
+  Signal<>::ScopedConnection m_materialConn;
+  void syncSurfaceMaterial();
   ColorSpec m_fill = clearColorSpec();
   ColorSpec m_border = clearColorSpec();
   Signal<>::ScopedConnection m_paletteConn;

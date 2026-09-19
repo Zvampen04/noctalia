@@ -41,6 +41,7 @@ private:
   void doArrange(Renderer& renderer, const LayoutRect& rect) override;
 
   class RectNode* m_thumb = nullptr;
+  class RectNode* m_well = nullptr;
   InputArea* m_inputArea = nullptr;
   std::uint32_t m_animId = 0;
   std::function<void(bool)> m_onChange;
@@ -52,5 +53,7 @@ private:
   float m_thumbSize = 0.0F;
   float m_scale = 1.0F;
   float m_animationProgress = 0.0F;
+  Signal<>::ScopedConnection m_materialConn;
+  Signal<>::ScopedConnection m_motionConn;
   Signal<>::ScopedConnection m_paletteConn;
 };

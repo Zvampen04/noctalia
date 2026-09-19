@@ -11,6 +11,7 @@ class OsdOverlay;
 class BrightnessOsd {
 public:
   void bindOverlay(OsdOverlay& overlay);
+  void bindService(BrightnessService* service) noexcept { m_service = service; }
   void primeFromService(const BrightnessService& service);
   void beginBatch();
   void endBatch();
@@ -24,6 +25,7 @@ private:
   };
 
   OsdOverlay* m_overlay = nullptr;
+  BrightnessService* m_service = nullptr;
   std::vector<DisplaySnapshot> m_snapshots;
   std::size_t m_batchDepth = 0;
   std::optional<float> m_batchBrightness;

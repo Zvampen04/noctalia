@@ -8,6 +8,7 @@
 #include "render/scene/rect_node.h"
 #include "ui/palette.h"
 #include "ui/style.h"
+#include "ui/surface_material.h"
 
 #include <algorithm>
 #include <linux/input-event-codes.h>
@@ -21,7 +22,7 @@ namespace {
         .fill = fill,
         .border = fill,
         .fillMode = FillMode::Solid,
-        .radius = radius,
+        .radius = Style::scaledRadius(radius),
         .softness = 1.0F,
         .borderWidth = 0.0F,
     };
@@ -39,6 +40,7 @@ namespace {
 } // namespace
 
 Scrollbar::Scrollbar() {
+  m_materialConn = Style::surfaceMaterialChanged().connect([this] { applyPalette(); });
   m_paletteConn = paletteChanged().connect([this] { applyPalette(); });
 
   auto track = std::make_unique<RectNode>();
@@ -238,10 +240,10 @@ void Scrollbar::applyExpansion(float expansion) {
 void Scrollbar::applyPalette() {
   const float radius = thickness() * 0.5F;
   if (m_track != nullptr) {
-    m_track->setStyle(makeSolid(resolveColorSpec(scrollbarTrackColor()), radius));
+    m_track->setStyle(SurfaceMaterial::styled(*m_track, makeSolid(resolveColorSpec(scrollbarTrackColor()), radius), -0.5F, MaterialBackdrop::Inherited, "scrollbar"));
   }
   if (m_thumb != nullptr) {
-    m_thumb->setStyle(makeSolid(resolveColorSpec(scrollbarThumbColor()), radius));
+    m_thumb->setStyle(SurfaceMaterial::styled(*m_thumb, makeSolid(resolveColorSpec(scrollbarThumbColor()), radius), 0.5F, MaterialBackdrop::Inherited, "scrollbar"));
   }
 }
 

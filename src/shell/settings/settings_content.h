@@ -59,14 +59,16 @@ namespace settings {
     std::string& pendingGestureVerb;
     std::string& actionsExpandedFor;
     std::unordered_map<std::string, std::unordered_set<std::string>>& expandedGroupsByPage;
-    // Fixed page title row above the group pills, null when no host exists.
+    // Fixed page title row above section navigation, null when no host exists.
     Flex* pageTitleRow = nullptr;
-    // Sticky pill row above the content scroll view, null when no host exists.
+    // Bounded section navigator above the content scroll view, null when no host exists.
     Flex* groupJumpRow = nullptr;
+    std::unordered_map<std::string, std::string>* selectedGroupsByPage = nullptr;
     // Bindable IPC commands for the gesture action picker: value = command, label = usage,
     // description = the command's --help text.
     std::vector<GestureActionOption> actionCatalog;
 
+    std::function<void(bool)> setInteractiveEdit;
     std::function<void()> requestRebuild;
     std::function<void()> requestContentRebuild;
     std::function<void()> resetContentScroll;
@@ -79,6 +81,7 @@ namespace settings {
     std::function<void(std::vector<std::pair<std::vector<std::string>, ConfigOverrideValue>>)> setOverrides;
     std::function<void(std::vector<std::string>)> clearOverride;
     std::function<void(std::vector<std::vector<std::string>>)> clearOverrides;
+    std::function<void(std::string, bool)> showStatus;
     std::function<void(std::vector<std::string>)> resetBarLane;
     std::function<bool(const std::vector<std::vector<std::string>>&)> isResetConfirmationPending;
     std::function<void(std::vector<std::vector<std::string>>)> requestResetConfirmation;
@@ -103,10 +106,13 @@ namespace settings {
     std::function<void()> afterNotificationFilterApply;
     std::function<void()> closeHostedEditor;
     bool supportsTaskbarWorkspaceGrouping = true;
+    bool profileTransitionBusy = false;
+    std::function<void(std::string)> profileAction;
+    std::function<void(std::string, std::string)> selectPreset;
   };
 
   std::size_t
-  addSettingsContentSections(Flex& content, const std::vector<SettingEntry>& registry, SettingsContentContext ctx);
+  addSettingsContentSections(Flex& content, const std::vector<SettingEntry>& registry, SettingsContentContext ctx, bool showEmpty = true);
 
   void buildSessionActionEntryDetailContent(
       Flex& parent, SettingsContentContext& ctx, SessionPanelActionConfig& row, const std::function<void()>& persist

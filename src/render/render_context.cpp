@@ -1,4 +1,5 @@
 #include "render/render_context.h"
+#include "render/scene/render_traversal_guard.h"
 
 #include "core/files/resource_paths.h"
 #include "core/log.h"
@@ -192,7 +193,8 @@ void RenderContext::notifyFontConfigChanged() {
   ++m_textMetricsGeneration;
 }
 
-void RenderContext::renderScene(RenderTarget& target, Node* sceneRoot, const WallpaperMaskDrawParams* wallpaperMask) {
+void RenderContext::renderScene(RenderTarget& target, Node* sceneRoot, const WallpaperMaskDrawParams* wallpaperMask,
+                                const std::function<void()>& beforePresent) {
   if (m_backend == nullptr || m_graphicsResetPending) {
     return;
   }
@@ -200,6 +202,7 @@ void RenderContext::renderScene(RenderTarget& target, Node* sceneRoot, const Wal
   if (!m_backend->beginFrame(target)) {
     return;
   }
+  m_backend->beginCustomEffectConsumerFrame(&target);
   const float renderScale = target.contentScale();
 
   if (sceneRoot != nullptr
@@ -232,12 +235,14 @@ void RenderContext::renderScene(RenderTarget& target, Node* sceneRoot, const Wal
       m_backend->drawWallpaperMask(*wallpaperMask);
     }
   }
+  m_backend->endCustomEffectConsumerFrame();
   float ms = elapsedSince(drawStart);
   logSlowRenderOperation(
       ms, "scene draw took {:.1F}ms ({}x{} logical, {}x{} buffer)", ms, target.logicalWidth(), target.logicalHeight(),
       target.bufferWidth(), target.bufferHeight()
   );
 
+  if (beforePresent) beforePresent();
   m_backend->endFrame(target);
   const RenderGraphicsResetStatus resetStatus = m_backend->graphicsResetStatus();
   ms = elapsedSince(totalStart);
@@ -245,6 +250,10 @@ void RenderContext::renderScene(RenderTarget& target, Node* sceneRoot, const Wal
   if (resetStatus != RenderGraphicsResetStatus::NoError) {
     handleGraphicsReset(resetStatus);
   }
+}
+
+void RenderContext::removeCustomEffectConsumerSurface(const RenderTarget& target) {
+  if (m_backend != nullptr) m_backend->removeCustomEffectConsumerSurface(&target);
 }
 
 TextMetrics RenderContext::measureTextScaled(
@@ -339,6 +348,9 @@ void RenderContext::renderNode(
     float bh, float clipLeft, float clipTop, float clipRight, float clipBottom, bool hasClip, bool ignoreNodeOpacity,
     bool parentPaintContained
 ) {
+  static thread_local RenderTraversalGuard::Stack traversalStack;
+  RenderTraversalGuard traversalGuard(traversalStack, node);
+  if (!traversalGuard) return;
   if (!node->visible()) {
     return;
   }
@@ -351,6 +363,16 @@ void RenderContext::renderNode(
   float boundsBottom = 0.0F;
   Node::transformedBounds(node, worldTransform, boundsLeft, boundsTop, boundsRight, boundsBottom);
 
+  const float contentLeft=boundsLeft, contentTop=boundsTop, contentRight=boundsRight, contentBottom=boundsBottom;
+  if(node->type()==NodeType::Rect) {
+    const auto& material=static_cast<const RectNode*>(node)->style().material;
+    if(material && material->primitive==noctalia::material::Primitive::Plateau) {
+      const float padding=noctalia::material::samplingPadding(*material);
+      const float padX=padding*(std::abs(worldTransform.m[0])+std::abs(worldTransform.m[3]));
+      const float padY=padding*(std::abs(worldTransform.m[1])+std::abs(worldTransform.m[4]));
+      boundsLeft-=padX;boundsRight+=padX;boundsTop-=padY;boundsBottom+=padY;
+    }
+  }
   const bool paintContained = parentPaintContained || node->paintContained();
   if (paintContained
       && hasClip
@@ -374,6 +396,30 @@ void RenderContext::renderNode(
   case NodeType::Rect: {
     const auto* rect = static_cast<const RectNode*>(node);
     auto style = rect->style();
+    style.cornerPower = style.cornerPower.value_or(node->cornerPower());
+    style.shadowExclusionPower = style.shadowExclusionPower.value_or(node->cornerPower());
+    if (style.paintClip) style.paintClip->cornerPower = style.paintClip->cornerPower.value_or(node->cornerPower());
+    if (style.material && node->materialBackdropLocal()
+        && noctalia::material::ownsOpticalPlane(*style.material,style.materialPlane)) {
+      style.materialBackdrop=MaterialBackdrop::Local;
+    }
+    // The external material scene protocol currently carries rounded planes only.
+    // Keep a contoured optical plane faithful by resolving it against this surface.
+    if (style.material && style.segmentContour.kind != SegmentContourKind::None
+        && noctalia::material::ownsOpticalPlane(*style.material, style.materialPlane)) {
+      style.materialBackdrop = MaterialBackdrop::Local;
+    }
+    if (style.customBackground && std::ranges::find(
+            m_externalCustomEffectGroups, rect->materialSeed()) != m_externalCustomEffectGroups.end()) {
+      // A v4 armed frame owns only this background body in the compositor.
+      // Borders, contours, input and foreground children remain client-rendered.
+      style.customBackground.reset();
+      style.fillMode = FillMode::None;
+      style.fill.a = 0.0F;
+      style.material.reset();
+      style.materialPlane = false;
+      style.liquidGlass = false;
+    }
     style.fill.a *= effectiveOpacity;
     style.border.a *= effectiveOpacity;
     for (auto& stop : style.gradientStops) {
@@ -477,6 +523,7 @@ void RenderContext::renderNode(
   case NodeType::AudioSpectrum: {
     const auto* spectrum = static_cast<const AudioSpectrumNode*>(node);
     auto style = spectrum->style();
+    style.cornerPower = node->cornerPower();
     style.color1.a *= effectiveOpacity;
     style.color2.a *= effectiveOpacity;
     const float pixelScaleX = sw > 0.0F ? bw / sw : 1.0F;
@@ -490,6 +537,7 @@ void RenderContext::renderNode(
     const auto* visualizer = static_cast<const FancyAudioVisualizerNode*>(node);
     if (visualizer->textureId() != 0) {
       auto style = visualizer->style();
+      style.cornerPower = node->cornerPower();
       style.primaryColor.a *= effectiveOpacity;
       style.secondaryColor.a *= effectiveOpacity;
       m_backend->drawFancyAudioVisualizer(
@@ -614,31 +662,25 @@ void RenderContext::renderNode(
   bool childHasClip = hasClip;
 
   if (node->clipChildren()) {
-    childClipLeft = hasClip ? std::max(childClipLeft, boundsLeft) : boundsLeft;
-    childClipTop = hasClip ? std::max(childClipTop, boundsTop) : boundsTop;
-    childClipRight = hasClip ? std::min(childClipRight, boundsRight) : boundsRight;
-    childClipBottom = hasClip ? std::min(childClipBottom, boundsBottom) : boundsBottom;
+    childClipLeft = hasClip ? std::max(childClipLeft, contentLeft) : contentLeft;
+    childClipTop = hasClip ? std::max(childClipTop, contentTop) : contentTop;
+    childClipRight = hasClip ? std::min(childClipRight, contentRight) : contentRight;
+    childClipBottom = hasClip ? std::min(childClipBottom, contentBottom) : contentBottom;
     childHasClip = true;
   }
 
-  if (childHasClip && (childClipRight <= childClipLeft || childClipBottom <= childClipTop)) {
-    return;
-  }
-
+  const auto paintChild = [&](const Node* child) {
+    const bool bypass = child->bypassParentPaintClip();
+    if (!bypass && childHasClip && (childClipRight <= childClipLeft || childClipBottom <= childClipTop)) return;
+    renderNode(renderScale, child, worldTransform, effectiveOpacity, sw, sh, bw, bh,
+        bypass ? clipLeft : childClipLeft, bypass ? clipTop : childClipTop,
+        bypass ? clipRight : childClipRight, bypass ? clipBottom : childClipBottom,
+        bypass ? hasClip : childHasClip, false, paintContained);
+  };
   if (childrenSorted) {
-    for (const auto& child : children) {
-      renderNode(
-          renderScale, child.get(), worldTransform, effectiveOpacity, sw, sh, bw, bh, childClipLeft, childClipTop,
-          childClipRight, childClipBottom, childHasClip, false, paintContained
-      );
-    }
+    for (const auto& child : children) paintChild(child.get());
   } else {
-    for (const auto* child : orderedChildren) {
-      renderNode(
-          renderScale, child, worldTransform, effectiveOpacity, sw, sh, bw, bh, childClipLeft, childClipTop,
-          childClipRight, childClipBottom, childHasClip, false, paintContained
-      );
-    }
+    for (const auto* child : orderedChildren) paintChild(child);
   }
 }
 

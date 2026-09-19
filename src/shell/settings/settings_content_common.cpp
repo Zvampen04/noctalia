@@ -6,6 +6,8 @@
 #include "shell/settings/settings_content.h"
 #include "ui/builders.h"
 #include "ui/controls/collapsible.h"
+#include "ui/controls/select.h"
+#include "render/scene/input_area.h"
 #include "ui/palette.h"
 #include "ui/style.h"
 #include "util/string_utils.h"
@@ -16,6 +18,41 @@
 #include <utility>
 
 namespace settings {
+
+  std::unique_ptr<Flex> makeSettingsGroupNavigator(
+      std::shared_ptr<std::vector<SettingsGroupJump>> groups, std::string* selectedGroup, float scale) {
+    std::vector<std::string> labels;
+    std::size_t selected = 0;
+    for (std::size_t i = 0; i < groups->size(); ++i) {
+      labels.push_back((*groups)[i].label);
+      if (selectedGroup && (*groups)[i].key == *selectedGroup) selected = i;
+    }
+    return ui::row(
+        {.align = FlexAlign::Center, .gap = Style::spaceSm * scale, .fillWidth = true, .flexGrow = 1.0F},
+        makeLabel(i18n::tr("settings.navigation.jump-to-section"), Style::fontSizeCaption * scale,
+                  colorSpecFromRole(ColorRole::OnSurfaceVariant), FontWeight::Normal),
+        ui::select({
+            .options = std::move(labels),
+            .selectedIndex = selected,
+            .fontSize = Style::fontSizeBody * scale,
+            .controlHeight = Style::controlHeight * scale,
+            .notifyOnReselect = true,
+            .enabled = !groups->empty(),
+            .flexGrow = 1.0F,
+            .onSelectionChanged = [groups = std::move(groups), selectedGroup](std::size_t index, std::string_view) {
+              if (index >= groups->size()) return;
+              const auto& group = (*groups)[index];
+              if (selectedGroup) *selectedGroup = group.key;
+              if (group.activate) group.activate();
+            },
+            .configure = [](Select& select) {
+              for (const auto& child : select.children()) {
+                if (auto* area = dynamic_cast<InputArea*>(child.get()); area && area->focusable())
+                  area->setTabFocusKey("settings:section-navigation");
+              }
+            },
+        }));
+  }
 
   namespace {
     // Cards sit on the Surface window background and hold controls that fill SurfaceVariant at full
@@ -64,6 +101,9 @@ namespace settings {
     }
     if (key == "scale") {
       return override->scale.has_value();
+    }
+    if (key == "section_backgrounds") {
+      return override->sectionBackgrounds.has_value();
     }
     if (key == "margin_ends") {
       return override->marginEnds.has_value();
@@ -159,11 +199,20 @@ namespace settings {
     if (configService.hasEffectiveOverride(entry.path)) {
       return true;
     }
+    if (const auto* curve = std::get_if<CurveSetting>(&entry.control)) {
+      if (!curve->stylePath.empty() && configService.hasEffectiveOverride(curve->stylePath)) return true;
+      return std::ranges::any_of(curve->paths, [&](const auto& path) {
+        return configService.hasEffectiveOverride(path);
+      });
+    }
     if (const auto* range = std::get_if<RangeSliderSetting>(&entry.control)) {
       return configService.hasEffectiveOverride(range->highPath);
     }
     if (const auto* select = std::get_if<SelectSetting>(&entry.control)) {
-      return !select->linkedPath.empty() && configService.hasEffectiveOverride(select->linkedPath);
+      if (!select->linkedPath.empty() && configService.hasEffectiveOverride(select->linkedPath)) return true;
+      return std::ranges::any_of(select->linkedPaths, [&](const auto& path) {
+        return configService.hasEffectiveOverride(path);
+      });
     }
     return false;
   }
@@ -178,16 +227,16 @@ namespace settings {
     });
   }
 
-  Flex* addSettingsCard(Flex& parent, std::string_view title, float scale) {
+  Flex* addSettingsCard(Flex& parent, std::string_view title, float scale, bool connectedRows) {
     Flex* bodyRaw = nullptr;
     auto card = ui::column(
         {
             .align = FlexAlign::Stretch,
             .gap = Style::spaceSm * scale,
             .configure =
-                [scale](Flex& container) {
-                  container.setPadding(Style::spaceSm * scale, Style::spaceMd * scale);
-                  container.setCardStyle(scale, kCardFillOpacity);
+                [scale, connectedRows](Flex& container) {
+                  container.setPadding(Style::spaceSm * scale, connectedRows ? 0.0F : Style::spaceMd * scale);
+                  if (!connectedRows) container.setCardStyle(scale, kCardFillOpacity);
                 },
         },
         makeLabel(title, Style::fontSizeTitle * scale, colorSpecFromRole(ColorRole::OnSurface), FontWeight::Bold),
@@ -202,9 +251,9 @@ namespace settings {
   }
 
   Flex* addSettingsGroupCard(SettingsGroupCardProps props) {
-    auto card = ui::column({.align = FlexAlign::Stretch, .configure = [scale = props.scale](Flex& container) {
-                              container.setPadding(Style::spaceSm * scale, Style::spaceMd * scale);
-                              container.setCardStyle(scale, kCardFillOpacity);
+    auto card = ui::column({.align = FlexAlign::Stretch, .configure = [scale = props.scale, connected = props.connectedRows](Flex& container) {
+                              container.setPadding(Style::spaceSm * scale, connected ? 0.0F : Style::spaceMd * scale);
+                              if (!connected) container.setCardStyle(scale, kCardFillOpacity);
                             }});
     auto body = ui::column({
         .align = FlexAlign::Stretch,
@@ -226,6 +275,13 @@ namespace settings {
     Collapsible* collapsibleRaw = collapsible.get();
     std::unordered_set<std::string>* expandedGroups = &props.expandedGroups;
     const std::string group = std::move(props.group);
+    if (props.jumpAction != nullptr) {
+      *props.jumpAction = [expandedGroups, group, collapsibleRaw, scrollToTop = props.scrollToTop] {
+        expandedGroups->insert(group);
+        collapsibleRaw->setExpandedImmediate(true);
+        if (scrollToTop) scrollToTop(*collapsibleRaw);
+      };
+    }
     if (props.pill != nullptr) {
       props.pill->setOnClick([expandedGroups, group, pill = props.pill, collapsibleRaw,
                               scrollToTop = props.scrollToTop]() {
@@ -325,7 +381,6 @@ namespace settings {
     case SettingsSection::ControlCenter:
     case SettingsSection::Notifications:
     case SettingsSection::Osd:
-    case SettingsSection::Screenshot:
     case SettingsSection::Shell:
     case SettingsSection::Keybinds:
     case SettingsSection::System:
@@ -360,7 +415,6 @@ namespace settings {
     case SettingsSection::ControlCenter:
     case SettingsSection::Notifications:
     case SettingsSection::Osd:
-    case SettingsSection::Screenshot:
     case SettingsSection::Shell:
     case SettingsSection::Keybinds:
     case SettingsSection::System:

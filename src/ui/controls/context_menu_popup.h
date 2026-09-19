@@ -1,11 +1,15 @@
 #pragma once
 
 #include "config/config_types.h"
+#include "render/animation/animation_manager.h"
 #include "render/scene/input_dispatcher.h"
 #include "ui/controls/context_menu.h"
 #include "ui/controls/scroll_view.h"
 #include "ui/popup_chrome.h"
 #include "ui/popup_parent.h"
+#include "ui/signal.h"
+#include "ui/material_target_catalog.h"
+#include "ui/popup_transition.h"
 
 #include <cstdint>
 #include <functional>
@@ -14,6 +18,8 @@
 #include <vector>
 
 class Node;
+class Box;
+class RectNode;
 class PopupSurface;
 class RenderContext;
 class WaylandConnection;
@@ -67,7 +73,14 @@ public:
 
   void setOnActivate(std::function<void(const ContextMenuControlEntry&)> callback);
   void setOnDismissed(std::function<void()> callback);
+  // Refresh an open menu without recreating its parent/grab. Stable entry IDs
+  // retain keyboard selection; stale queued actions and presses are cancelled.
+  void setEntries(std::vector<ContextMenuControlEntry> entries);
+  void refreshStyle(float scale);
   void setShadowConfig(const ShellConfig::ShadowConfig& shadow);
+  // Select dropdowns reuse this host but expose a distinct registered material
+  // class. Only catalog-backed class targets are accepted.
+  void setMaterialClassTarget(std::string_view target);
 
   bool onPointerEvent(const PointerEvent& event);
   void onKeyboardEvent(const KeyboardEvent& event);
@@ -86,12 +99,17 @@ private:
   WaylandConnection& m_wayland;
   RenderContext& m_renderContext;
   std::unique_ptr<PopupSurface> m_surface;
+  AnimationManager m_animations;
+  popup_transition::Transition m_transition;
   std::unique_ptr<Node> m_sceneRoot;
+  Node* m_transitionRoot = nullptr;
   InputDispatcher m_inputDispatcher;
   ScrollViewState m_scrollState{};
   ScrollView* m_scrollView = nullptr;
   ContextMenuControl* m_menu = nullptr;
   std::size_t m_highlightedIndex = 0;
+  std::shared_ptr<std::vector<ContextMenuControlEntry>> m_entries;
+  std::uint64_t m_generation = 0;
   wl_surface* m_wlSurface = nullptr;
   wl_surface* m_pointerParentSurface = nullptr;
   bool m_pointerInside = false;
@@ -99,12 +117,22 @@ private:
   void restoreParentKeyboardInteractivity();
   void ensureHighlightedVisible();
   void requestVisualUpdate();
+  bool applyPendingStyle();
   void deferActivation(ContextMenuControlEntry entry);
   void deferClose();
 
   std::function<void(const ContextMenuControlEntry&)> m_onActivate;
   std::function<void()> m_onDismissed;
   ShellConfig::ShadowConfig m_shadowConfig;
+  std::function<void(float)> m_refreshStyle;
+  float m_contentScale = 1.0F;
+  bool m_styleDirty = false;
+  bool m_revealHighlight = false;
+  Box* m_background = nullptr;
+  RectNode* m_panelShadow = nullptr;
+  Signal<>::ScopedConnection m_styleConnection;
+  std::string m_materialClassTarget = "popup.context-menu";
+  Style::MaterialTargetRegistration m_materialRegistration;
   // Deferred popup callbacks must not dereference this after an owner (for
   // example, a plugin panel being unregistered) destroys the popup.
   std::shared_ptr<bool> m_alive = std::make_shared<bool>(true);

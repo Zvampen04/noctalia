@@ -3,6 +3,7 @@
 #include "render/core/render_styles.h"
 #include "render/core/wallpaper_types.h"
 #include "render/render_target.h"
+#include "wayland/material_scene.h"
 
 #include <chrono>
 #include <cstdint>
@@ -86,17 +87,24 @@ public:
   void setInputRegion(const std::vector<InputRect>& rects);
   void setBlurRegion(const std::vector<InputRect>& rects);
   void clearBlurRegion();
+  // Login/lock clients use only their own rendered wallpaper, including on
+  // compositors without the custom material protocol.
+  void setExternalMaterialAllowed(bool allowed);
   void setDebugName(std::string name);
 
   // Approximates a rounded rectangle as a stack of horizontal axis-aligned strips
   // suitable for `wl_region` (which has no curve primitives). The four corner radii
   // are applied independently. `stripPx` is the strip height through the corner
-  // bands; smaller is smoother but produces more rects.
+  // bands; smaller is smoother but produces more rects. `power` is the
+  // normalized superellipse exponent (2..10); 2 preserves circular corners.
   static std::vector<InputRect> tessellateRoundedRect(
-      int x, int y, int w, int h, float tlRadius, float trRadius, float brRadius, float blRadius, int stripPx = 1
+      int x, int y, int w, int h, float tlRadius, float trRadius, float brRadius, float blRadius, int stripPx = 1,
+      float power = 2.F
   );
-  static std::vector<InputRect> tessellateRoundedRect(int x, int y, int w, int h, float radius, int stripPx = 1) {
-    return tessellateRoundedRect(x, y, w, h, radius, radius, radius, radius, stripPx);
+  static std::vector<InputRect> tessellateRoundedRect(
+      int x, int y, int w, int h, float radius, int stripPx = 1, float power = 2.F
+  ) {
+    return tessellateRoundedRect(x, y, w, h, radius, radius, radius, radius, stripPx, power);
   }
   // Tessellates the same shape the rect shader rasterizes: per-corner Concave/Convex
   // curves around a logical body. (x, y, w, h) describes the BODY rect; the visual
@@ -105,13 +113,21 @@ public:
   // extend outward into the inset margin; convex corners contract the body inward.
   static std::vector<InputRect> tessellateShape(
       int x, int y, int w, int h, const CornerShapes& corners, const RectInsets& logicalInset, const Radii& radii,
-      int stripPx = 1
+      int stripPx = 1, float power = 2.F
+  );
+  // Tessellates the exact linear powerline contour used by RectProgram into
+  // wl_region strips. Horizontal contours produce horizontal strips; vertical
+  // contours produce vertical strips so all four bar edges share the same
+  // logical start/end geometry.
+  static std::vector<InputRect> tessellateSegmentContour(
+      int x, int y, int w, int h, const SegmentContour& contour, int stripPx = 1
   );
   // Tessellates a rounded rectangle rotated by `rotationRad` around its center
   // (`centerX`, `centerY`) into axis-aligned horizontal strips. When `rotationRad`
   // is zero this reduces to a plain tessellateRoundedRect call.
   static std::vector<InputRect> tessellateRotatedRoundedRect(
-      float centerX, float centerY, float width, float height, float radius, float rotationRad, int stripPx = 1
+      float centerX, float centerY, float width, float height, float radius, float rotationRad, int stripPx = 1,
+      float power = 2.F
   );
   // True when any rect covers at least one pixel of a `width` x `height` surface.
   // Rects are surface-local, so they may legitimately sit partly or fully outside.
@@ -202,6 +218,8 @@ private:
   OutputChangedCallback m_outputChangedCallback;
   wl_callback* m_frameCallback = nullptr;
   ext_background_effect_surface_v1* m_backgroundEffect = nullptr;
+  MaterialSceneSender m_materialScene;
+  bool m_externalMaterialAllowed = true;
   wp_viewport* m_viewport = nullptr;
   wp_fractional_scale_v1* m_fractionalScale = nullptr;
   std::optional<std::chrono::steady_clock::time_point> m_lastFrameAt;

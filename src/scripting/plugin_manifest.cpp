@@ -1,6 +1,7 @@
 #include "scripting/plugin_manifest.h"
 
 #include "core/input/key_chord.h"
+#include "config/config_export.h"
 #include "core/log.h"
 #include "core/toml.h" // IWYU pragma: keep
 #include "scripting/plugin_api.h"
@@ -309,20 +310,110 @@ namespace scripting {
       if (visible == nullptr) {
         return;
       }
-      ManifestVisibility vis;
-      vis.key = tableString(*visible, "key");
-      if (const auto* values = (*visible)["values"].as_array()) {
+      const auto condition = [](const toml::table& table) -> std::optional<ManifestVisibilityCondition> {
+        ManifestVisibilityCondition result;
+        result.key = tableString(table, "key");
+        const auto* values = table["values"].as_array();
+        if (values == nullptr) return std::nullopt;
         for (const auto& node : *values) {
           if (auto value = node.value<std::string>()) {
-            vis.values.push_back(*value);
+            result.values.push_back(*value);
           } else if (auto boolean = node.value<bool>()) {
-            vis.values.emplace_back(*boolean ? "true" : "false");
+            result.values.emplace_back(*boolean ? "true" : "false");
+          }
+        }
+        if (result.key.empty() || result.values.empty()) return std::nullopt;
+        return result;
+      };
+      ManifestVisibility vis;
+      if (auto legacy=condition(*visible)) vis.any.push_back(std::move(*legacy));
+      for (const auto* group : {"any", "all"}) {
+        const auto* conditions=(*visible)[group].as_array(); if (!conditions) continue;
+        auto& target=std::string_view(group)=="any" ? vis.any : vis.all;
+        for (const auto& node:*conditions) if (const auto* table=node.as_table())
+          if (auto parsed=condition(*table)) target.push_back(std::move(*parsed));
+      }
+      if (!vis.any.empty() || !vis.all.empty()) out.visibleWhen=std::move(vis);
+    }
+
+    bool parseSpringResponseGroup(const toml::table& field, ManifestField& out, std::string& error) {
+      if (!field.contains("spring_response")) return true;
+      const auto* table=field["spring_response"].as_table();
+      const auto fail=[&]{error="setting '"+out.key+"' spring_response requires three distinct numeric keys and label_key";return false;};
+      if (!table) return fail(); const auto* keys=(*table)["keys"].as_array(); if (!keys || keys->size()!=3)return fail();
+      ManifestSpringResponseGroup group; std::unordered_set<std::string> seen;
+      for(std::size_t i=0;i<3;++i){auto key=(*keys)[i].value<std::string>();if(!key||key->empty()||!seen.insert(*key).second)return fail();group.keys[i]=*key;}
+      group.labelKey=tableString(*table,"label_key");group.descriptionKey=tableString(*table,"description_key");
+      if(group.keys[0]!=out.key||group.labelKey.empty())return fail();out.springResponse=std::move(group);return true;
+    }
+
+    bool parseCurveGroup(const toml::table& field, ManifestField& out, std::string& error) {
+      if (!field.contains("curve")) return true;
+      const auto* table = field["curve"].as_table();
+      const auto fail = [&] {
+        error = "setting '" + out.key + "' curve requires four distinct keys, label_key, and paired activation strings";
+        return false;
+      };
+      if (!table) return fail();
+      const auto* keys = (*table)["keys"].as_array();
+      if (!keys || keys->size() != 4) return fail();
+      ManifestCurveGroup group;
+      std::unordered_set<std::string> seen;
+      for (std::size_t i = 0; i < group.keys.size(); ++i) {
+        const auto value = (*keys)[i].value<std::string>();
+        if (!value || value->empty() || !seen.insert(*value).second) return fail();
+        group.keys[i] = *value;
+      }
+      group.labelKey = tableString(*table, "label_key");
+      group.descriptionKey = tableString(*table, "description_key");
+      group.activationKey = tableString(*table, "activation_key");
+      group.activationValue = tableString(*table, "activation_value");
+      if (group.keys[0] != out.key || group.labelKey.empty()) return fail();
+      for (const auto* key : {"description_key", "activation_key", "activation_value"}) {
+        if (table->contains(key) && !(*table)[key].is_string()) return fail();
+      }
+      if (table->contains("activation_key") != table->contains("activation_value") ||
+          (table->contains("activation_key") && (group.activationKey.empty() || group.activationValue.empty()))) return fail();
+      out.curve = std::move(group);
+      return true;
+    }
+
+    bool validateCurveGroups(const std::vector<ManifestField>& fields, std::string& error) {
+      std::unordered_set<std::string> groupedKeys;
+      for (const auto& anchor : fields) {
+        if (!anchor.curve) continue;
+        const auto& group = *anchor.curve;
+        const auto fail = [&] {
+          error = "setting '" + anchor.key + "' curve requires unshared numeric X[0,1]/Y[-2,2] fields and a valid activation select option";
+          return false;
+        };
+        for (std::size_t i = 0; i < group.keys.size(); ++i) {
+          const auto field = std::ranges::find(fields, group.keys[i], &ManifestField::key);
+          const double low = i % 2 == 0 ? 0.0 : -2.0;
+          const double high = i % 2 == 0 ? 1.0 : 2.0;
+          if (field == fields.end() || field->type != ManifestFieldType::Double ||
+              field->minValue != low || field->maxValue != high ||
+              !groupedKeys.insert(field->key).second) return fail();
+        }
+        if (!group.activationKey.empty()) {
+          const auto field = std::ranges::find(fields, group.activationKey, &ManifestField::key);
+          if (field == fields.end() || field->type != ManifestFieldType::Select ||
+              std::ranges::none_of(field->options, [&](const auto& option) { return option.value == group.activationValue; })) return fail();
+        }
+      }
+      return true;
+    }
+    bool validateSpringResponseGroups(const std::vector<ManifestField>& fields,std::string& error) {
+      for(const auto& anchor:fields) {
+        if(!anchor.springResponse)continue;
+        for(const auto& key:anchor.springResponse->keys) {
+          const auto field=std::ranges::find(fields,key,&ManifestField::key);
+          if(field==fields.end() || (field->type!=ManifestFieldType::Double && field->type!=ManifestFieldType::Int)) {
+            error="setting '"+anchor.key+"' spring_response references a missing or nonnumeric field";return false;
           }
         }
       }
-      if (!vis.key.empty() && !vis.values.empty()) {
-        out.visibleWhen = std::move(vis);
-      }
+      return true;
     }
 
     std::optional<ManifestField>
@@ -357,6 +448,7 @@ namespace scripting {
       }
       out.descriptionKey = tableString(field, "description_key");
       out.advanced = tableBool(field, "advanced", false);
+      out.optionsFrom = tableString(field, "options_from");
       if (!parseFieldDefault(field, out, error)) {
         return std::nullopt;
       }
@@ -366,6 +458,8 @@ namespace scripting {
       if (!parseFieldOptions(field, out, error)) {
         return std::nullopt;
       }
+      if (!parseCurveGroup(field, out, error)) return std::nullopt;
+      if (!parseSpringResponseGroup(field, out, error)) return std::nullopt;
       parseFieldExtensions(field, out);
       parseFieldVisibility(field, out);
       return out;
@@ -384,6 +478,28 @@ namespace scripting {
       default:
         return false;
       }
+    }
+
+    bool routedOwnershipTypeMatches(ManifestFieldType type, const toml::node& value) {
+      switch (type) {
+      case ManifestFieldType::Bool:
+        return value.is_boolean();
+      case ManifestFieldType::Int:
+        return value.is_integer();
+      case ManifestFieldType::Double:
+        return value.is_floating_point();
+      case ManifestFieldType::String:
+      case ManifestFieldType::File:
+      case ManifestFieldType::Folder:
+      case ManifestFieldType::Glyph:
+      case ManifestFieldType::Select:
+      case ManifestFieldType::Color:
+        return value.is_string();
+      case ManifestFieldType::StringList:
+      case ManifestFieldType::StringMap:
+        return false;
+      }
+      return false;
     }
 
     bool parseEntries(
@@ -422,6 +538,10 @@ namespace scripting {
             if (const auto* settingTable = settingNode.as_table()) {
               auto field = parseField(*settingTable, manifest.pluginApiVersion, error);
               if (!field.has_value()) {
+                return false;
+              }
+              if (field->curve) {
+                error = "curve groups require plugin-level settings";
                 return false;
               }
               if (!field->key.empty()) {
@@ -485,6 +605,11 @@ namespace scripting {
               return false;
             }
             entry.panelLayerDefault = layer->get();
+          }
+          if ((*entryTable)["decorated"]) {
+            const auto* decorated=(*entryTable)["decorated"].as_boolean();
+            if (decorated==nullptr) { error="panel entry '"+entry.id+"': decorated must be a bool";return false; }
+            entry.panelDecorated=decorated->get();
           }
           if ((*entryTable)["dismiss_on_outside_click"]) {
             if (manifest.pluginApiVersion < kPanelDismissOnOutsideClickPluginApiVersion) {
@@ -561,6 +686,11 @@ namespace scripting {
               error = "panel entry '" + entry.id + R"(': persistent = true requires placement = "floating")";
               return false;
             }
+          }
+          if ((*entryTable)["directional_navigation"]) {
+            const auto* enabled = (*entryTable)["directional_navigation"].as_boolean();
+            if (enabled == nullptr) { error = "directional_navigation must be a bool"; return false; }
+            entry.panelDirectionalNavigation = enabled->get();
           }
           if ((*entryTable)["capture_keys"]) {
             if (manifest.pluginApiVersion < kPanelCaptureKeysPluginApiVersion) {
@@ -791,6 +921,91 @@ namespace scripting {
         }
       }
     }
+
+    manifest.settingsTabs = tableString(root, "settings_tabs");
+    if (!manifest.settingsTabs.empty()) {
+      const auto it = std::ranges::find(manifest.settings, manifest.settingsTabs, &ManifestField::key);
+      if (it == manifest.settings.end() || it->type != ManifestFieldType::Select || it->options.empty())
+        return fail("settings_tabs must name a nonempty plugin-level select setting");
+    }
+
+    manifest.presetActions = tableString(root, "preset_actions");
+    if (const auto* command = root.get("preset_command")) {
+      const auto* args = command->as_array();
+      if (!args || args->empty() || args->size() > 16)
+        return fail("preset_command must contain between 1 and 16 argv strings");
+      std::size_t total = 0;
+      for (const auto& node : *args) {
+        const auto arg = node.value<std::string>();
+        if (!arg || arg->empty() || arg->size() > 1024 || arg->find('\0') != std::string::npos)
+          return fail("preset_command arguments must be nonempty strings of at most 1024 bytes without NUL");
+        total += arg->size();
+        if (total > 4096) return fail("preset_command exceeds 4096 bytes");
+        manifest.presetCommand.push_back(*arg);
+      }
+    }
+    manifest.presetSelection = tableString(root, "preset_selection");
+    if (root.contains("preset_selection") && manifest.presetSelection.empty())
+      return fail("preset_selection must name a plugin-level select setting");
+    if (!manifest.presetSelection.empty()) {
+      const auto selection = std::ranges::find(manifest.settings, manifest.presetSelection, &ManifestField::key);
+      if (selection == manifest.settings.end() || selection->type != ManifestFieldType::Select)
+        return fail("preset_selection must name a plugin-level select setting");
+      if (manifest.presetCommand.empty()) return fail("preset_selection requires preset_command");
+    }
+    if (!manifest.presetActions.empty()) {
+      const auto action = std::ranges::find(manifest.settings, manifest.presetActions, &ManifestField::key);
+      if (action == manifest.settings.end() || action->type != ManifestFieldType::Select)
+        return fail("preset_actions must name a plugin-level select setting");
+    }
+    manifest.presetSections = tableStringArray(root, "preset_sections");
+    manifest.presetTabs = tableStringArray(root, "preset_tabs");
+    if (manifest.presetSections.size() > 32 || manifest.presetTabs.size() > 32)
+      return fail("Too many preset sections");
+    if (const auto* targets = root["settings_tab_targets"].as_table()) {
+      for (const auto& [key, node] : *targets) {
+        const auto target = node.value<std::string>();
+        if (!target || target->empty()) return fail("settings_tab_targets requires section names");
+        manifest.settingsTabTargets.emplace(std::string(key.str()), *target);
+      }
+    }
+
+    if (const auto* rules = root["settings_ownership"].as_array()) {
+      if (rules->size() > 64) return fail("Too many settings ownership rules");
+      for (const auto& node : *rules) {
+        const auto* rule = node.as_table();
+        if (!rule) return fail("Settings ownership must be a table");
+        auto path = tableStringArray(*rule, "path");
+        auto when = tableString(*rule, "when");
+        const auto toggle = std::ranges::find(manifest.settings, when, &ManifestField::key);
+        if (path.empty() || path.size() > 8 || toggle == manifest.settings.end() || toggle->type != ManifestFieldType::Bool)
+          return fail("Settings ownership requires a path and a boolean plugin setting");
+        auto setting = tableString(*rule, "setting");
+        if (rule->contains("setting")) {
+          const auto source = std::ranges::find(manifest.settings, setting, &ManifestField::key);
+          if (setting.empty() || source == manifest.settings.end() || std::ranges::find(path, "*") != path.end())
+            return fail("Routed ownership requires an exact native path and a plugin setting");
+          const auto defaults = config_export::serialize(Config{});
+          const toml::node* value = &defaults;
+          for (const auto& key : path) value = value && value->is_table() ? value->as_table()->get(key) : nullptr;
+          if (!value || path[0] == "plugin_settings" || !routedOwnershipTypeMatches(source->type, *value))
+            return fail("Routed ownership path and plugin setting must have the same supported scalar type");
+        }
+        if (std::ranges::any_of(manifest.settingsOwnership, [&](const auto& existing) { return existing.path == path; }))
+          return fail("Duplicate settings ownership path");
+        manifest.settingsOwnership.push_back({std::move(path), std::move(when), std::move(setting)});
+      }
+    }
+    for (const auto& field : manifest.settings) {
+      if (field.optionsFrom.empty()) continue;
+      const auto source = std::ranges::find(manifest.settings, field.optionsFrom, &ManifestField::key);
+      if (field.type != ManifestFieldType::Select || source == manifest.settings.end() || source->type != ManifestFieldType::StringList)
+        return fail("options_from requires a plugin-level string-list setting");
+    }
+
+    std::string curveError;
+    if (!validateCurveGroups(manifest.settings, curveError)) return fail(curveError);
+    if (!validateSpringResponseGroups(manifest.settings, curveError)) return fail(curveError);
 
     std::unordered_set<std::string> seenEntryIds;
     for (const auto& entry : manifest.entries) {

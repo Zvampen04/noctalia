@@ -1,4 +1,7 @@
 #include "shell/settings/settings_registry.h"
+#include "shell/settings/material_shape_setting.h"
+#include "shell/settings/bar_presentation_setting.h"
+#include "shell/settings/material_field_setting.h"
 
 #include "config/config_types.h"
 #include "config/schema/config_schema.h"
@@ -9,15 +12,19 @@
 #include "i18n/i18n.h"
 #include "shell/bar/widget_gesture.h"
 #include "shell/bar/widget_gesture_defaults.h"
+#include "shell/bar/bar_material_target.h"
+#include "shell/settings/custom_effect_asset_service.h"
 #include "shell/control_center/control_center_panel.h"
 #include "shell/control_center/shortcut_registry.h"
 #include "shell/settings/color_spec_picker.h"
 #include "shell/settings/font_weight_catalog.h"
+#include "shell/settings/widget_settings_registry.h"
 #include "shell/wallpaper/wallpaper_paths.h"
 #include "system/sysmon_threshold_profile.h"
 #include "theme/builtin_palettes.h"
 #include "theme/builtin_templates.h"
 #include "ui/app_icon_colorization.h"
+#include "ui/material_target_catalog.h"
 #include "util/file_utils.h"
 #include "util/string_utils.h"
 
@@ -30,7 +37,9 @@
 #include <format>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
+#include <type_traits>
 
 namespace settings {
   namespace {
@@ -83,7 +92,7 @@ namespace settings {
       return defaultKeybindSet(action);
     }
 
-    constexpr std::array<SettingsSectionDescriptor, 22> kSettingsSections{{
+    constexpr std::array<SettingsSectionDescriptor, 21> kSettingsSections{{
         {SettingsSection::Appearance, "appearance", "adjustments-horizontal"},
         {SettingsSection::Wallpaper, "wallpaper", "paint"},
         {SettingsSection::Templates, "templates", "color-swatch"},
@@ -94,7 +103,6 @@ namespace settings {
         {SettingsSection::ControlCenter, "control-center", "adjustments"},
         {SettingsSection::Notifications, "notifications", "bell"},
         {SettingsSection::Osd, "osd", "message-circle"},
-        {SettingsSection::Screenshot, "screenshot", "screenshot"},
         {SettingsSection::Shell, "shell", "app-window"},
         {SettingsSection::Keybinds, "keybinds", "keyboard"},
         {SettingsSection::Security, "security", "shield-lock"},
@@ -120,11 +128,12 @@ namespace settings {
     // constant the parser clamps with. This keeps the UI range and the config clamp
     // one source. `integerValue` (write as int64) stays explicit: it is a UI/write
     // choice, not implied by the range's numeric type (e.g. transition_duration).
+    // The schema step is optional UI metadata; omit it to use a one-unit step.
     template <typename V, typename T>
     SliderSetting sliderFor(V value, const noctalia::config::schema::Range<T>& range, bool integerValue) {
       return SliderSetting{
           static_cast<double>(value), static_cast<double>(range.min.value()), static_cast<double>(range.max.value()),
-          static_cast<double>(range.step.value()), integerValue
+          static_cast<double>(range.step.value_or(T{1})), integerValue
       };
     }
 
@@ -554,6 +563,233 @@ namespace settings {
         "locale translation", true
     ));
     entries.push_back(makeEntry(
+        SettingsSection::Appearance, "interface", "Surface material",
+        "Flat surfaces, raised plateaus, optical glass or illustrated linework. Uses the current palette.",
+        {"shell", "surface_material"}, enumSelect(kShellSurfaceMaterials, cfg.shell.surfaceMaterial),
+        "material depth neumorphism soft raised inset"
+    ));
+#include "shell/settings/control_settings_entries.inc"
+    entries.push_back(makeEntry(
+        SettingsSection::Appearance, "material-Plateau", "Neumorphic shape",
+        "Flat, concave and convex faces use outer shadows; Pressed uses inset shadows. Selecting a shape preserves relief depth (or starts at 1px from zero). Custom numeric values remain editable below.",
+        {"shell", "material", "face_curvature"},
+        materialShapeSetting(cfg.shell.material.elevation, cfg.shell.material.face_curvature,
+                             {"shell", "material", "elevation"}),
+        "neumorphism flat concave convex pressed shape", true));
+#define MATERIAL_FIELD(member, key, initial, low, high, step, label, group) \
+    entries.push_back(makeEntry( \
+        SettingsSection::Appearance, "material-" group, label, \
+        std::string(materialFieldDescription(#key)), \
+        {"shell", "material", #key}, materialFieldSetting(#key, cfg.shell.material.key, low, high, step), \
+        "material " group, true));
+#include "material/fields.def"
+#undef MATERIAL_FIELD
+    // One editor exposes the selected scope; the complete override collection is
+    // exported separately so hidden/custom targets remain part of a profile.
+    {
+      const auto& overrides = cfg.shell.materialOverrides;
+      const std::string scope = Style::materialScope(overrides, cfg.shell.materialOverrideEditorScope)
+          ? cfg.shell.materialOverrideEditorScope : "roles";
+      SelectSetting scopeSelect;
+      scopeSelect.options = {{.value = "roles", .label = "Semantic role"},
+                             {.value = "families", .label = "Control family"},
+                             {.value = "surfaces", .label = "Individual surface"}};
+      scopeSelect.selectedValue = scope;
+      scopeSelect.linkedPath = {"shell", "material_override_editor_target"};
+      scopeSelect.groupedCommit = [](std::string_view value, const std::vector<std::string>& path) {
+        const std::string target = value == "roles" ? "surface" : value == "families" ? "button" : "bar";
+        return std::vector<std::pair<std::vector<std::string>, ConfigOverrideValue>>{
+            {path, ConfigOverrideValue{std::string(value)}},
+            {{"shell", "material_override_editor_target"}, ConfigOverrideValue{target}}};
+      };
+      entries.push_back(makeEntry(
+          SettingsSection::Appearance, "material-overrides", "Override scope",
+          "Material inheritance: global settings, semantic role, control family, individual surface, then interaction state.",
+          {"shell", "material_override_editor_scope"}, std::move(scopeSelect), "material inheritance advanced", true));
+
+      const auto* selectedScope = Style::materialScope(overrides, scope);
+      std::vector<Style::MaterialTarget> targets;
+      const auto appendTargets = [&targets](const auto& values) {
+        targets.insert(targets.end(), values.begin(), values.end());
+      };
+      if (scope == "roles") appendTargets(Style::kMaterialRoles);
+      else if (scope == "families") appendTargets(Style::kMaterialFamilies);
+      else appendTargets(Style::kMaterialSurfaces);
+      SelectSetting targetSelect;
+      for (const auto& item : targets)
+        targetSelect.options.push_back({.value = std::string(item.id), .label = std::string(item.label)});
+      if (scope == "surfaces") {
+        const auto appendSurface = [&targetSelect](std::string id, std::string label) {
+          if (std::ranges::none_of(targetSelect.options, [&id](const auto& option) { return option.value == id; }))
+            targetSelect.options.push_back({.value = std::move(id), .label = std::move(label)});
+        };
+        for (const auto& item : Style::MaterialTargetCatalog::instance().snapshot())
+          appendSurface(item.descriptor.id, item.descriptor.label);
+        for (const auto& bar : cfg.bars) {
+          appendSurface(noctalia::bar::barMaterialTarget(bar.name), "Bar: " + bar.name);
+          for (const auto& section : bar.sections)
+            appendSurface(noctalia::bar::barSectionMaterialTarget(bar.name, section.id),
+                          "Section: " + bar.name + " / " + section.id);
+          std::unordered_map<std::string, std::size_t> widgetLabelTotals;
+          for (const auto& placement : bar.widgetPlacements) {
+            ++widgetLabelTotals[widgetReferenceInfo(cfg, placement.widget, false).title];
+          }
+          std::unordered_map<std::string, std::size_t> widgetLabelOccurrences;
+          for (const auto& placement : bar.widgetPlacements) {
+            const std::string widgetLabel = widgetReferenceInfo(cfg, placement.widget, false).title;
+            const std::size_t occurrence = ++widgetLabelOccurrences[widgetLabel];
+            std::string placementLabel = "Widget: " + widgetLabel + " — " + bar.name;
+            if (const std::size_t total = widgetLabelTotals[widgetLabel]; total > 1) {
+              placementLabel += std::format(" ({} of {})", occurrence, total);
+            }
+            appendSurface(noctalia::bar::barWidgetMaterialTarget(placement.id),
+                          std::move(placementLabel));
+          }
+        }
+      }
+      std::string target = cfg.shell.materialOverrideEditorTarget;
+      if (std::ranges::none_of(targetSelect.options, [&target](const auto& option) { return option.value == target; }))
+        target = targetSelect.options.front().value;
+      targetSelect.selectedValue = target;
+      entries.push_back(makeEntry(
+          SettingsSection::Appearance, "material-overrides", "Override target",
+          "Choose the surface or control whose material should differ. Surface values show the root context; nested controls can inherit different role and family defaults.",
+          {"shell", "material_override_editor_target"}, std::move(targetSelect), "material override target", true));
+      auto inheritedOverrides = overrides;
+      Style::materialScope(inheritedOverrides, scope)->erase(target);
+      auto base = cfg.shell.material.parameters();
+      base.primitive = static_cast<noctalia::material::Primitive>(cfg.shell.surfaceMaterial);
+      std::string_view role;
+      std::string_view family;
+      std::string dynamicRole;
+      std::string dynamicFamily;
+      const auto metadata = std::ranges::find(targets, target, &Style::MaterialTarget::id);
+      if (metadata != targets.end()) {
+        role = metadata->role;
+        family = metadata->family;
+      } else if (const auto registered = Style::MaterialTargetCatalog::instance().find(target)) {
+        dynamicRole = registered->descriptor.role;
+        dynamicFamily = registered->descriptor.family;
+        role = dynamicRole;
+        family = dynamicFamily;
+      } else if (scope == "surfaces" && target.starts_with("bar.widget.")) {
+        role = "surface";
+        family = "bar-widget";
+      } else if (scope == "surfaces" && target.starts_with("bar.section.")) {
+        role = "surface";
+        family = "container";
+      } else if (scope == "surfaces" && target.starts_with("bar.instance.")) {
+        role = "surface";
+        family = "bar";
+      }
+      if (scope == "roles") role = target;
+      if (scope == "families") family = target;
+      const auto inherited = Style::resolveMaterial(base, inheritedOverrides, role, family,
+                                                    scope == "surfaces" ? std::string_view(target) : std::string_view{});
+      const Style::MaterialOverride emptyPatch;
+      const auto found = selectedScope->find(target);
+      const auto& patch = found == selectedScope->end() ? emptyPatch : found->second;
+      const auto targetPath = [&scope, &target](std::string key) {
+        return std::vector<std::string>{"shell", "material_overrides", scope, target, std::move(key)};
+      };
+      SelectSetting primitive;
+      primitive.options = {
+          {.value = "", .label = "Inherit (" + std::string(Style::materialPrimitiveName(inherited.primitive)) + ")"},
+          {.value = "flat", .label = "Flat"},
+          {.value = "neumorphic", .label = "Raised plateau"},
+          {.value = "liquid_glass", .label = "Optical glass"},
+          {.value = "illustrated", .label = "Illustrated"}};
+      primitive.selectedValue = patch.primitive ? std::string(Style::materialPrimitiveName(*patch.primitive)) : "";
+      primitive.clearOnEmpty = true;
+      entries.push_back(makeEntry(
+          SettingsSection::Appearance, "material-overrides", "Material primitive",
+          "Primitive selection and numeric parameters inherit independently. Choose Inherit or Reset to remove this override.",
+          targetPath("primitive"), std::move(primitive), "material primitive inherit reset", true));
+      entries.push_back(makeEntry(
+          SettingsSection::Appearance, "material-overrides", "Custom background effect",
+          patch.customBackground
+              ? "Imported effects replace this target's background only. Rounded clipping, borders, input and foreground content remain native."
+              : "Import a bounded Noctalia effect file for this target, or keep the inherited native material.",
+          targetPath("custom_effect"),
+          CustomEffectSetting{
+              .targetId = scope + "." + target,
+              .stableId = patch.customBackground.value_or(""),
+              .digest = patch.customBackgroundDigest.value_or(""),
+              .sampleRadiusPx = patch.customSampleRadiusPx.value_or(0.0F),
+              .diagnostic = [&]() {
+                if (!patch.customBackground) return std::string{};
+                if (auto error = custom_effect_assets::diagnostic(*patch.customBackground); !error.empty())
+                  return error;
+                if (env.customEffectStatus) {
+                  if (const auto status = env.customEffectStatus(*patch.customBackground);
+                      status && !status->log.empty()) {
+                    const auto digestLabel = [](std::string_view digest) {
+                      return digest.empty() ? std::string("none")
+                                            : std::string(digest.substr(0, std::min<std::size_t>(12, digest.size())));
+                    };
+                    if (status->active && status->activeDigest != status->requestedDigest) {
+                      return std::format(
+                          "Requested digest {} failed to compile; live renderer is using previous program {}. {}",
+                          digestLabel(status->requestedDigest), digestLabel(status->activeDigest), status->log
+                      );
+                    }
+                    return std::format(
+                        "Requested digest {} failed to compile; using the native material fallback. {}",
+                        digestLabel(status->requestedDigest), status->log
+                    );
+                  }
+                }
+                return std::string{};
+              }(),
+          },
+          "custom shader effect glsl import diagnostics reset background", true));
+      if (patch.customBackground) {
+        entries.push_back(makeEntry(
+            SettingsSection::Appearance, "material-overrides", "Effect sample radius",
+            "Maximum sampling distance. Native rendering samples earlier pixels in Noctalia's framebuffer; an armed compositor-v4 effect samples its desktop snapshot.",
+            targetPath("custom_sample_radius"),
+            SliderSetting{patch.customSampleRadiusPx.value_or(0.0F), 0.0F,
+                          Style::kCustomEffectSampleRadiusMax, 1.0F, false},
+            "custom shader sample radius pixels", true));
+        constexpr std::string_view components = "xyzw";
+        for (std::size_t index = 0; index < patch.customParameters.size(); ++index) {
+          const std::string parameter = "p" + std::to_string(index / 4) + "." + components[index % 4];
+          entries.push_back(makeEntry(
+              SettingsSection::Appearance, "material-effect-parameters", "Effect parameter " + parameter,
+              "Effect-defined value. Reset restores zero or an inherited target value.",
+              targetPath("custom_p" + std::to_string(index / 4) + "_" + components[index % 4]),
+              SliderSetting{patch.customParameters[index].value_or(0.0F),
+                            Style::kCustomEffectParameterMin, Style::kCustomEffectParameterMax, 0.01F, false},
+              "custom shader parameter " + parameter, true));
+        }
+      }
+      entries.push_back(makeEntry(
+          SettingsSection::Appearance, "material-overrides", "Neumorphic shape",
+          "Applies face curvature and relief direction to this target. Reset removes both local shape values and restores inheritance.",
+          targetPath("face_curvature"),
+          materialShapeSetting(patch.elevation.value_or(inherited.plateau.elevation),
+                               patch.face_curvature.value_or(inherited.plateau.faceCurvature), targetPath("elevation")),
+          "neumorphism shape override inherit flat concave convex pressed", true));
+#define MATERIAL_FIELD(member, key, initial, low, high, step, label, group) \
+      entries.push_back(makeEntry( \
+          SettingsSection::Appearance, "material-override-" group, label, \
+          std::format("Inherited: {:.3g}. {} Reset removes the local value and restores inheritance.", \
+                      inherited.member, patch.key ? "This target has an explicit override." : "Currently inherited."), \
+          targetPath(#key), materialFieldSetting(#key, patch.key.value_or(inherited.member), low, high, step), \
+          "material override " group " inherit reset", true));
+#include "material/fields.def"
+#undef MATERIAL_FIELD
+    }
+    // The same registry defines serialization, bounds and live geometry.
+#define STYLE_TOKEN(type, member, key, initial, low, high, step, label, group) \
+    entries.push_back(makeEntry( \
+        SettingsSection::Appearance, "design-" group, label, \
+        "Shared interface token. Changes preview on the active desktop.", \
+        {"shell", "design", key}, SliderSetting{cfg.shell.design.member, low, high, step, std::is_integral_v<type>}, \
+        "design tokens geometry typography spacing " group, true));
+#include "ui/style_tokens.def"
+#undef STYLE_TOKEN
+    entries.push_back(makeEntry(
         SettingsSection::Appearance, "interface", tr("settings.schema.appearance.corner-roundness.label"),
         tr("settings.schema.appearance.corner-roundness.description"), {"shell", "corner_radius_scale"},
         sliderFor(cfg.shell.cornerRadiusScale, noctalia::config::schema::kCornerRadiusScaleRange, false),
@@ -589,10 +825,125 @@ namespace settings {
         ToggleSetting{cfg.accessibility.highContrast}, "accessibility high contrast visually impaired"
     ));
     entries.push_back(makeEntry(
-        SettingsSection::Appearance, "motion", tr("settings.schema.appearance.animations.label"),
-        tr("settings.schema.appearance.animations.description"), {"shell", "animation", "enabled"},
-        ToggleSetting{cfg.shell.animation.enabled}, "motion"
+        SettingsSection::Appearance, "settings", "Connected settings rows",
+        "Group controls with large outer corners and small corners between adjacent rows.",
+        {"shell", "settings_connected_rows"}, ToggleSetting{cfg.shell.settingsConnectedRows}, "settings layout connected grouping"
     ));
+    entries.push_back(makeEntry(SettingsSection::ControlCenter, "media", "Album backdrop strength",
+        "Amount of album color behind the compact media card.", {"control_center", "media", "backdrop_opacity"},
+        sliderFor(cfg.controlCenter.media.backdropOpacity, noctalia::config::schema::Range<float>{0.F,1.F,.01F}, false), "media artwork backdrop"));
+    entries.push_back(makeEntry(
+        SettingsSection::ControlCenter, "media", "Media card on quick settings",
+        "Auto hides the duplicate card when an enabled bar already contains a media widget.",
+        {"control_center", "media", "home_visibility"},
+        enumSelect(kControlCenterMediaHomeVisibilities, cfg.controlCenter.media.homeVisibility),
+        "media music duplicate quick settings bar widget"
+    ));
+    entries.push_back(makeEntry(SettingsSection::Appearance, "terminal", "Style terminal backgrounds",
+        "Apply this theme's surface policy to integrated Ghostty windows. A separate include is available for Kitty. Text remains opaque.",
+        {"shell", "terminal_appearance", "enabled"}, ToggleSetting{cfg.shell.terminalAppearance.enabled}, "terminal glass transparency"));
+    entries.push_back(makeEntry(SettingsSection::Appearance, "terminal", "Terminal background opacity",
+        "Lower values reveal the desktop without fading terminal text.",
+        {"shell", "terminal_appearance", "background_opacity"}, sliderFor(cfg.shell.terminalAppearance.backgroundOpacity,
+        noctalia::config::schema::Range<float>{.1F,1.F,.01F}, false), "terminal glass opacity"));
+    entries.push_back(makeEntry(SettingsSection::Appearance, "terminal", "Request terminal background blur",
+        "Request blur where supported. On Hyprland, enable compositor blur as well.",
+        {"shell", "terminal_appearance", "background_blur"}, ToggleSetting{cfg.shell.terminalAppearance.backgroundBlur}, "terminal glass blur"));
+    entries.push_back(makeEntry(SettingsSection::Appearance, "terminal", "Transparent application cells",
+        "Let full-screen terminal applications use the same background opacity.",
+        {"shell", "terminal_appearance", "opacity_cells"}, ToggleSetting{cfg.shell.terminalAppearance.opacityCells}, "terminal vim background cells"));
+    entries.push_back(makeEntry(SettingsSection::Appearance, "terminal", "Terminal horizontal padding",
+        "Content inset in points for newly opened Ghostty terminals. Minus one preserves the application's setting.",
+        {"shell", "terminal_appearance", "padding_x"}, SliderSetting{float(cfg.shell.terminalAppearance.paddingX),-1,128,1,true}, "terminal padding spacing"));
+    entries.push_back(makeEntry(SettingsSection::Appearance, "terminal", "Terminal vertical padding",
+        "Content inset in points for newly opened Ghostty terminals. Minus one preserves the application's setting.",
+        {"shell", "terminal_appearance", "padding_y"}, SliderSetting{float(cfg.shell.terminalAppearance.paddingY),-1,128,1,true}, "terminal padding spacing"));
+    entries.push_back(makeEntry(SettingsSection::Appearance, "terminal", "Terminal font size",
+        "Ghostty font size in points. Zero preserves the application's setting.",
+        {"shell", "terminal_appearance", "font_size"}, SliderSetting{cfg.shell.terminalAppearance.fontSize,0,48,.5F,false}, "terminal font typography"));
+    entries.push_back(makeEntry(SettingsSection::Appearance, "settings", "Compact settings chrome",
+        "Place search and window actions in one row. Filters remain available from the adjustments button.",
+        {"shell", "settings_compact_chrome"}, ToggleSetting{cfg.shell.settingsCompactChrome}, "settings compact search header"));
+    entries.push_back(makeEntry(SettingsSection::Appearance, "settings", "Settings window width",
+        "Preferred logical width on opening. Zero sizes the window automatically; the display bounds still apply.",
+        {"shell", "settings_window_width"}, sliderFor(cfg.shell.settingsWindowWidth, noctalia::config::schema::Range<std::int64_t>{0,3840,1}, true), "settings width"));
+    entries.push_back(makeEntry(SettingsSection::Appearance, "settings", "Settings window height",
+        "Preferred logical height on opening. Zero sizes the window automatically.",
+        {"shell", "settings_window_height"}, sliderFor(cfg.shell.settingsWindowHeight, noctalia::config::schema::Range<std::int64_t>{0,2160,1}, true), "settings height"));
+    entries.push_back(makeEntry(SettingsSection::Appearance, "settings", "Settings surface",
+        "Palette role used for the settings window and its navigation surface.",
+        {"shell", "settings_background"}, colorSpecPicker(cfg.shell.settingsBackground), "settings background role"));
+    {
+      entries.push_back(makeEntry(SettingsSection::Appearance, "caret", "Apply caret style to applications",
+          "Preview compatible editor and terminal settings. Save keeps the preset; Cancel restores its previous style.",
+          {"shell", "caret_app_integration"}, ToggleSetting{cfg.shell.caretAppIntegration}, "caret editor application integration"));
+      entries.push_back(makeEntry(SettingsSection::Appearance, "caret", "Manage existing application caret preferences",
+          "Allow this integration to update existing caret settings. Other application settings are preserved.",
+          {"shell", "caret_adopt_existing"}, ToggleSetting{cfg.shell.caretAdoptExisting}, "caret editor existing preferences"));
+      SelectSetting caretShape;
+      caretShape.options = {{.value="bar", .label="Bar"}, {.value="block", .label="Block outline"},
+                            {.value="underline", .label="Underline"}};
+      caretShape.selectedValue = std::string(caretShapeName(cfg.shell.caret.shape));
+      entries.push_back(makeEntry(SettingsSection::Appearance, "caret", "Text caret shape",
+          "Shape of the insertion marker in native text fields. The block outline keeps letters visible.",
+          {"shell", "caret", "shape"}, std::move(caretShape), "text cursor caret input shape"));
+      entries.push_back(makeEntry(SettingsSection::Appearance, "caret", "Text caret width",
+          "Stroke thickness in logical pixels; block outlines leave the center open.", {"shell", "caret", "width_px"},
+          sliderFor(cfg.shell.caret.widthPx, noctalia::config::schema::Range<float>{1.0F, 8.0F, 0.25F}, false), "caret thickness"));
+      entries.push_back(makeEntry(SettingsSection::Appearance, "caret", "Blink text caret",
+          "Blink focused native text carets. Global animation None always keeps them solid.",
+          {"shell", "caret", "blink"}, ToggleSetting{cfg.shell.caret.blink}, "text cursor blink solid"));
+      entries.push_back(makeEntry(SettingsSection::Appearance, "caret", "Text caret blink interval",
+          "Milliseconds for each visible or hidden phase.", {"shell", "caret", "blink_interval_ms"},
+          sliderFor(cfg.shell.caret.blinkIntervalMs, noctalia::config::schema::Range<float>{100.0F, 2000.0F, 10.0F}, false), "caret blink timing"));
+      entries.push_back(makeEntry(SettingsSection::Appearance, "caret", "Text caret movement",
+          "Movement duration in milliseconds; zero is immediate. Typing and IME placement always update immediately.",
+          {"shell", "caret", "motion_ms"},
+          sliderFor(cfg.shell.caret.motionMs, noctalia::config::schema::Range<float>{0.0F, 400.0F, 10.0F}, false), "caret movement animation"));
+    }
+    {
+      SelectSetting motion;
+      motion.options = {{.value="native", .label="Component curves"},
+                        {.value="expressive", .label="Expressive — No bounce"},
+                        {.value="linear", .label="Linear"},
+                        {.value="custom", .label="Custom curve"},
+                        {.value="none", .label="No animations"}};
+      constexpr const char* names[] = {"native", "expressive", "linear", "custom"};
+      motion.selectedValue = cfg.shell.animation.enabled ? names[static_cast<int>(cfg.shell.animation.style)] : "none";
+      motion.linkedPath = {"shell", "animation", "enabled"};
+      motion.linkedBooleanValues = std::pair{std::string("none"), std::string(names[static_cast<int>(cfg.shell.animation.style)])};
+      motion.groupedCommit = [](std::string_view value, const std::vector<std::string>& path) {
+        std::vector<std::pair<std::vector<std::string>, ConfigOverrideValue>> changes;
+        if (value != "none" && !parseMotionStyle(value)) return changes;
+        changes.emplace_back(std::vector<std::string>{"shell", "animation", "enabled"}, value != "none");
+        if (value != "none") changes.emplace_back(path, std::string(value));
+        return changes;
+      };
+      entries.push_back(makeEntry(SettingsSection::Appearance, "motion", "Animation style",
+          "Component curves preserve individual control settings. Global styles apply one shared curve.",
+          {"shell", "animation", "style"}, std::move(motion), "motion easing linear expressive custom none"));
+      CurveSetting curve;
+      curve.value = {cfg.shell.animation.curveX1, cfg.shell.animation.curveY1,
+                     cfg.shell.animation.curveX2, cfg.shell.animation.curveY2};
+      curve.stylePath = {"shell", "animation", "style"};
+      curve.initialStyle = names[static_cast<int>(cfg.shell.animation.style)];
+      constexpr const char* keys[] = {"curve_x1", "curve_y1", "curve_x2", "curve_y2"};
+      constexpr const char* labels[] = {"First handle X", "First handle Y", "Second handle X", "Second handle Y"};
+      for (std::size_t i = 0; i < curve.paths.size(); ++i) curve.paths[i] = {"shell", "animation", keys[i]};
+      entries.push_back(makeEntry(SettingsSection::Appearance, "motion", "Custom animation curve",
+          "Drag either handle, or use 1/2 and arrow keys. X is time; Y is progress. Editing selects Custom.",
+          curve.paths[0], curve, "bezier graph curve editor handles easing"));
+      for (std::size_t i = 0; i < curve.paths.size(); ++i) {
+        SliderSetting coordinate{curve.value[i], i % 2 == 0 ? 0.0 : -2.0, i % 2 == 0 ? 1.0 : 2.0, .01, false};
+        coordinate.linkedCommit = [](double) {
+          return std::vector<std::pair<std::vector<std::string>, ConfigOverrideValue>>{
+            {{"shell", "animation", "style"}, std::string("custom")}};
+        };
+        entries.push_back(makeEntry(SettingsSection::Appearance, "motion", labels[i],
+            i % 2 == 0 ? "Time coordinate, from 0 to 1." : "Progress coordinate; values beyond 0–1 allow overshoot.",
+            curve.paths[i], coordinate, "bezier coordinates numeric curve", true));
+      }
+    }
     entries.push_back(makeEntry(
         SettingsSection::Appearance, "motion", tr("settings.schema.appearance.animation-speed.label"),
         tr("settings.schema.appearance.animation-speed.description"), {"shell", "animation", "speed"},
@@ -635,6 +986,16 @@ namespace settings {
     ));
 
     // Wallpaper
+    entries.push_back(makeEntry(
+        SettingsSection::Wallpaper, "general", tr("settings.schema.wallpaper.foreground-masks.label"),
+        tr("settings.schema.wallpaper.foreground-masks.description"), {"wallpaper", "foreground_masks"},
+        StringMapSetting{
+            .entries = cfg.wallpaper.foregroundMasks,
+            .suggestedKeys = {},
+            .keyPlaceholder = tr("settings.schema.wallpaper.foreground-masks.wallpaper-path"),
+            .valuePlaceholder = tr("settings.schema.wallpaper.foreground-masks.mask-path"),
+        }, "foreground depth occlusion mask behind clock widgets"
+    ));
     entries.push_back(makeEntry(
         SettingsSection::Wallpaper, "general", tr("settings.schema.shared.enabled.label"),
         tr("settings.schema.wallpaper.enabled.description"), {"wallpaper", "enabled"},
@@ -1126,6 +1487,42 @@ namespace settings {
           std::move(anchorBarSelect), "anchor attach bar panel wallpaper launcher"
       ));
     }
+    {
+      SelectSetting transition;
+      transition.options = {{.value="true", .label="Soft body / animated geometry"},
+                            {.value="false", .label="Rigid panel"}};
+      transition.selectedValue = cfg.shell.panel.attachedMorph ? "true" : "false";
+      transition.valueType = SelectValueType::Boolean;
+      entries.push_back(makeEntry(SettingsSection::Panels, "motion", "Panel transition",
+          "Choose continuous surface growth or translation of a fixed panel shape.",
+          {"shell", "panel", "attached_morph"}, std::move(transition), "soft body morph rigid geometry reveal"));
+    }
+    entries.push_back(makeEntry(
+        SettingsSection::Panels, "motion", "Initial panel width",
+        "Starting span along the bar, as a fraction of the final size.",
+        {"shell", "panel", "attached_start_width"}, SliderSetting{cfg.shell.panel.attachedStartWidth, 0, 1, .01, false}, "morph span"
+    ));
+    entries.push_back(makeEntry(
+        SettingsSection::Panels, "motion", "Shoulder growth",
+        "Lower values form the curved junction earlier during opening.",
+        {"shell", "panel", "attached_corner_growth"}, SliderSetting{cfg.shell.panel.attachedCornerGrowth, .1, 2, .05, false}, "morph softness corners"
+    ));
+    entries.push_back(makeEntry(
+        SettingsSection::Panels, "motion", "Content travel",
+        "How far panel contents move while the surrounding surface grows.",
+        {"shell", "panel", "attached_content_travel"}, SliderSetting{cfg.shell.panel.attachedContentTravel, 0, 1, .01, false}, "morph slide"
+    ));
+    entries.push_back(makeEntry(
+        SettingsSection::Panels, "motion", "Attached panel duration",
+        "Opening and closing time in milliseconds; zero is immediate. Global speed also applies.",
+        {"shell", "panel", "attached_duration_ms"}, SliderSetting{cfg.shell.panel.attachedDurationMs, 0, 2000, 10, true}, "morph duration timing"
+    ));
+    entries.push_back(makeEntry(
+        SettingsSection::Panels, "general", "Quick settings",
+        "Enable the compact GNOME-derived connection, sound, brightness and session panel. Glass enables it by default.",
+        {"shell", "panel", "quick_settings_enabled"}, ToggleSetting{cfg.shell.panel.quickSettingsEnabled},
+        "quick settings compact glass network bluetooth volume brightness"
+    ));
     entries.push_back(makeEntry(
         SettingsSection::Panels, "general", tr("settings.schema.panels.floating-layer.label"),
         tr("settings.schema.panels.floating-layer.description"), {"shell", "panel", "floating_layer"},
@@ -1218,6 +1615,30 @@ namespace settings {
       return e;
     };
 
+    entries.push_back(makeEntry(
+        SettingsSection::Launcher, "launcher", "Launcher width",
+        "Preferred logical width, constrained by available output space.", {"shell", "launcher", "width"},
+        sliderFor(cfg.shell.launcher.width, noctalia::config::schema::kLauncherWidthRange, true),
+        "launcher size grid rows layout"
+    ));
+    entries.push_back(makeEntry(
+        SettingsSection::Launcher, "launcher", "Launcher maximum height",
+        "Preferred logical height; visible rows can reduce the viewport.", {"shell", "launcher", "height"},
+        sliderFor(cfg.shell.launcher.height, noctalia::config::schema::kLauncherHeightRange, true),
+        "launcher size grid rows layout"
+    ));
+    entries.push_back(makeEntry(
+        SettingsSection::Launcher, "launcher", "App grid columns",
+        "Columns in app grid mode. Remaining apps stay accessible by scrolling.", {"shell", "launcher", "grid_columns"},
+        sliderFor(cfg.shell.launcher.gridColumns, noctalia::config::schema::kLauncherGridColumnsRange, true),
+        "launcher size grid rows layout"
+    ));
+    entries.push_back(makeEntry(
+        SettingsSection::Launcher, "launcher", "Visible result rows",
+        "Zero uses maximum height. Otherwise limits list or grid viewport rows, within maximum height; all results remain scrollable.", {"shell", "launcher", "visible_rows"},
+        sliderFor(cfg.shell.launcher.visibleRows, noctalia::config::schema::kLauncherVisibleRowsRange, true),
+        "launcher size grid rows layout"
+    ));
     entries.push_back(makeEntry(
         SettingsSection::Launcher, "launcher", tr("settings.schema.panels.placement-launcher.label"),
         tr("settings.schema.panels.placement-launcher.description"), {"shell", "panel", "launcher_placement"},
@@ -1389,6 +1810,73 @@ namespace settings {
       ));
     }
     entries.push_back(makeEntry(
+        SettingsSection::ControlCenter, "layout", tr("settings.schema.panels.control-center-literal-width.label"),
+        tr("settings.schema.panels.control-center-literal-width.description"), {"control_center", "literal_width"},
+        ToggleSetting{cfg.controlCenter.literalWidth}, "size exact literal width"
+    ));
+    entries.push_back(makeEntry(
+        SettingsSection::ControlCenter, "layout", "Compact source panels",
+        "Open media, calendar and quick controls as separate compact panels.",
+        {"control_center", "compact_sections"}, ToggleSetting{cfg.controlCenter.compactSections}, "island panel compact"
+    ));
+    entries.push_back(makeEntry(
+        SettingsSection::ControlCenter, "layout", "Quick controls height", "Logical panel height.",
+        {"control_center", "compact_height"}, SliderSetting{cfg.controlCenter.compactHeight, 64, 1600, 1, true}, "height"
+    ));
+    entries.push_back(makeEntry(
+        SettingsSection::ControlCenter, "calendar", "Center today in week strip", "Compact calendar presentation.",
+        {"control_center", "calendar", "center_today"}, ToggleSetting{cfg.controlCenter.calendarTab.centerToday}, "week strip"
+    ));
+    entries.push_back(makeEntry(
+        SettingsSection::ControlCenter, "calendar", "Fade week-strip edges", "Compact calendar presentation.",
+        {"control_center", "calendar", "fade_edges"}, ToggleSetting{cfg.controlCenter.calendarTab.fadeEdges}, "week strip"
+    ));
+    entries.push_back(makeEntry(
+        SettingsSection::ControlCenter, "calendar", "Week strip", "Show a clock and the current week.",
+        {"control_center", "calendar", "week_strip"}, ToggleSetting{cfg.controlCenter.calendarTab.weekStrip}, "compact week calendar"
+    ));
+    entries.push_back(makeEntry(
+        SettingsSection::ControlCenter, "calendar", "Compact panel width", "Logical panel width.",
+        {"control_center", "calendar", "width"}, SliderSetting{cfg.controlCenter.calendarTab.width, 64, 1600, 1, true}, "compact dimension"
+    ));
+    entries.push_back(makeEntry(
+        SettingsSection::ControlCenter, "calendar", "Compact panel height", "Logical panel height.",
+        {"control_center", "calendar", "height"}, SliderSetting{cfg.controlCenter.calendarTab.height, 64, 1600, 1, true}, "compact dimension"
+    ));
+    entries.push_back(makeEntry(
+        SettingsSection::ControlCenter, "media", "Compact panel width", "Logical panel width.",
+        {"control_center", "media", "width"}, SliderSetting{cfg.controlCenter.media.width, 64, 1600, 1, true}, "compact dimension"
+    ));
+    entries.push_back(makeEntry(
+        SettingsSection::ControlCenter, "media", "Compact panel height", "Logical panel height.",
+        {"control_center", "media", "height"}, SliderSetting{cfg.controlCenter.media.height, 64, 1600, 1, true}, "compact dimension"
+    ));
+    entries.push_back(makeEntry(
+        SettingsSection::ControlCenter, "media", "Media layout",
+        "Place artwork and playback beside or above the visualizer.", {"control_center", "media", "layout"},
+        asSegmented(enumSelect(kMediaLayouts, cfg.controlCenter.media.layout)), "media player composition"
+    ));
+    entries.push_back(makeEntry(
+        SettingsSection::ControlCenter, "media", "Artwork size",
+        "Maximum artwork side in logical pixels. Zero fits the available space.", {"control_center", "media", "artwork_size"},
+        sliderFor(cfg.controlCenter.media.artworkSize, noctalia::config::schema::kMediaArtworkSizeRange, true),
+        "album cover art size"
+    ));
+    entries.push_back(makeEntry(
+        SettingsSection::ControlCenter, "media", "Media visualizer",
+        "Bars, circular spectrum, or no visualizer. Global animation None stops spectrum updates.",
+        {"control_center", "media", "visualizer"},
+        asSegmented(SelectSetting{{{"bars", "Bars"}, {"radial", "Circular"}, {"off", "Off"}},
+            cfg.controlCenter.media.visualizer == MediaVisualizer::Radial ? "radial" :
+                cfg.controlCenter.media.visualizer == MediaVisualizer::Off ? "off" : "bars"}), "music audio spectrum"
+    ));
+    entries.push_back(makeEntry(
+        SettingsSection::ControlCenter, "media", "Audio equalizer access",
+        "Show an Audio equalizer button that opens the existing Audio tab and its backend status.",
+        {"control_center", "media", "equalizer_access"}, ToggleSetting{cfg.controlCenter.media.equalizerAccess},
+        "media equalizer audio effects"
+    ));
+    entries.push_back(makeEntry(
         SettingsSection::ControlCenter, "navigation", tr("settings.schema.panels.control-center-sidebar.label"),
         tr("settings.schema.panels.control-center-sidebar.description"), {"control_center", "sidebar"},
         asSegmented(enumSelect(kControlCenterSidebarModes, cfg.controlCenter.sidebarMode)),
@@ -1422,7 +1910,7 @@ namespace settings {
         SettingsSection::ControlCenter, "home", tr("settings.schema.panels.home-shortcuts.label"),
         tr("settings.schema.panels.home-shortcuts.description"), {"control_center", "shortcuts"},
         ShortcutListSetting{
-            .items = cfg.controlCenter.shortcuts, .suggestedOptions = controlCenterShortcutOptions(cfg), .maxItems = 6
+            .items = cfg.controlCenter.shortcuts, .suggestedOptions = controlCenterShortcutOptions(cfg), .maxItems = 0
         },
         "quick settings shortcuts toggles wifi bluetooth caffeine night light dnd power media weather clipboard"
     ));
@@ -1438,6 +1926,98 @@ namespace settings {
     ));
 
     // Desktop
+    // Desktop frame geometry is appearance-owned; wallpaper image and mask
+    // associations remain independent even though the frame is painted there.
+    {
+      const auto& frame=cfg.shell.desktopFrame;
+      entries.push_back(makeEntry(SettingsSection::Desktop, "frame",
+          tr("settings.schema.desktop.frame.enabled"), tr("settings.schema.desktop.frame.description"),
+          {"shell", "desktop_frame", "enabled"}, ToggleSetting{frame.enabled}, "desktop frame continuous shelves"));
+      const auto addFrameNumber=[&](const char* key, double value, double maximum) {
+        entries.push_back(makeEntry(SettingsSection::Desktop, "frame",
+            tr(std::string("settings.schema.desktop.frame.")+key), "",
+            {"shell", "desktop_frame", key}, SliderSetting{value,0,maximum,1,true}, "desktop frame geometry"));
+      };
+      addFrameNumber("left",frame.left,1024); addFrameNumber("top",frame.top,1024);
+      addFrameNumber("right",frame.right,1024); addFrameNumber("bottom",frame.bottom,1024);
+      addFrameNumber("radius",frame.radius,512);
+      addFrameNumber("border_width",frame.borderWidth,128);
+      for (const auto& [key,color] : {std::pair{"fill",frame.fill},std::pair{"border",frame.border}})
+        entries.push_back(makeEntry(SettingsSection::Desktop,"frame",
+            tr(std::string("settings.schema.desktop.frame.")+key),"",
+            {"shell","desktop_frame",key},colorSpecPicker(color),"desktop frame palette role"));
+      entries.push_back(makeEntry(SettingsSection::Desktop, "frame",
+          tr("settings.schema.desktop.frame.chamfered"), "",
+          {"shell","desktop_frame","chamfered"}, ToggleSetting{frame.chamfered}, "desktop frame angled corners"));
+      addFrameNumber("chamfer_top_left",frame.chamferTopLeft,8192);
+      addFrameNumber("chamfer_top_right",frame.chamferTopRight,8192);
+      addFrameNumber("chamfer_bottom_right",frame.chamferBottomRight,8192);
+      addFrameNumber("chamfer_bottom_left",frame.chamferBottomLeft,8192);
+
+      addFrameNumber("reference_width",frame.referenceWidth,16384);
+      addFrameNumber("reference_height",frame.referenceHeight,16384);
+      const DesktopFrameShelfConfig* shelves[]={&frame.leftShelf,&frame.topShelf,&frame.rightShelf,&frame.bottomShelf};
+      const char* names[]={"left_shelf","top_shelf","right_shelf","bottom_shelf"};
+      for (std::size_t i=0;i<4;++i) {
+        const auto& shelf=*shelves[i];
+        const auto label=tr(std::string("settings.schema.desktop.frame.")+names[i]);
+        entries.push_back(makeEntry(SettingsSection::Desktop, "frame",label,
+            tr("settings.schema.desktop.frame.shelf-description"),
+            {"shell","desktop_frame",names[i],"enabled"},ToggleSetting{shelf.enabled},"desktop frame shelf join"));
+        const auto addShelfNumber=[&](const char* key,double value,double maximum,double step) {
+          entries.push_back(makeEntry(SettingsSection::Desktop,"frame",
+              label+" · "+tr(std::string("settings.schema.desktop.frame.")+key),"",
+              {"shell","desktop_frame",names[i],key},SliderSetting{value,0,maximum,step,step>=1},"desktop frame shelf geometry"));
+        };
+        addShelfNumber("start",shelf.start,1,.01); addShelfNumber("end",shelf.end,1,.01);
+        addShelfNumber("depth",shelf.depth,1024,1); addShelfNumber("radius",shelf.radius,512,1);
+        addShelfNumber("shoulder",shelf.shoulder,512,1);
+      }
+      constexpr const char* extraShelfNames[]={"shelf_1","shelf_2","shelf_3","shelf_4","shelf_5","shelf_6","shelf_7","shelf_8"};
+      for (std::size_t i=0;i<frame.shelves.size();++i) {
+        const auto& shelf=frame.shelves[i];
+        const std::string label=tr("settings.schema.desktop.frame.extra-shelf")+" "+std::to_string(i+1);
+        const std::vector<std::string> base{"shell","desktop_frame",extraShelfNames[i]};
+        entries.push_back(makeEntry(SettingsSection::Desktop,"frame",label,
+            tr("settings.schema.desktop.frame.extra-shelf-description"),{base[0],base[1],base[2],"enabled"},
+            ToggleSetting{shelf.enabled},"additional connected frame shelf slot"));
+        auto edgeEntry=makeEntry(SettingsSection::Desktop,"frame",label+" · "+tr("settings.schema.desktop.frame.edge"),"",
+            {base[0],base[1],base[2],"edge"},SelectSetting{{
+              {"left",tr("settings.options.edge.left")},{"top",tr("settings.options.edge.top")},
+              {"right",tr("settings.options.edge.right")},{"bottom",tr("settings.options.edge.bottom")}},
+              std::string(enumToKey(kDesktopFrameEdges,shelf.edge))},"additional shelf edge");
+        edgeEntry.visibleWhen=[i](const Config& c) { return c.shell.desktopFrame.shelves[i].enabled; };
+        entries.push_back(std::move(edgeEntry));
+        const auto number=[&](const char* key,double value,double maximum,double step) {
+          auto entry=makeEntry(SettingsSection::Desktop,"frame",label+" · "+tr(std::string("settings.schema.desktop.frame.")+key),"",
+              {base[0],base[1],base[2],key},SliderSetting{value,0,maximum,step,step>=1},"additional shelf geometry");
+          entry.visibleWhen=[i](const Config& c) { return c.shell.desktopFrame.shelves[i].enabled; };
+          entries.push_back(std::move(entry));
+        };
+        number("start",shelf.start,1,.01); number("end",shelf.end,1,.01); number("depth",shelf.depth,1024,1);
+        number("radius",shelf.radius,512,1); number("shoulder",shelf.shoulder,512,1);
+      }
+      constexpr const char* borderLayerNames[]={"border_layer_1","border_layer_2","border_layer_3"};
+      for (std::size_t i=0;i<frame.borderLayers.size();++i) {
+        const auto& layer=frame.borderLayers[i];
+        const std::string label=tr("settings.schema.desktop.frame.border-layer")+" "+std::to_string(i+1);
+        const std::vector<std::string> base{"shell","desktop_frame",borderLayerNames[i]};
+        entries.push_back(makeEntry(SettingsSection::Desktop,"frame",label,
+            tr("settings.schema.desktop.frame.border-layer-description"),{base[0],base[1],base[2],"enabled"},
+            ToggleSetting{layer.enabled},"additional frame border band slot"));
+        auto colorEntry=makeEntry(SettingsSection::Desktop,"frame",label+" · "+tr("settings.schema.desktop.frame.color"),"",
+            {base[0],base[1],base[2],"color"},colorSpecPicker(layer.color),"additional border palette role");
+        colorEntry.visibleWhen=[i](const Config& c) { return c.shell.desktopFrame.borderLayers[i].enabled; };
+        entries.push_back(std::move(colorEntry));
+        for (const auto& [key,value,maximum] : {std::tuple{"width",double(layer.width),128.0},std::tuple{"offset",double(layer.offset),1024.0}}) {
+          auto entry=makeEntry(SettingsSection::Desktop,"frame",label+" · "+tr(std::string("settings.schema.desktop.frame.")+key),"",
+              {base[0],base[1],base[2],key},SliderSetting{value,0,maximum,1,true},"additional border band geometry");
+          entry.visibleWhen=[i](const Config& c) { return c.shell.desktopFrame.borderLayers[i].enabled; };
+          entries.push_back(std::move(entry));
+        }
+      }
+    }
+
     entries.push_back(makeEntry(
         SettingsSection::Desktop, "widgets", tr("settings.schema.desktop.widgets.label"),
         tr("settings.schema.desktop.widgets.description"), {"desktop_widgets", "enabled"},
@@ -1712,7 +2292,7 @@ namespace settings {
         "image picture"
     ));
     entries.push_back(makeEntry(
-        SettingsSection::Shell, "general", tr("settings.schema.shell.settings-window-translucent.label"),
+        SettingsSection::Appearance, "interface", tr("settings.schema.shell.settings-window-translucent.label"),
         tr("settings.schema.shell.settings-window-translucent.description"), {"shell", "settings_window_translucent"},
         ToggleSetting{cfg.shell.settingsWindowTranslucent}, "settings window background transparency translucent"
     ));
@@ -1834,55 +2414,13 @@ namespace settings {
       entries.push_back(std::move(e));
     }
     entries.push_back(makeEntry(
-        SettingsSection::Screenshot, "screenshot-capture", tr("settings.schema.shell.screenshot-freeze-screen.label"),
-        tr("settings.schema.shell.screenshot-freeze-screen.description"), {"shell", "screenshot", "freeze_screen"},
-        ToggleSetting{cfg.shell.screenshot.freezeScreen}, "screenshot capture freeze region selection"
-    ));
-    entries.push_back(makeEntry(
-        SettingsSection::Screenshot, "screenshot-capture", tr("settings.schema.shell.screenshot-confirm-region.label"),
-        tr("settings.schema.shell.screenshot-confirm-region.description"), {"shell", "screenshot", "confirm_region"},
-        ToggleSetting{cfg.shell.screenshot.confirmRegion}, "screenshot capture confirm region selection"
-    ));
-    entries.push_back(makeEntry(
-        SettingsSection::Screenshot, "screenshot-capture",
-        tr("settings.schema.shell.screenshot-remember-last-region.label"),
-        tr("settings.schema.shell.screenshot-remember-last-region.description"),
-        {"shell", "screenshot", "remember_last_region"}, ToggleSetting{cfg.shell.screenshot.rememberLastRegion},
-        "screenshot capture remember last region selection"
-    ));
-    entries.push_back(makeEntry(
-        SettingsSection::Screenshot, "screenshot-capture", tr("settings.schema.shell.screenshot-show-cursor.label"),
-        tr("settings.schema.shell.screenshot-show-cursor.description"), {"shell", "screenshot", "show_cursor"},
-        ToggleSetting{cfg.shell.screenshot.showCursor}, "screenshot capture show cursor pointer mouse"
-    ));
-
-    entries.push_back(makeEntry(
-        SettingsSection::Screenshot, "screenshot-annotation", tr("settings.schema.shell.screenshot-annotate.label"),
-        tr("settings.schema.shell.screenshot-annotate.description"), {"shell", "screenshot", "annotate"},
-        ToggleSetting{cfg.shell.screenshot.annotate}, "screenshot annotate annotation draw edit markup"
-    ));
-    entries.push_back(makeEntry(
-        SettingsSection::Screenshot, "screenshot-annotation",
-        tr("settings.schema.shell.screenshot-close-on-copy.label"),
-        tr("settings.schema.shell.screenshot-close-on-copy.description"), {"shell", "screenshot", "close_on_copy"},
-        ToggleSetting{cfg.shell.screenshot.closeOnCopy}, "screenshot annotation close copy clipboard exit"
-    ));
-
-    entries.push_back(makeEntry(
-        SettingsSection::Screenshot, "screenshot-output",
-        tr("settings.schema.shell.screenshot-copy-to-clipboard.label"),
-        tr("settings.schema.shell.screenshot-copy-to-clipboard.description"),
-        {"shell", "screenshot", "copy_to_clipboard"}, ToggleSetting{cfg.shell.screenshot.copyToClipboard},
-        "screenshot capture clipboard copy"
-    ));
-    entries.push_back(makeEntry(
-        SettingsSection::Screenshot, "screenshot-output", tr("settings.schema.shell.screenshot-save-to-file.label"),
+        SettingsSection::Shell, "screenshot", tr("settings.schema.shell.screenshot-save-to-file.label"),
         tr("settings.schema.shell.screenshot-save-to-file.description"), {"shell", "screenshot", "save_to_file"},
         ToggleSetting{cfg.shell.screenshot.saveToFile}, "screenshot capture save png file"
     ));
     {
       auto e = makeEntry(
-          SettingsSection::Screenshot, "screenshot-output", tr("settings.schema.shell.screenshot-directory.label"),
+          SettingsSection::Shell, "screenshot", tr("settings.schema.shell.screenshot-directory.label"),
           tr("settings.schema.shell.screenshot-directory.description"), {"shell", "screenshot", "directory"},
           TextSetting{
               .value = cfg.shell.screenshot.directory,
@@ -1896,8 +2434,7 @@ namespace settings {
     }
     {
       auto e = makeEntry(
-          SettingsSection::Screenshot, "screenshot-output",
-          tr("settings.schema.shell.screenshot-filename-pattern.label"),
+          SettingsSection::Shell, "screenshot", tr("settings.schema.shell.screenshot-filename-pattern.label"),
           tr("settings.schema.shell.screenshot-filename-pattern.description"),
           {"shell", "screenshot", "filename_pattern"},
           TextSetting{
@@ -1905,18 +2442,50 @@ namespace settings {
               .placeholder = "screenshot_%Y%m%d_%H%M%S",
               .browseFileExtensions = {}
           },
-          "screenshot capture filename pattern strftime", true
+          "screenshot capture filename pattern strftime"
       );
       entries.push_back(std::move(e));
     }
     entries.push_back(makeEntry(
-        SettingsSection::Screenshot, "screenshot-output", tr("settings.schema.shell.screenshot-pipe-to-command.label"),
+        SettingsSection::Shell, "screenshot", tr("settings.schema.shell.screenshot-copy-to-clipboard.label"),
+        tr("settings.schema.shell.screenshot-copy-to-clipboard.description"),
+        {"shell", "screenshot", "copy_to_clipboard"}, ToggleSetting{cfg.shell.screenshot.copyToClipboard},
+        "screenshot capture clipboard copy"
+    ));
+    entries.push_back(makeEntry(
+        SettingsSection::Shell, "screenshot", tr("settings.schema.shell.screenshot-freeze-screen.label"),
+        tr("settings.schema.shell.screenshot-freeze-screen.description"), {"shell", "screenshot", "freeze_screen"},
+        ToggleSetting{cfg.shell.screenshot.freezeScreen}, "screenshot capture freeze region region"
+    ));
+    entries.push_back(makeEntry(
+        SettingsSection::Shell, "screenshot", tr("settings.schema.shell.screenshot-annotate.label"),
+        tr("settings.schema.shell.screenshot-annotate.description"), {"shell", "screenshot", "annotate"},
+        ToggleSetting{cfg.shell.screenshot.annotate}, "screenshot annotate draw edit markup"
+    ));
+    entries.push_back(makeEntry(
+        SettingsSection::Shell, "screenshot", tr("settings.schema.shell.screenshot-confirm-region.label"),
+        tr("settings.schema.shell.screenshot-confirm-region.description"), {"shell", "screenshot", "confirm_region"},
+        ToggleSetting{cfg.shell.screenshot.confirmRegion}, "screenshot capture confirm region selection"
+    ));
+    entries.push_back(makeEntry(
+        SettingsSection::Shell, "screenshot", tr("settings.schema.shell.screenshot-remember-last-region.label"),
+        tr("settings.schema.shell.screenshot-remember-last-region.description"),
+        {"shell", "screenshot", "remember_last_region"}, ToggleSetting{cfg.shell.screenshot.rememberLastRegion},
+        "screenshot capture remember last region selection"
+    ));
+    entries.push_back(makeEntry(
+        SettingsSection::Shell, "screenshot", tr("settings.schema.shell.screenshot-show-cursor.label"),
+        tr("settings.schema.shell.screenshot-show-cursor.description"), {"shell", "screenshot", "show_cursor"},
+        ToggleSetting{cfg.shell.screenshot.showCursor}, "screenshot capture show cursor pointer mouse"
+    ));
+    entries.push_back(makeEntry(
+        SettingsSection::Shell, "screenshot", tr("settings.schema.shell.screenshot-pipe-to-command.label"),
         tr("settings.schema.shell.screenshot-pipe-to-command.description"), {"shell", "screenshot", "pipe_to_command"},
-        ToggleSetting{cfg.shell.screenshot.pipeToCommand}, "screenshot capture run pipe command stdin"
+        ToggleSetting{cfg.shell.screenshot.pipeToCommand}, "screenshot capture pipe command stdin"
     ));
     {
       auto e = makeEntry(
-          SettingsSection::Screenshot, "screenshot-output", tr("settings.schema.shell.screenshot-pipe-command.label"),
+          SettingsSection::Shell, "screenshot", tr("settings.schema.shell.screenshot-pipe-command.label"),
           tr("settings.schema.shell.screenshot-pipe-command.description"), {"shell", "screenshot", "pipe_command"},
           TextSetting{
               .value = cfg.shell.screenshot.pipeCommand,
@@ -1924,7 +2493,7 @@ namespace settings {
               .width = 320.0F,
               .browseFileExtensions = {}
           },
-          "screenshot capture run pipe command stdin png"
+          "screenshot capture pipe command stdin png"
       );
       e.visibleWhen = [](const Config& c) { return c.shell.screenshot.pipeToCommand; };
       entries.push_back(std::move(e));
@@ -2016,6 +2585,164 @@ namespace settings {
         ListSetting{.items = cfg.osd.monitors, .suggestedOptions = env.availableOutputs},
         "monitor output display screen hud overlay"
     ));
+    {
+      const auto presentationSelect = [](const std::string& selected, bool allowInherit) {
+        SelectSetting value;
+        if (allowInherit) value.options.push_back({.value = "", .label = "Inherit"});
+        value.options.insert(value.options.end(), {
+            {.value = "standalone", .label = "Standalone popup"},
+            {.value = "section", .label = "Replace bar section"},
+            {.value = "attached", .label = "Attach beside section"},
+        });
+        value.selectedValue = selected;
+        value.clearOnEmpty = allowInherit;
+        return value;
+      };
+      const auto placementSelect = [](const std::string& selected, bool allowInherit) {
+        SelectSetting value;
+        if (allowInherit) value.options.push_back({.value = "", .label = "Inherit"});
+        value.options.insert(value.options.end(), {
+            {.value = "auto", .label = "Automatic"},
+            {.value = "before", .label = "Before"},
+            {.value = "after", .label = "After"},
+            {.value = "below", .label = "Below"},
+            {.value = "above", .label = "Above"},
+            {.value = "left", .label = "Left"},
+            {.value = "right", .label = "Right"},
+        });
+        value.selectedValue = selected;
+        value.clearOnEmpty = allowInherit;
+        return value;
+      };
+      const auto motionSelect = [](const std::string& selected, bool allowInherit) {
+        SelectSetting value;
+        if (allowInherit) value.options.push_back({.value = "", .label = "Inherit route"});
+        value.options.push_back({.value = "inherit", .label = "Use shared motion"});
+        value.options.push_back({.value = "off", .label = "Immediate"});
+        value.selectedValue = selected;
+        value.clearOnEmpty = allowInherit;
+        return value;
+      };
+      const auto materialSelect = [](const std::string& selected, bool allowInherit) {
+        SelectSetting value;
+        if (allowInherit) value.options.push_back({.value = "", .label = "Inherit route"});
+        value.options.push_back({.value = "inherit", .label = "Use shared material"});
+        value.options.push_back({.value = "surface", .label = "Surface"});
+        value.options.push_back({.value = "transparent", .label = "Transparent"});
+        value.selectedValue = selected;
+        value.clearOnEmpty = allowInherit;
+        return value;
+      };
+      const auto outputSelect = [&env](const std::string& selected, bool allowInherit) {
+        SelectSetting value;
+        if (allowInherit) value.options.push_back({.value = "", .label = "Inherit"});
+        value.options.push_back({.value = "focused", .label = "Focused output"});
+        value.options.push_back({.value = "all", .label = "All outputs"});
+        for (const auto& output : env.availableOutputs) {
+          if (!output.value.empty() && output.value != "focused" && output.value != "all")
+            value.options.push_back(output);
+        }
+        if (!selected.empty() && std::ranges::none_of(value.options, [&selected](const auto& option) {
+              return option.value == selected;
+            }))
+          value.options.push_back({.value = selected, .label = selected});
+        value.selectedValue = selected;
+        value.clearOnEmpty = allowInherit;
+        return value;
+      };
+      const auto addText = [&](std::string group, std::vector<std::string> path, std::string label,
+                               std::string description, const std::string& value, std::string placeholder,
+                               std::string tags, bool advanced) {
+        auto entry = makeEntry(
+            SettingsSection::Osd, std::move(group), std::move(label), std::move(description), std::move(path),
+            TextSetting{.value = value, .placeholder = std::move(placeholder), .browseFileExtensions = {}},
+            std::move(tags), advanced
+        );
+        entries.push_back(std::move(entry));
+      };
+
+      entries.push_back(makeEntry(
+          SettingsSection::Osd, "activity", "Activity presentation",
+          "Show volume, brightness and notification activity as normal popups, inside a named bar section, or attached beside it.",
+          {"osd", "activity", "presentation"}, presentationSelect(cfg.osd.activity.presentation, false),
+          "activity popup bar section attached notch route", false
+      ));
+      addText("activity", {"osd", "activity", "bar"}, "Activity bar",
+              "Stable bar name used by section and attached presentations. Leave empty to use any matching bar.",
+              cfg.osd.activity.bar, "default", "activity bar route stable name", false);
+      addText("activity", {"osd", "activity", "section"}, "Activity section",
+              "Stable id from a [[bar.<name>.section]] entry. Missing targets fall back to the standalone popup.",
+              cfg.osd.activity.section, "status", "activity bar section stable id fallback", false);
+      entries.push_back(makeEntry(
+          SettingsSection::Osd, "activity", "Activity output",
+          "Use the focused output, every output, or a connected output selector.",
+          {"osd", "activity", "output"}, outputSelect(cfg.osd.activity.output, false),
+          "activity monitor output screen focused all selector", true
+      ));
+      entries.push_back(makeEntry(
+          SettingsSection::Osd, "activity", "Activity placement",
+          "Place attached activity relative to its named section. Automatic uses the side facing into the screen.",
+          {"osd", "activity", "placement"}, placementSelect(cfg.osd.activity.placement, false),
+          "activity attached placement before after below above left right", true
+      ));
+      entries.push_back(makeEntry(
+          SettingsSection::Osd, "activity", "Activity motion",
+          "Use the shared animation policy or update activity immediately.",
+          {"osd", "activity", "motion"}, motionSelect(cfg.osd.activity.motion, false),
+          "activity animation motion immediate off", true
+      ));
+      entries.push_back(makeEntry(
+          SettingsSection::Osd, "activity", "Activity material",
+          "Inherit the shared interface material, force a surface, or keep the activity background transparent.",
+          {"osd", "activity", "material"}, materialSelect(cfg.osd.activity.material, false),
+          "activity material surface transparent inherit", true
+      ));
+
+      const auto addOverride = [&](std::string kind, const ActivityRouteOverrideConfig& route) {
+        const std::string label = kind == "volume" ? "Volume" : kind == "brightness" ? "Brightness" : "Notification";
+        const std::vector<std::string> root{"osd", "activity", kind};
+        const auto path = [&root](std::string field) {
+          auto result = root;
+          result.push_back(std::move(field));
+          return result;
+        };
+        entries.push_back(makeEntry(
+            SettingsSection::Osd, "activity-" + kind, label + " presentation",
+            "Override only this activity kind. Inherit uses the base presentation.", path("presentation"),
+            presentationSelect(route.presentation, true), "activity override inherit " + kind, true
+        ));
+        addText(
+            "activity-" + kind, path("bar"), label + " bar", "Override the base bar; empty inherits it.",
+            route.bar, "Inherit", "activity override bar " + kind, true
+        );
+        addText(
+            "activity-" + kind, path("section"), label + " section",
+            "Override the base stable section id; empty inherits it.", route.section, "Inherit",
+            "activity override section " + kind, true
+        );
+        entries.push_back(makeEntry(
+            SettingsSection::Osd, "activity-" + kind, label + " output", "Override the base output; empty inherits it.",
+            path("output"), outputSelect(route.output, true), "activity override output " + kind, true
+        ));
+        entries.push_back(makeEntry(
+            SettingsSection::Osd, "activity-" + kind, label + " placement",
+            "Override the base attached placement; empty inherits it.", path("placement"),
+            placementSelect(route.placement, true), "activity override placement " + kind, true
+        ));
+        entries.push_back(makeEntry(
+            SettingsSection::Osd, "activity-" + kind, label + " motion", "Override the base motion; empty inherits it.",
+            path("motion"), motionSelect(route.motion, true), "activity override motion " + kind, true
+        ));
+        entries.push_back(makeEntry(
+            SettingsSection::Osd, "activity-" + kind, label + " material",
+            "Override the base material; empty inherits it.", path("material"),
+            materialSelect(route.material, true), "activity override material " + kind, true
+        ));
+      };
+      addOverride("volume", cfg.osd.activity.volume);
+      addOverride("brightness", cfg.osd.activity.brightness);
+      addOverride("notification", cfg.osd.activity.notification);
+    }
     entries.push_back(makeEntry(
         SettingsSection::Osd, "kinds", tr("settings.schema.shell.osd-kinds-volume.label"),
         tr("settings.schema.shell.osd-kinds-volume.description"), {"osd", "kinds", "volume"},
@@ -3043,6 +3770,15 @@ namespace settings {
           tr("settings.schema.bar.ends-margin.description"), path("margin_ends"), barMarginStepper(bar.marginEnds),
           "gap inset"
       ));
+      entries.push_back(makeEntry(section, "layout", "Expand side islands outward",
+          "Keep the clock central while media and quick controls expand toward their own side.",
+          path("island_outward"), ToggleSetting{bar.islandOutward}, "island panel expansion alignment"));
+      entries.push_back(makeEntry(section, "layout", "Expanded island offset",
+          "Inset expanded island surfaces toward the desktop and away from the clock.",
+          path("island_panel_offset"), barMarginStepper(bar.islandPanelOffset), "island panel offset"));
+      entries.push_back(makeEntry(section, "layout", "Maximum bar length",
+          "Center a bar of this logical length on any display. Zero uses the available width or height.",
+          path("max_length"), barMarginStepper(bar.maxLength), "bar notch length width compact"));
       entries.push_back(makeEntry(
           section, "layout", tr("settings.schema.shared.edge-margin.label"),
           tr("settings.schema.bar.edge-margin.description"), path("margin_edge"), barMarginStepper(bar.marginEdge),
@@ -3057,6 +3793,65 @@ namespace settings {
           section, "layout", tr("settings.schema.bar.content-padding.label"),
           tr("settings.schema.bar.content-padding.description"), path("padding"),
           SliderSetting{bar.padding, 0.0F, 80.0F, 1.0F, true}, "inset"
+      ));
+      entries.push_back(makeEntry(
+          section, "shape", "Bar shape",
+          "Choose a starting shape, then adjust its spacing and corners below.", path("section_backgrounds"),
+          barPresentationSetting(bar, {"bar", bar.name}), "islands full fit dock notch split pills shoulders"
+      ));
+      {
+        auto e = makeEntry(
+            section, "shape", tr("settings.schema.bar.island-morph.label"),
+            tr("settings.schema.bar.island-morph.description"), path("island_morph"),
+            ToggleSetting{bar.islandMorph}, "island panel expand reflow"
+        );
+        e.visibleWhen = [barName = bar.name](const Config& c) {
+          const BarConfig* b = findBar(c, barName);
+          return b != nullptr && b->sectionBackgrounds;
+        };
+        entries.push_back(std::move(e));
+      }
+      {
+        auto e = makeEntry(
+            section, "shape", tr("settings.schema.bar.island-morph-gap.label"),
+            tr("settings.schema.bar.island-morph-gap.description"), path("island_morph_gap"),
+            SliderSetting{bar.islandMorphGap, 0.0F, 512.0F, 1.0F, true}, "island gap reflow"
+        );
+        e.visibleWhen = [barName = bar.name](const Config& c) {
+          const BarConfig* b = findBar(c, barName);
+          return b != nullptr && b->sectionBackgrounds && b->islandMorph;
+        };
+        entries.push_back(std::move(e));
+      }
+      entries.push_back(makeEntry(
+          section, "shape", "Background role", "Surface color shared by the bar and attached panels.",
+          path("background"), colorSpecPicker(bar.background), "background color role"
+      ));
+      entries.push_back(makeEntry(
+          section, "shape", "Island hover growth", "Logical pixels; zero keeps the compact geometry.",
+          path("island_hover_grow"), SliderSetting{bar.islandHoverGrow, 0, 64, 1, false}, "island hover geometry"
+      ));
+      entries.push_back(makeEntry(
+          section, "shape", "Island hover offset", "Logical pixels; zero keeps the compact geometry.",
+          path("island_hover_offset"), SliderSetting{bar.islandHoverOffset, 0, 64, 1, false}, "island hover geometry"
+      ));
+      entries.push_back(makeEntry(
+          section, "layout", "Center lane alignment",
+          "Place the named center lane at the start, middle, or end of the bar axis.",
+          path("center_alignment"), enumSelect(kBarCenterAlignments, bar.centerAlignment),
+          "left middle right top bottom alignment"
+      ));
+      entries.push_back(makeEntry(
+          section, "layout", "Edge lane policy",
+          "Keep the outer lanes at display edges, space all three evenly, or group them around the center lane.",
+          path("edge_cluster_policy"), enumSelect(kBarEdgeClusterPolicies, bar.edgeClusterPolicy),
+          "follow center equidistant edge clusters"
+      ));
+      entries.push_back(makeEntry(
+          section, "shape", "Bar material",
+          "Inherit the desktop material, force an opaque surface, use translucent blur, or remove the bar fill.",
+          path("material_mode"), enumSelect(kBarMaterialModes, bar.materialMode),
+          "inherit solid glass transparent blur"
       ));
       entries.push_back(makeEntry(
           section, "shape", tr("settings.schema.shared.corner-radius.label"),
@@ -3209,6 +4004,33 @@ namespace settings {
         entries.push_back(std::move(e));
       }
       {
+        SelectSetting contourSelect{
+            {{"rounded", tr("settings.options.capsule-contour.rounded")},
+             {"powerline", tr("settings.options.capsule-contour.powerline")},
+             {"powerline-start", tr("settings.options.capsule-contour.powerline-start")},
+             {"powerline-end", tr("settings.options.capsule-contour.powerline-end")}},
+            std::string(enumToKey(kBarCapsuleContours, bar.widgetCapsuleContour))
+        };
+        auto e = makeEntry(
+            section, "capsules", tr("settings.schema.bar.capsule-contour.label"),
+            tr("settings.schema.bar.capsule-contour.description"), path("capsule_contour"), std::move(contourSelect),
+            "powerline segment shape", true
+        );
+        e.visibleWhen = capsuleOn;
+        entries.push_back(std::move(e));
+      }
+      {
+        auto e = makeEntry(
+            section, "capsules", tr("settings.schema.bar.capsule-contour-depth.label"),
+            tr("settings.schema.bar.capsule-contour-depth.description"), path("capsule_contour_depth"),
+            SliderSetting{bar.widgetCapsuleContourDepth, 0.0F, 32.0F, 1.0F, true}, "powerline depth", true
+        );
+        e.visibleWhen = [enabled = bar.widgetCapsuleDefault, contour = bar.widgetCapsuleContour](const Config&) {
+          return enabled && contour != BarCapsuleContour::Rounded;
+        };
+        entries.push_back(std::move(e));
+      }
+      {
         auto e = makeEntry(
             section, "capsules", tr("settings.schema.bar.capsule-fill.label"),
             tr("settings.schema.bar.capsule-fill.description"), path("capsule_fill"),
@@ -3283,6 +4105,26 @@ namespace settings {
             },
             "bar empty margin dead zone action command gesture " + key
         ));
+      }
+      const std::array<std::pair<std::string_view, const BarDeadZoneConfig*>, 3> lanes{{
+          {"start_lane", &bar.startLane}, {"center_lane", &bar.centerLane}, {"end_lane", &bar.endLane}}};
+      for (const auto& [lane, laneConfig] : lanes) {
+        for (const auto gesture : noctalia::bar::allGestures()) {
+          const std::string key(noctalia::bar::gestureConfigKey(gesture));
+          const auto configured = laneConfig->actions.find(key);
+          entries.push_back(makeEntry(
+              section, "lane-actions", std::string(lane) + " · "
+                  + tr(std::string(noctalia::bar::gestureLabelKey(gesture))),
+              "Run this action on empty space inside the lane; unset falls back to the bar dead-zone action.",
+              std::vector<std::string>{"bar", bar.name, std::string(lane), "actions", key},
+              GestureActionSetting{
+                  .gestureKey = key,
+                  .configured = configured != laneConfig->actions.end() ? configured->second : std::string{},
+                  .defaultAction = {},
+              },
+              "bar lane cluster action command gesture " + key, true
+          ));
+        }
       }
     }
 
@@ -3385,9 +4227,80 @@ namespace settings {
             SliderSetting{ovr.padding.value_or(bar.padding), 0.0F, 80.0F, 1.0F, true}, "inset"
         ));
         entries.push_back(makeEntry(
+            section, "layout", "Center lane alignment",
+            "Place participating center sections at the start, middle, or end of this display's bar axis.",
+            monitorPath("center_alignment"),
+            enumSelect(kBarCenterAlignments, ovr.centerAlignment.value_or(bar.centerAlignment)),
+            "left middle right top bottom alignment"
+        ));
+        entries.push_back(makeEntry(
+            section, "layout", "Edge lane policy",
+            "Keep participating outer sections at the edges, space the three lanes evenly, or group them around the center lane.",
+            monitorPath("edge_cluster_policy"),
+            enumSelect(kBarEdgeClusterPolicies, ovr.edgeClusterPolicy.value_or(bar.edgeClusterPolicy)),
+            "follow center equidistant edge clusters"
+        ));
+        {
+          auto resolved = bar;
+          resolved.sectionBackgrounds = ovr.sectionBackgrounds.value_or(bar.sectionBackgrounds);
+          resolved.concaveEdgeCorners = ovr.concaveEdgeCorners.value_or(bar.concaveEdgeCorners);
+          resolved.marginEdge = ovr.marginEdge.value_or(bar.marginEdge);
+          resolved.marginEnds = ovr.marginEnds.value_or(bar.marginEnds);
+          resolved.radius = ovr.radius.value_or(bar.radius);
+          resolved.radiusTopLeft = ovr.radiusTopLeft.value_or(ovr.radius.value_or(bar.radiusTopLeft));
+          resolved.radiusTopRight = ovr.radiusTopRight.value_or(ovr.radius.value_or(bar.radiusTopRight));
+          resolved.radiusBottomLeft = ovr.radiusBottomLeft.value_or(ovr.radius.value_or(bar.radiusBottomLeft));
+          resolved.radiusBottomRight = ovr.radiusBottomRight.value_or(ovr.radius.value_or(bar.radiusBottomRight));
+          auto basePath = monitorPath("section_backgrounds");
+          basePath.pop_back();
+          entries.push_back(makeEntry(
+              section, "shape", "Bar shape",
+              "Choose a starting shape for this display; Reset restores inherited settings.",
+              monitorPath("section_backgrounds"), barPresentationSetting(resolved, basePath),
+              "islands full fit dock notch split pills shoulders"
+          ));
+        }
+        {
+          auto e = makeEntry(
+              section, "shape", tr("settings.schema.bar.island-morph.label"),
+              tr("settings.schema.bar.island-morph.description"), monitorPath("island_morph"),
+              ToggleSetting{ovr.islandMorph.value_or(bar.islandMorph)}, "island panel expand reflow"
+          );
+          e.visibleWhen = [barName = bar.name, match = ovr.match](const Config& c) {
+            const BarConfig* b = findBar(c, barName);
+            if (b == nullptr) return false;
+            const BarMonitorOverride* mo = findMonitorOverride(*b, match);
+            return mo && mo->sectionBackgrounds.value_or(b->sectionBackgrounds);
+          };
+          entries.push_back(std::move(e));
+        }
+        {
+          auto e = makeEntry(
+              section, "shape", tr("settings.schema.bar.island-morph-gap.label"),
+              tr("settings.schema.bar.island-morph-gap.description"), monitorPath("island_morph_gap"),
+              SliderSetting{ovr.islandMorphGap.value_or(bar.islandMorphGap), 0.0F, 512.0F, 1.0F, true},
+              "island gap reflow"
+          );
+          e.visibleWhen = [barName = bar.name, match = ovr.match](const Config& c) {
+            const BarConfig* b = findBar(c, barName);
+            if (b == nullptr) return false;
+            const BarMonitorOverride* mo = findMonitorOverride(*b, match);
+            return mo && mo->sectionBackgrounds.value_or(b->sectionBackgrounds)
+                && mo->islandMorph.value_or(b->islandMorph);
+          };
+          entries.push_back(std::move(e));
+        }
+        entries.push_back(makeEntry(
             section, "shape", tr("settings.schema.shared.corner-radius.label"),
             tr("settings.schema.bar.corner-radius.description"), monitorPath("radius"),
             barReservedSlider(ovr.radius.value_or(bar.radius), 80.0F, 1.0F, true), "rounded"
+        ));
+        entries.push_back(makeEntry(
+            section, "shape", "Bar material",
+            "Override the inherited, solid, glass, or transparent material on this display.",
+            monitorPath("material_mode"),
+            enumSelect(kBarMaterialModes, ovr.materialMode.value_or(bar.materialMode)),
+            "inherit solid glass transparent blur"
         ));
         entries.push_back(makeEntry(
             section, "shape", tr("settings.schema.shared.corner-top-left.label"),
@@ -3523,6 +4436,39 @@ namespace settings {
           entries.push_back(std::move(e));
         }
         {
+          const auto contour = ovr.widgetCapsuleContour.value_or(bar.widgetCapsuleContour);
+          SelectSetting contourSelect{
+              {{"rounded", tr("settings.options.capsule-contour.rounded")},
+               {"powerline", tr("settings.options.capsule-contour.powerline")},
+               {"powerline-start", tr("settings.options.capsule-contour.powerline-start")},
+               {"powerline-end", tr("settings.options.capsule-contour.powerline-end")}},
+              std::string(enumToKey(kBarCapsuleContours, contour))
+          };
+          auto e = makeEntry(
+              section, "capsules", tr("settings.schema.bar.capsule-contour.label"),
+              tr("settings.schema.bar.capsule-contour.description"), monitorPath("capsule_contour"),
+              std::move(contourSelect), "powerline segment shape", true
+          );
+          e.visibleWhen = monitorCapsuleOn;
+          entries.push_back(std::move(e));
+        }
+        {
+          const auto contour = ovr.widgetCapsuleContour.value_or(bar.widgetCapsuleContour);
+          auto e = makeEntry(
+              section, "capsules", tr("settings.schema.bar.capsule-contour-depth.label"),
+              tr("settings.schema.bar.capsule-contour-depth.description"), monitorPath("capsule_contour_depth"),
+              SliderSetting{
+                  static_cast<float>(ovr.widgetCapsuleContourDepth.value_or(bar.widgetCapsuleContourDepth)),
+                  0.0F, 32.0F, 1.0F, true
+              },
+              "powerline depth", true
+          );
+          e.visibleWhen = [enabled = ovr.widgetCapsuleDefault.value_or(bar.widgetCapsuleDefault), contour](const Config&) {
+            return enabled && contour != BarCapsuleContour::Rounded;
+          };
+          entries.push_back(std::move(e));
+        }
+        {
           auto e = makeEntry(
               section, "capsules", tr("settings.schema.bar.capsule-fill.label"),
               tr("settings.schema.bar.capsule-fill.description"), monitorPath("capsule_fill"),
@@ -3618,6 +4564,25 @@ namespace settings {
           ));
         }
       }
+    }
+
+    // Keep the default settings view focused on choices that define a complete rice.
+    // Detailed geometry and per-component tuning remain searchable after enabling Advanced.
+    for (auto& entry : entries) {
+      const auto startsWith = [&entry](std::initializer_list<std::string_view> prefix) {
+        if (entry.path.size() < prefix.size()) return false;
+        return std::equal(prefix.begin(), prefix.end(), entry.path.begin());
+      };
+      const bool desktopFrame = startsWith({"shell", "desktop_frame"});
+      const bool caretDetail = startsWith({"shell", "caret"}) || startsWith({"shell", "caret_app_integration"})
+          || startsWith({"shell", "caret_adopt_existing"});
+      const bool settingsGeometry = startsWith({"shell", "settings_window_width"})
+          || startsWith({"shell", "settings_window_height"}) || startsWith({"shell", "settings_background"});
+      const bool terminalDetail = startsWith({"shell", "terminal_appearance", "padding_x"})
+          || startsWith({"shell", "terminal_appearance", "padding_y"})
+          || startsWith({"shell", "terminal_appearance", "font_size"})
+          || startsWith({"shell", "terminal_appearance", "opacity_cells"});
+      entry.advanced = entry.advanced || desktopFrame || caretDetail || settingsGeometry || terminalDetail;
     }
 
     // Integrity guard: every override path must resolve to a real schema key, else

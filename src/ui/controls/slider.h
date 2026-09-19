@@ -31,6 +31,8 @@ public:
   [[nodiscard]] bool dragging() const noexcept;
 
 private:
+  Signal<>::ScopedConnection m_materialConn;
+  Signal<>::ScopedConnection m_paletteConn;
   void doLayout(Renderer& renderer) override;
   LayoutSize doMeasure(Renderer& renderer, const LayoutConstraints& constraints) override;
   void doArrange(Renderer& renderer, const LayoutRect& rect) override;

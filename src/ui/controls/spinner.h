@@ -36,6 +36,7 @@ private:
   SpinnerNode* m_spinnerNode = nullptr;
   ColorSpec m_color = colorSpecFromRole(ColorRole::Primary);
   Signal<>::ScopedConnection m_paletteConn;
+  Signal<>::ScopedConnection m_motionConn;
   std::uint32_t m_animId = 0;
   bool m_spinning = false;
   float m_spinnerSize = 0.0F;

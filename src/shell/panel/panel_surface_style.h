@@ -17,7 +17,7 @@ namespace shell::panel_surface {
 
   [[nodiscard]] inline shell::surface_shadow::Bleed
   bleed(bool hasDecoration, const ShellConfig::ShadowConfig& shadow) noexcept {
-    auto out = shell::surface_shadow::bleed(hasDecoration, shadow);
+    auto out = shell::surface_shadow::bleed(hasDecoration, shadow, "panel", "panel");
     if (shell::surface_shadow::enabled(hasDecoration, shadow)) {
       out.left += kShadowSafetyPadding;
       out.right += kShadowSafetyPadding;

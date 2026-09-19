@@ -4,6 +4,7 @@
 #include "wayland/layer_surface.h"
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -17,7 +18,9 @@ class Glyph;
 class Label;
 class ProgressBar;
 class RenderContext;
+class TransientActivityService;
 class WaylandConnection;
+struct TransientActivityViewModel;
 struct WaylandOutput;
 struct wl_surface;
 
@@ -46,6 +49,7 @@ struct OsdContent {
   bool showProgress = true;
   bool overLimit = false;
   bool inactive = false;
+  std::function<void(float)> setProgress;
 };
 
 class OsdOverlay {
@@ -57,6 +61,10 @@ public:
   OsdOverlay& operator=(const OsdOverlay&) = delete;
 
   void initialize(WaylandConnection& wayland, ConfigService* config, RenderContext* renderContext);
+  void setActivityService(TransientActivityService* service) noexcept { m_activityService = service; }
+  void setOpenContextCallback(std::function<void(std::string)> callback) {
+    m_openContext = std::move(callback);
+  }
   void registerIpc(IpcService& ipc);
   void onOutputChange();
   void onConfigReload();
@@ -64,6 +72,7 @@ public:
   void requestRedraw();
 
   void show(const OsdContent& content);
+  void showActivityFallback(const TransientActivityViewModel& activity);
   [[nodiscard]] bool isEnabled() const noexcept;
 
   // True while any instance is on screen or animating into view. Callers use this to correct
@@ -116,10 +125,13 @@ private:
   void updateBlurRegion(Instance& inst) const;
   void applyReveal(Instance& inst, float reveal);
   void animateInstance(Instance& inst);
+  void showStandalone(const OsdContent& content);
 
   WaylandConnection* m_wayland = nullptr;
   ConfigService* m_config = nullptr;
   RenderContext* m_renderContext = nullptr;
+  TransientActivityService* m_activityService = nullptr;
+  std::function<void(std::string)> m_openContext;
   OsdContent m_content;
   std::string m_lastPosition;
   std::string m_lastOrientation;

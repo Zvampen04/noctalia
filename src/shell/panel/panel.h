@@ -37,6 +37,7 @@ public:
     (void)context;
     return false;
   }
+  [[nodiscard]] virtual bool directionalNavigation() const noexcept { return false; }
   [[nodiscard]] virtual bool handleGlobalKey(std::uint32_t sym, std::uint32_t modifiers, bool pressed, bool preedit) {
     (void)sym;
     (void)modifiers;
@@ -78,6 +79,9 @@ public:
   // panels resolve through shell.panel.*_position in PanelManager.
   [[nodiscard]] virtual std::string panelScreenPosition() const { return "auto"; }
   [[nodiscard]] virtual bool panelOpenNearClick() const { return false; }
+  // Presentation context currently shown by the panel. Empty means the panel
+  // has no named public context to report.
+  [[nodiscard]] virtual std::string_view activeContext() const noexcept { return {}; }
   // For attached panels: which bar edge to attach to when more than one bar exists on
   // the target output. Returned value must outlive the call (use a string literal).
   [[nodiscard]] virtual std::string_view preferredAttachedBarPosition() const noexcept { return "top"; }

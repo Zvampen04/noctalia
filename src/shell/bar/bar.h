@@ -18,6 +18,9 @@
 #include <vector>
 
 class TaskbarWidget;
+struct TransientActivityRoute;
+struct TransientActivityViewModel;
+struct TransientActivityAnchor;
 
 class ConfigService;
 class CompositorPlatform;
@@ -26,13 +29,11 @@ class HttpClient;
 class IdleInhibitor;
 class IpcService;
 class LockKeysService;
-class ModemManagerService;
 class MprisService;
 class BluetoothService;
 class BrightnessService;
 class ClipboardService;
 class EasyEffectsService;
-class ExternalIpService;
 class ScreenshotService;
 class INetworkService;
 class NotificationManager;
@@ -111,9 +112,24 @@ public:
   // True when an attached panel may start its reveal animation: non-autohide bars, or autohide
   // bars that have finished sliding into their resting position.
   [[nodiscard]] bool isAttachedPanelBarSettled(wl_output* output, std::string_view barName) const noexcept;
+  [[nodiscard]] const Node* attachedPanelSourceContent(wl_output* output, std::string_view barName,
+                                                       const AttachedPanelSource& source) const;
+  [[nodiscard]] std::optional<AttachedPanelSource> attachedSourceGeometry(
+      wl_output* output, std::string_view barName, const AttachedPanelSource& source) const;
+  void setAttachedSourceGeometryChangedCallback(std::function<void(wl_output*, std::string_view)> callback) {
+    m_attachedSourceGeometryChangedCallback = std::move(callback);
+  }
   void revealAutoHideForAttachedPanel(wl_output* output, std::string_view barName);
   void beginAttachedPopup(wl_surface* surface);
   void endAttachedPopup(wl_surface* surface);
+  [[nodiscard]] bool canPresentTransientActivity(const TransientActivityRoute& route) const;
+  [[nodiscard]] std::vector<TransientActivityAnchor>
+  transientActivityAnchors(const TransientActivityRoute& route) const;
+  [[nodiscard]] bool presentTransientActivity(
+      const TransientActivityViewModel& activity, const TransientActivityRoute& route
+  );
+  void withdrawTransientActivity(std::uint64_t serial);
+  void withdrawTransientActivityImmediately(std::uint64_t serial);
 
   void registerIpc(IpcService& ipc);
 
@@ -178,8 +194,6 @@ private:
   SystemMonitorService* m_sysmon = nullptr;
   PowerProfilesService* m_powerProfiles = nullptr;
   INetworkService* m_network = nullptr;
-  ModemManagerService* m_modem = nullptr;
-  ExternalIpService* m_externalIp = nullptr;
   IdleInhibitor* m_idleInhibitor = nullptr;
   MprisService* m_mpris = nullptr;
   PipeWireSpectrum* m_audioSpectrum = nullptr;
@@ -203,6 +217,13 @@ private:
   std::vector<BarConfig> m_lastBars;
   std::unordered_map<std::string, WidgetConfig> m_lastWidgets;
   ShellConfig::ShadowConfig m_lastShadow;
+  Style::MaterialSettings m_lastMaterial;
+  Style::MaterialOverrides m_lastMaterialOverrides;
+  Style::Metrics m_lastDesign;
+  Style::SurfaceMaterialMode m_lastSurfaceMaterial=Style::SurfaceMaterialMode::Flat;
+  float m_lastCornerScale=1.0F,m_lastUiScale=1.0F;
+  bool syncAppearanceSnapshot();
+  void refreshSurfaceGeometry();
   // Plugin enable/disable changes which widget types resolve, so a plugins-only
   // config change must also rebuild widgets.
   PluginsConfig m_lastPlugins;
@@ -210,6 +231,9 @@ private:
   // Surface → BarInstance mapping for pointer event routing
   std::unordered_map<wl_surface*, BarInstance*> m_surfaceMap;
   BarInstance* m_hoveredInstance = nullptr;
+  void notifyAttachedSourceGeometryChanged(const BarInstance& instance);
+  void syncTransientActivityGeometry(BarInstance& instance);
+  std::function<void(wl_output*, std::string_view)> m_attachedSourceGeometryChangedCallback;
   std::function<bool(const BarInstance&)> m_autoHideSuppressionCallback;
   noctalia::bar::WidgetActionDispatcher m_actionDispatcher;
   Timer m_workspaceRevealDebounce;

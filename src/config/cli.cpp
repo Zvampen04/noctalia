@@ -4,14 +4,19 @@
 #include "cli/parse.h"
 #include "cli/schema_config.h"
 #include "config/config_service.h"
+#include "config/profile_scope.h"
 #include "config/config_validate.h"
 #include "core/log.h"
 #include "core/toml.h" // IWYU pragma: keep
 #include "shell/settings/settings_registry.h"
+#include "shell/settings/widget_settings_registry.h"
+#include "scripting/plugin_manager.h"
+#include "scripting/plugin_registry.h"
 #include "util/file_utils.h"
 #include "util/string_utils.h"
 
 #include <algorithm>
+#include <nlohmann/json.hpp>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -412,6 +417,72 @@ namespace noctalia::config {
         return 0;
       const std::string_view mode =
           parsed->positionals.empty() ? std::string_view{"merged"} : parsed->positionals.front();
+
+      if (mode == "settings-schema") {
+        setLogLevel(LogLevel::Warn);
+        ConfigService service;
+        Config cfg = service.config();
+        nlohmann::json rows = nlohmann::json::array();
+        const auto add = [&](std::string section, const std::vector<std::string>& path) {
+          rows.push_back({{"section", std::move(section)}, {"path", path},
+                          {"profile_managed", noctalia::profile::owns(path)}});
+        };
+        // Whole collections include hidden variants, new instances and their
+        // custom editors. Shared shell settings retain individual registry paths.
+        for (const auto& [section, root] : std::vector<std::pair<std::string, std::string>>{
+          {"wallpaper", "wallpaper"}, {"dock", "dock"},
+          {"bar", "bar"}, {"bar", "widget"}, {"desktop", "desktop_widgets"},
+          {"desktop", "hot_corners"}}) add(section, {root});
+        // The lock-widget editor owns this presentation collection without
+        // exposing its internal fields as duplicate Settings rows. Publish the
+        // four profile-owned children explicitly; lockscreen_widgets.enabled
+        // remains session/auth policy and is intentionally excluded.
+        for (const auto* field : {"schema_version", "grid", "widget_order", "widget"})
+          add("desktop", {"lockscreen_widgets", field});
+        // Integrated plugin panels use native sidecar settings, not a WM
+        // control mirror. Export every control placed on their Panels tab.
+        auto& plugins = scripting::PluginRegistry::instance();
+        scripting::applyPluginSourcesToRegistry(plugins, cfg.plugins);
+        for (const auto& panel : plugins.entriesOfKind(scripting::PluginEntryKind::Panel)) {
+          const auto& manifest = *panel.manifest;
+          if (!std::ranges::any_of(manifest.settingsTabTargets,
+                  [](const auto& item) { return item.second == "panels"; })) continue;
+          for (const auto& spec : settings::pluginPanelShellSettingSpecs(*panel.entry))
+            add("panels", {"plugin_settings", manifest.id, spec.schema.key});
+          for (const auto& field : panel.entry->settings)
+            add("panels", {"plugin_settings", manifest.id, field.key});
+        }
+        add("launcher", {"shell", "launcher"});
+        add("appearance", {"shell", "material_overrides"});
+        add("notifications", {"notification"});
+        add("control-center", {"control_center", "shortcuts"});
+        for (auto source : {PaletteSource::Builtin, PaletteSource::Wallpaper,
+                            PaletteSource::Community, PaletteSource::Custom}) {
+          cfg.theme.source = source;
+          for (const auto& entry : settings::buildSettingsRegistry(cfg, nullptr)) {
+            const auto section = std::string(settings::settingsSectionId(entry.section));
+            const auto append = [&](const std::vector<std::string>& path) {
+              if (!path.empty()) add(section, path);
+            };
+            append(entry.path);
+            // Compound controls own every field they change. Exporting only
+            // the visible row's primary path loses motion enablement and the
+            // other curve coordinates from profile capture and restoration.
+            if (const auto* select = std::get_if<settings::SelectSetting>(&entry.control)) {
+              append(select->linkedPath);
+              for (const auto& path : select->linkedPaths) append(path);
+            }
+            if (const auto* curve = std::get_if<settings::CurveSetting>(&entry.control)) {
+              append(curve->stylePath);
+              for (const auto& path : curve->paths) append(path);
+            }
+            if (const auto* range = std::get_if<settings::RangeSliderSetting>(&entry.control))
+              append(range->highPath);
+          }
+        }
+        std::println("{}", rows.dump());
+        return 0;
+      }
 
       const std::string configDir = FileUtils::configDir();
       std::string settingsPath;

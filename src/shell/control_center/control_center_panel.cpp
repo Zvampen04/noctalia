@@ -1,4 +1,6 @@
+#include "shell/control_center/tabs/compact_home_tab.h"
 #include "shell/control_center/control_center_panel.h"
+#include "shell/control_center/control_center_width.h"
 
 #include "compositors/compositor_platform.h"
 #include "config/config_service.h"
@@ -51,6 +53,7 @@ ControlCenterPanel::ControlCenterPanel(const ControlCenterServices& services) {
   m_notificationManager = services.notifications;
   m_dependencies = services.dependencies;
   m_tabs[tabIndex(TabId::Home)] = std::make_unique<HomeTab>(services);
+  m_alternateHome = std::make_unique<CompactHomeTab>(services);
   m_tabs[tabIndex(TabId::Media)] = std::make_unique<MediaTab>(
       services.mpris, services.httpClient, services.spectrum, services.config, wayland,
       PanelManager::instance().renderContext()
@@ -63,8 +66,8 @@ ControlCenterPanel::ControlCenterPanel(const ControlCenterServices& services) {
   m_tabs[tabIndex(TabId::Calendar)] = std::make_unique<CalendarTab>(services.config, services.calendar);
   m_tabs[tabIndex(TabId::Notifications)] =
       std::make_unique<NotificationsTab>(services.notifications, services.platform);
-  m_tabs[tabIndex(TabId::Network)] =
-      std::make_unique<NetworkTab>(services.network, services.networkSecrets, services.externalIp, services.modem);
+  m_tabs[tabIndex(TabId::Network)] = std::make_unique<NetworkTab>(
+      services.network, services.networkSecrets, services.externalIp, services.modem);
   m_tabs[tabIndex(TabId::Bluetooth)] = std::make_unique<BluetoothTab>(services.bluetooth, services.bluetoothAgent);
   m_tabs[tabIndex(TabId::Monitor)] = std::make_unique<MonitorTab>(services.brightness, services.config);
   m_tabs[tabIndex(TabId::System)] = std::make_unique<SystemTab>(services.sysmon);
@@ -76,17 +79,28 @@ ControlCenterPanel::ControlCenterPanel(const ControlCenterServices& services) {
 }
 
 float ControlCenterPanel::preferredWidth() const {
-  const float fullSize = m_config != nullptr ? static_cast<float>(m_config->config().controlCenter.width)
-                                             : static_cast<float>(ControlCenterConfig::kDefaultWidth);
-  switch (sidebarModeForOpen(pendingOpenContext())) {
-  case ControlCenterSidebarMode::Full:
-    return fullSize * m_contentScale;
-  case ControlCenterSidebarMode::None:
-    return fullSize * 0.75F * m_contentScale;
-  default:
-  case ControlCenterSidebarMode::Compact:
-    return fullSize * 0.85F * m_contentScale;
+  const ControlCenterConfig defaults;
+  const auto& config = m_config != nullptr ? m_config->config().controlCenter : defaults;
+  if (config.compactSections && pendingOpenContext() != "calendar-month") {
+    switch (tabFromContext(pendingOpenContext())) {
+    case TabId::Calendar: return scaled(config.calendarTab.width);
+    case TabId::Media: return scaled(config.media.width);
+    default: return scaled(config.width);
+    }
   }
+  return control_center_width::preferred(config, sidebarModeForOpen(pendingOpenContext()), m_contentScale);
+}
+
+float ControlCenterPanel::preferredHeight() const {
+  if (m_config && m_config->config().controlCenter.compactSections && pendingOpenContext() != "calendar-month") {
+    const auto& c = m_config->config().controlCenter;
+    switch (tabFromContext(pendingOpenContext())) {
+    case TabId::Calendar: return scaled(c.calendarTab.height);
+    case TabId::Media: return scaled(c.media.height);
+    default: return scaled(c.compactHeight);
+    }
+  }
+  return scaled(520.0F);
 }
 
 PanelPlacement ControlCenterPanel::panelPlacement() const noexcept {
@@ -99,6 +113,11 @@ bool ControlCenterPanel::dismissTransientUi() {
 }
 
 void ControlCenterPanel::create() {
+  const bool compactHome = m_config && m_config->config().controlCenter.compactSections;
+  if (compactHome != m_usingCompactHome) {
+    m_tabs[tabIndex(TabId::Home)].swap(m_alternateHome);
+    m_usingCompactHome = compactHome;
+  }
   const float scale = contentScale();
   const ControlCenterSidebarMode sidebarMode = sidebarModeForOpen(pendingOpenContext());
   m_compact = sidebarMode == ControlCenterSidebarMode::Compact;
@@ -108,12 +127,15 @@ void ControlCenterPanel::create() {
     tab->setContentScale(scale);
     tab->setPanelCardOpacity(panelCardOpacity());
   }
+  if (auto* calendar = dynamic_cast<CalendarTab*>(m_tabs[tabIndex(TabId::Calendar)].get()))
+    calendar->setForceMonthView(pendingOpenContext() == "calendar-month");
 
   auto rootLayout = ui::row({
       .out = &m_rootLayout,
       .align = FlexAlign::Stretch,
       .gap = Style::panelPadding * scale,
       .padding = 0.0F,
+      .clipChildren = true,
   });
 
   if (m_showSidebar) {
@@ -282,6 +304,11 @@ void ControlCenterPanel::create() {
   );
   header->addChild(std::move(headerActions));
 
+  if (m_config && m_config->config().controlCenter.compactSections && pendingOpenContext() != "calendar-month") {
+    header->setVisible(false);
+    header->setParticipatesInLayout(false);
+    content->setGap(0.0F);
+  }
   content->addChild(std::move(header));
 
   auto bodies = ui::column({
@@ -331,7 +358,7 @@ void ControlCenterPanel::doLayout(Renderer& renderer, float width, float height)
   }
 
   if (!m_compact && m_showSidebar) {
-    layoutFullSidebarWidth(renderer);
+    layoutFullSidebarWidth(renderer, width);
   }
 
   m_rootLayout->setSize(width, height);
@@ -824,6 +851,7 @@ void ControlCenterPanel::scheduleMprisRefreshFor(TabId tab) {
 }
 
 bool ControlCenterPanel::isDirectSectionOpenContext(std::string_view context) const {
+  if (context == "calendar-month") return true;
   if (context.empty() || context == "home") {
     return false;
   }
@@ -844,6 +872,7 @@ ControlCenterSidebarMode ControlCenterPanel::sidebarModeForOpen(std::string_view
 }
 
 ControlCenterPanel::TabId ControlCenterPanel::tabFromContext(std::string_view context) const {
+  if (context == "calendar-month") return TabId::Calendar;
   for (const auto& tab : kTabs) {
     if (context == tab.key) {
       return tab.id;
@@ -854,7 +883,7 @@ ControlCenterPanel::TabId ControlCenterPanel::tabFromContext(std::string_view co
 
 std::size_t ControlCenterPanel::tabIndex(TabId id) { return static_cast<std::size_t>(id); }
 
-void ControlCenterPanel::layoutFullSidebarWidth(Renderer& renderer) {
+void ControlCenterPanel::layoutFullSidebarWidth(Renderer& renderer, float panelWidth) {
   if (m_sidebarScrollView == nullptr || m_sidebarNav == nullptr) {
     return;
   }
@@ -875,7 +904,8 @@ void ControlCenterPanel::layoutFullSidebarWidth(Renderer& renderer) {
   }
 
   const float minWidth = Style::controlHeightSm * scale;
-  const float contentWidth = std::max(minWidth, std::ceil(maxTabWidth));
+  const float contentWidth = control_center_width::fittedFullSidebar(std::ceil(maxTabWidth),
+      panelWidth, minWidth, 160.0F * scale, Style::panelPadding * scale);
 
   // Scrollbar gutter lives inside the scroll viewport; reserve it only when the nav overflows.
   float targetWidth = contentWidth;
@@ -885,7 +915,9 @@ void ControlCenterPanel::layoutFullSidebarWidth(Renderer& renderer) {
     navConstraints.setExactWidth(contentWidth);
     const float navHeight = m_sidebarNav->measure(renderer, navConstraints).height;
     if (navHeight > scrollHeight + 0.5F) {
-      targetWidth = contentWidth + m_sidebarScrollView->scrollbarGutter();
+      targetWidth = control_center_width::fittedFullSidebar(
+          contentWidth + m_sidebarScrollView->scrollbarGutter(), panelWidth,
+          minWidth, 160.0F * scale, Style::panelPadding * scale);
     }
   }
 

@@ -1,3 +1,5 @@
+#include "ui/control_settings_palette.h"
+#include "ui/surface_material.h"
 #include "ui/controls/scroll_view.h"
 
 #include "render/animation/animation_manager.h"
@@ -39,10 +41,15 @@ namespace {
 
 ScrollView::ScrollView() {
   m_paletteConn = paletteChanged().connect([this] { applyPalette(); });
+  m_cardMaterialConn = Style::surfaceMaterialChanged().connect([this] {
+    if (m_cardScale) setCardStyle(*m_cardScale, m_cardOpacity, m_cardBorder);
+    else applyPalette();
+  });
   setClipChildren(true);
 
   auto background = std::make_unique<RectNode>();
   m_background = static_cast<RectNode*>(addChild(std::move(background)));
+  m_background->setBypassParentPaintClip(true);
   m_background->setStyle(
       RoundedRectStyle{
           .fill = clearColor(),
@@ -286,14 +293,17 @@ void ScrollView::setSoftness(float softness) {
   applyPalette();
 }
 
-void ScrollView::setCardStyle(float scale, float fillOpacity, bool showBorder) {
-  setFill(colorSpecFromRole(ColorRole::SurfaceVariant, fillOpacity));
-  if (showBorder) {
+void ScrollView::setCardStyle(float scale, float fillOpacity, std::optional<bool> showBorder) {
+  m_cardScale = scale; m_cardOpacity = fillOpacity; m_cardBorder = showBorder;
+  const auto& controls = Style::controls();
+  const bool raised = controls.card_variant == Style::CardTreatment::Raised;
+  setFill(colorSpecFromRole(raised ? controlColorRole(controls.card_face_role) : ColorRole::SurfaceVariant, fillOpacity));
+  if (!raised && showBorder.value_or(Style::cardBordersEnabled())) {
     setBorder(colorSpecFromRole(ColorRole::Outline), Style::borderWidth);
   } else {
     clearBorder();
   }
-  setRadius(Style::scaledRadiusXl(scale));
+  setRadius(raised ? Style::scaledRadius(controls.card_radius, scale) : Style::scaledRadiusXl(scale));
   setViewportPaddingH(Style::cardPadding * scale);
   setViewportPaddingV(Style::cardPadding * scale);
 }
@@ -365,16 +375,18 @@ float ScrollView::contentViewportHeight() const noexcept {
 
 void ScrollView::applyPalette() {
   if (m_background != nullptr) {
-    m_background->setStyle(
-        RoundedRectStyle{
-            .fill = resolveColorSpec(m_backgroundFill),
-            .border = resolveColorSpec(m_backgroundBorder),
-            .fillMode = FillMode::Solid,
-            .radius = m_backgroundRadius,
-            .softness = m_backgroundSoftness,
-            .borderWidth = m_backgroundBorderWidth,
-        }
-    );
+    RoundedRectStyle style{
+        .fill = resolveColorSpec(m_backgroundFill),
+        .border = resolveColorSpec(m_backgroundBorder),
+        .fillMode = FillMode::Solid,
+        .radius = m_backgroundRadius,
+        .softness = m_backgroundSoftness,
+        .borderWidth = m_backgroundBorderWidth,
+    };
+    const bool raised = m_cardScale && Style::controls().card_variant == Style::CardTreatment::Raised;
+    m_background->setStyle(SurfaceMaterial::styled(*m_background, style,
+        raised ? Style::controls().card_relief : 0.75F, MaterialBackdrop::Inherited,
+        raised ? "card" : "container", "surface"));
   }
 }
 

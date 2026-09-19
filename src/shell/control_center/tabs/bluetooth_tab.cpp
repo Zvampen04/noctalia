@@ -21,7 +21,7 @@ using namespace control_center;
 
 namespace {
 
-  constexpr float kRowMinHeight = Style::controlHeightLg;
+  const auto kRowMinHeight = []() -> float { return Style::controlHeightLg; };
 
   // Bounds an explicit Rescan: BlueZ discovery is stopped again when this window elapses.
   constexpr auto kDiscoveryTimeout = std::chrono::seconds(10);
@@ -150,7 +150,7 @@ public:
         {.align = FlexAlign::Center,
          .gap = Style::spaceSm * scale,
          .padding = Style::spaceSm * scale,
-         .minHeight = kRowMinHeight * scale},
+         .minHeight = kRowMinHeight() * scale},
         ui::glyph({
             .glyph = glyphFor(m_device.kind),
             .glyphSize = Style::fontSizeBody * scale,

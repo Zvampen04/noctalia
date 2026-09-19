@@ -47,6 +47,7 @@ namespace ui {
       if (props.fill.has_value()) {
         flex.setFill(*props.fill);
       }
+      if (props.cornerPower) flex.setCornerPower(props.cornerPower);
       if (props.radius.has_value()) {
         flex.setRadius(*props.radius);
       }
@@ -390,6 +391,7 @@ namespace ui {
     if (props.gap.has_value()) {
       control->setGap(*props.gap);
     }
+    if (props.cornerPower) control->setCornerPower(props.cornerPower);
     if (props.radius.has_value()) {
       control->setRadius(*props.radius);
     }
@@ -468,6 +470,7 @@ namespace ui {
     if (props.border.has_value()) {
       control->setBorder(*props.border, props.borderWidth.value_or(1.0F));
     }
+    if (props.cornerPower) control->setCornerPower(props.cornerPower);
     if (props.radius.has_value()) {
       control->setRadius(*props.radius);
     }
@@ -513,6 +516,7 @@ namespace ui {
     if (props.fit.has_value()) {
       control->setFit(*props.fit);
     }
+    if (props.cornerPower) control->setCornerPower(props.cornerPower);
     if (props.radius.has_value()) {
       control->setRadius(*props.radius);
     }
@@ -766,6 +770,7 @@ namespace ui {
     if (props.fill.has_value()) {
       control->setFill(*props.fill);
     }
+    if (props.cornerPower) control->setCornerPower(props.cornerPower);
     if (props.radius.has_value()) {
       control->setRadius(*props.radius);
     }
@@ -1099,6 +1104,7 @@ namespace ui {
     if (props.track.has_value()) {
       control->setTrack(*props.track);
     }
+    if (props.cornerPower) control->setCornerPower(props.cornerPower);
     if (props.radius.has_value()) {
       control->setRadius(*props.radius);
     }

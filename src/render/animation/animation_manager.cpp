@@ -8,7 +8,9 @@ namespace {
   constexpr float kReducedMotionDurationMs = 1.0F;
 }
 
-AnimationManager::AnimationManager() { MotionService::instance().registerManager(this); }
+AnimationManager::AnimationManager(Clock clock) : m_clock(std::move(clock)) {
+  MotionService::instance().registerManager(this);
+}
 
 AnimationManager::~AnimationManager() { MotionService::instance().unregisterManager(this); }
 
@@ -16,19 +18,27 @@ AnimationManager::Id AnimationManager::animate(
     float from, float to, float durationMs, Easing easing, std::function<void(float)> setter,
     std::function<void()> onComplete, const void* owner
 ) {
-  return animateInternal(from, to, durationMs, easing, std::move(setter), std::move(onComplete), owner, true, true);
+  return animateInternal(from, to, durationMs, easing, std::move(setter), std::move(onComplete), owner, true, true, true);
 }
 
 AnimationManager::Id AnimationManager::animateTimer(
     float from, float to, float durationMs, Easing easing, std::function<void(float)> setter,
     std::function<void()> onComplete, const void* owner
 ) {
-  return animateInternal(from, to, durationMs, easing, std::move(setter), std::move(onComplete), owner, false, false);
+  return animateInternal(from, to, durationMs, easing, std::move(setter), std::move(onComplete), owner, false, false, false);
+}
+
+AnimationManager::Id AnimationManager::animateProgress(
+    float from, float to, float durationMs, std::function<void(float)> setter,
+    std::function<void()> onComplete, const void* owner
+) {
+  return animateInternal(from, to, durationMs, Easing::Linear, std::move(setter), std::move(onComplete), owner, true, true, false);
 }
 
 AnimationManager::Id AnimationManager::animateInternal(
     float from, float to, float durationMs, Easing easing, std::function<void(float)> setter,
-    std::function<void()> onComplete, const void* owner, bool scaleDuration, bool respectMotionEnabled
+    std::function<void()> onComplete, const void* owner, bool scaleDuration, bool respectMotionEnabled,
+    bool resolveMotionCurve
 ) {
   const auto& motion = MotionService::instance();
   const bool reduceMotion = respectMotionEnabled && !motion.enabled();
@@ -57,12 +67,13 @@ AnimationManager::Id AnimationManager::animateInternal(
   }
 
   Id id = m_nextId++;
-  const auto now = std::chrono::steady_clock::now();
+  const auto now = m_clock();
   m_animations.push_back(
       Entry{
           .id = id,
           .owner = owner,
           .respectMotionEnabled = respectMotionEnabled,
+          .resolveMotionCurve = resolveMotionCurve,
           .animation = Animation{
               .startValue = reduceMotion ? to : from,
               .endValue = to,
@@ -88,7 +99,7 @@ void AnimationManager::cancel(Id id) {
 void AnimationManager::cancelAll() { m_animations.clear(); }
 
 void AnimationManager::reduceMotion() {
-  const auto now = std::chrono::steady_clock::now();
+  const auto now = m_clock();
   for (auto& entry : m_animations) {
     if (!entry.respectMotionEnabled || entry.animation.finished) {
       continue;
@@ -120,7 +131,7 @@ void AnimationManager::tick(float /*deltaMs*/) {
   // which would push_back and invalidate iterators during iteration.
   std::vector<std::function<void()>> completedCallbacks;
 
-  const auto now = std::chrono::steady_clock::now();
+  const auto now = m_clock();
 
   for (auto& entry : m_animations) {
     auto& anim = entry.animation;
@@ -140,6 +151,7 @@ void AnimationManager::tick(float /*deltaMs*/) {
     }
 
     float easedT = applyEasing(anim.easing, t);
+    if (entry.resolveMotionCurve) easedT = MotionService::instance().easedProgress(t, easedT);
     float value = anim.startValue + (anim.endValue - anim.startValue) * easedT;
 
     if (anim.setter) {

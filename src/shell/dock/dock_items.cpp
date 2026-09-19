@@ -3,6 +3,7 @@
 #include "config/config_service.h"
 #include "core/ui_phase.h"
 #include "i18n/i18n.h"
+#include "render/animation/motion_service.h"
 #include "render/core/renderer.h"
 #include "render/scene/input_area.h"
 #include "render/scene/node.h"
@@ -41,12 +42,11 @@ namespace {
   constexpr float kDotGap = 3.0F;
   constexpr float kCellPad = 6.0F;
   constexpr float kLauncherGlyphSizeRatio = 0.8F;
-  constexpr float kHoverZoomLerp = 0.28F;
-  constexpr float kHoverZoomReferenceFrameMs = 1000.0F / 60.0F;
   // Pointer hit padding (in item pitches) — keep generous so edge icons still magnify.
   constexpr float kHoverZoomInfluence = 2.25F;
   // Scale falloff radius — tighter than hit padding so neighbors stay closer to rest size.
   constexpr float kHoverZoomFalloffInfluence = 1.5F;
+  constexpr float kHoverZoomReferenceFrameMs = 1000.0F / 60.0F;
   constexpr std::int32_t kHoverZoomZScale = 100;
   constexpr auto kDragHoldDelay = std::chrono::milliseconds(300);
 
@@ -140,21 +140,43 @@ namespace {
     }
   }
 
-  [[nodiscard]] float hoverZoomFrameLerp(float deltaMs) {
-    const float clampedMs = std::clamp(deltaMs, 1.0F, 50.0F);
-    return 1.0F - std::pow(1.0F - kHoverZoomLerp, clampedMs / kHoverZoomReferenceFrameMs);
-  }
-
-  [[nodiscard]] bool lerpHoverMainOffset(float& current, float target, float lerpFactor) {
-    if (std::abs(current - target) <= 0.25F) {
-      if (current != target) {
-        current = target;
-        return true;
-      }
-      return false;
+  [[nodiscard]] bool advanceHoverMotion(
+      shell::dock::DockHoverMotion& state, float& scale, float& offset,
+      float targetScale, float targetOffset, float deltaMs
+  ) {
+    constexpr float kTargetEpsilon = 0.001F;
+    const bool externallyChanged = state.lastPresentedScale >= 0.0F
+        && (std::abs(scale - state.lastPresentedScale) > kTargetEpsilon
+            || std::abs(offset - state.lastPresentedOffset) > kTargetEpsilon);
+    const bool targetChanged = state.targetScale < 0.0F
+        || std::abs(targetScale - state.targetScale) > kTargetEpsilon
+        || std::abs(targetOffset - state.targetOffset) > kTargetEpsilon;
+    if (externallyChanged || targetChanged) {
+      state.startScale = scale;
+      state.startOffset = offset;
+      state.targetScale = targetScale;
+      state.targetOffset = targetOffset;
+      state.elapsedMs = 0.0F;
+      state.active = true;
     }
-    current += (target - current) * lerpFactor;
-    return true;
+
+    const auto& motion = MotionService::instance();
+    if (!motion.enabled()) {
+      scale = targetScale;
+      offset = targetOffset;
+      state.active = false;
+    } else if (state.active) {
+      state.elapsedMs += std::max(0.0F, deltaMs) * motion.speed();
+      const float progress = Style::animNormal <= 0
+          ? 1.0F : std::clamp(state.elapsedMs / static_cast<float>(Style::animNormal), 0.0F, 1.0F);
+      const float eased = motion.easedProgress(progress, applyEasing(Easing::EaseOutCubic, progress));
+      scale = state.startScale + (state.targetScale - state.startScale) * eased;
+      offset = state.startOffset + (state.targetOffset - state.startOffset) * eased;
+      state.active = progress < 1.0F;
+    }
+    state.lastPresentedScale = scale;
+    state.lastPresentedOffset = offset;
+    return state.active;
   }
 
   void computeSymmetricSpreadOffsets(const std::vector<float>& scales, float iconSize, std::vector<float>& outOffsets) {
@@ -335,35 +357,6 @@ namespace {
         },
         [animIdPtr = &animId] { *animIdPtr = 0; }
     );
-  }
-
-  [[nodiscard]] bool applyHoverIconScale(
-      Node* iconNode, float& visualScale, AnimationManager::Id& animId, shell::dock::DockInstance& instance,
-      float targetScale, float restScale, float lerpFactor, DockEdge edge, float baseX, float baseY, float iconSize,
-      Box* badge, float badgeSize
-  ) {
-    if (iconNode == nullptr) {
-      return false;
-    }
-    if (animId != 0) {
-      instance.animations.cancel(animId);
-      animId = 0;
-    }
-    if (visualScale < 0.0F) {
-      visualScale = restScale;
-      applyHoverItemVisual(iconNode, badge, edge, baseX, baseY, iconSize, badgeSize, restScale);
-    }
-    if (std::abs(visualScale - targetScale) <= 0.002F) {
-      if (std::abs(visualScale - targetScale) > 0.0F) {
-        visualScale = targetScale;
-        applyHoverItemVisual(iconNode, badge, edge, baseX, baseY, iconSize, badgeSize, targetScale);
-      }
-      return false;
-    }
-    const float next = visualScale + (targetScale - visualScale) * lerpFactor;
-    visualScale = next;
-    applyHoverItemVisual(iconNode, badge, edge, baseX, baseY, iconSize, badgeSize, next);
-    return true;
   }
 
 } // namespace
@@ -979,7 +972,6 @@ namespace shell::dock {
       return false;
     }
 
-    const float lerpFactor = hoverZoomFrameLerp(deltaMs);
     const DockEdge edge = cfg.position;
     const bool vertical = shell::dock::isVerticalEdge(edge);
     const auto iSize = static_cast<float>(cfg.iconSize);
@@ -997,6 +989,7 @@ namespace shell::dock {
       Node* iconNode = nullptr;
       float* visualScale = nullptr;
       float* hoverMainOffset = nullptr;
+      DockHoverMotion* hoverMotion = nullptr;
       AnimationManager::Id* scaleAnimId = nullptr;
       float restMainPos = 0.0F;
       float restCrossPos = 0.0F;
@@ -1017,6 +1010,7 @@ namespace shell::dock {
               .iconNode = instance.launcherIconNode,
               .visualScale = &instance.launcherVisualScale,
               .hoverMainOffset = &instance.launcherHoverMainOffset,
+              .hoverMotion = &instance.launcherHoverMotion,
               .scaleAnimId = &instance.launcherScaleAnimId,
               .restMainPos = instance.launcherRestMainPos,
               .restCrossPos = instance.launcherRestCrossPos,
@@ -1039,6 +1033,7 @@ namespace shell::dock {
               .iconNode = iconNode,
               .visualScale = &item.visualScale,
               .hoverMainOffset = &item.hoverMainOffset,
+              .hoverMotion = &item.hoverMotion,
               .scaleAnimId = &item.scaleAnimId,
               .restMainPos = item.restMainPos,
               .restCrossPos = item.restCrossPos,
@@ -1054,6 +1049,7 @@ namespace shell::dock {
               .iconNode = instance.launcherIconNode,
               .visualScale = &instance.launcherVisualScale,
               .hoverMainOffset = &instance.launcherHoverMainOffset,
+              .hoverMotion = &instance.launcherHoverMotion,
               .scaleAnimId = &instance.launcherScaleAnimId,
               .restMainPos = instance.launcherRestMainPos,
               .restCrossPos = instance.launcherRestCrossPos,
@@ -1099,17 +1095,17 @@ namespace shell::dock {
     }
 
     for (HoverSlot& slot : slots) {
-      if (lerpHoverMainOffset(*slot.hoverMainOffset, pointerActive ? slot.targetMainOffset : 0.0F, lerpFactor)) {
-        needsMoreFrames = true;
+      if (*slot.visualScale < 0.0F) *slot.visualScale = slot.baseScale;
+      if (*slot.scaleAnimId != 0) {
+        instance.animations.cancel(*slot.scaleAnimId);
+        *slot.scaleAnimId = 0;
       }
+      needsMoreFrames |= advanceHoverMotion(
+          *slot.hoverMotion, *slot.visualScale, *slot.hoverMainOffset,
+          slot.targetScale, pointerActive ? slot.targetMainOffset : 0.0F, deltaMs);
       applyItemMainOffset(slot.area, vertical, slot.restMainPos, slot.restCrossPos, *slot.hoverMainOffset);
-
-      if (applyHoverIconScale(
-              slot.iconNode, *slot.visualScale, *slot.scaleAnimId, instance, slot.targetScale, slot.baseScale,
-              lerpFactor, edge, slot.iconBaseX, slot.iconBaseY, iSize, slot.badge, badgeSize
-          )) {
-        needsMoreFrames = true;
-      }
+      applyHoverItemVisual(
+          slot.iconNode, slot.badge, edge, slot.iconBaseX, slot.iconBaseY, iSize, badgeSize, *slot.visualScale);
 
       const float paintScale = *slot.visualScale > 0.0F ? *slot.visualScale : slot.targetScale;
       applyHoverZoomZIndex(slot.area, paintScale);

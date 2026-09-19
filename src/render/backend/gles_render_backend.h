@@ -3,6 +3,8 @@
 #include "render/backend/gles_texture_manager.h"
 #include "render/backend/render_backend.h"
 #include "render/core/shader_program.h"
+#include "render/custom_effect/custom_effect_program.h"
+#include "render/custom_effect/custom_effect_consumers.h"
 #include "render/programs/audio_spectrum_program.h"
 #include "render/programs/blur_program.h"
 #include "render/programs/countdown_ring_program.h"
@@ -20,6 +22,10 @@
 #include <EGL/egl.h>
 #include <GLES2/gl2.h>
 #include <optional>
+#include <functional>
+#include <string>
+#include <utility>
+#include <vector>
 
 class GlesRenderBackend final : public RenderBackend {
 public:
@@ -55,6 +61,14 @@ public:
       float surfaceWidth, float surfaceHeight, float width, float height, const RoundedRectStyle& style,
       const Mat3& transform
   ) override;
+  [[nodiscard]] std::optional<CustomEffectCompileStatus>
+  customEffectStatus(std::string_view stableId) const override { return m_customEffects.status(stableId); }
+  void setCustomEffectStatusChanged(std::function<void(std::string_view)> callback) override {
+    m_customEffectStatusChanged=std::move(callback);m_pendingCustomEffectStatus.clear();
+  }
+  void beginCustomEffectConsumerFrame(const void* surfaceOwner) override;
+  void endCustomEffectConsumerFrame() override;
+  void removeCustomEffectConsumerSurface(const void* surfaceOwner) override;
   void drawImage(const RenderImageDraw& draw) override;
   void drawGlyph(const RenderGlyphDraw& draw) override;
   void drawSpinner(
@@ -105,6 +119,7 @@ private:
   void resolveGraphicsResetStatusProc();
   void destroyGpuObjects();
   void abandonGpuObjects() noexcept;
+  void dispatchCustomEffectStatusChanges();
 
   EGLDisplay m_display = EGL_NO_DISPLAY;
   EGLConfig m_config = nullptr;
@@ -121,6 +136,12 @@ private:
   RenderScissor m_scissor;
   GlesTextureManager m_textureManager;
   RectProgram m_rectProgram;
+  CustomEffectProgramCache m_customEffects;
+  CustomEffectConsumers m_customEffectConsumers;
+  CustomEffectConsumers::SurfaceId m_customEffectConsumerSurface = 0;
+  CustomEffectConsumers::EffectSet m_frameCustomEffectConsumers;
+  std::function<void(std::string_view)> m_customEffectStatusChanged;
+  std::vector<std::string> m_pendingCustomEffectStatus;
   ImageProgram m_imageProgram;
   GlyphProgram m_glyphProgram;
   SpinnerProgram m_spinnerProgram;

@@ -1,9 +1,14 @@
 #pragma once
 
 #include "render/core/color.h"
+#include "render/core/frame_contour.h"
+#include "render/core/segment_contour.h"
+#include "material/material.h"
+#include "render/custom_effect/custom_effect_types.h"
 
 #include <array>
 #include <cstdint>
+#include <optional>
 
 enum class FillMode {
   None,
@@ -83,6 +88,24 @@ constexpr bool operator==(const ImageScrim& lhs, const ImageScrim& rhs) noexcept
   return lhs.enabled == rhs.enabled && lhs.direction == rhs.direction && lhs.stops == rhs.stops;
 }
 
+enum class MaterialBackdrop : std::uint8_t {
+  Inherited, // Child control on an existing optical plane; no backdrop capture.
+  Local,     // Explicit optical surface over this renderer's framebuffer.
+};
+
+struct RoundedPaintClip {
+  float x=0, y=0, width=0, height=0, radius=0;
+  std::optional<float> cornerPower = std::nullopt;
+  constexpr bool operator==(const RoundedPaintClip&) const = default;
+};
+
+struct ContourBorderLayer {
+  Color color{};
+  float width = 0.0F;
+  float offset = 0.0F;
+  constexpr bool operator==(const ContourBorderLayer&) const = default;
+};
+
 struct RoundedRectStyle {
   Color fill{};
   Color border{};
@@ -91,11 +114,25 @@ struct RoundedRectStyle {
   std::array<GradientStop, 4> gradientStops{};
   CornerShapes corners{};
   RectInsets logicalInset{};
-  Radii radius;
+  Radii radius{};
+  std::optional<float> cornerPower = std::nullopt;
   float softness = 1.0F;
   bool noAa = false;
   bool invertFill = false;
+  std::optional<FrameContour> frameContour = std::nullopt;
+  std::array<ContourBorderLayer, 3> contourBorderLayers{};
+  SegmentContour segmentContour{};
   float borderWidth = 0.0F;
+  // Signed surface relief: positive is raised, negative is recessed. Zero is flat.
+  float relief = 0.0F;
+  bool liquidGlass = false;
+  // Only semantic surfaces opt in. Plain/decorative rectangles remain unchanged.
+  std::optional<noctalia::material::Parameters> material = std::nullopt;
+  MaterialBackdrop materialBackdrop = MaterialBackdrop::Inherited;
+  bool materialPlane = false; // Outer optical group published to the compositor.
+  // Optional user fragment function for this element's background only. The
+  // renderer keeps geometry, clipping, opacity, border and child content.
+  std::optional<CustomEffectBinding> customBackground = std::nullopt;
   bool outerShadow = false;
   float shadowCutoutOffsetX = 0.0F;
   float shadowCutoutOffsetY = 0.0F;
@@ -106,11 +143,17 @@ struct RoundedRectStyle {
   float shadowExclusionHeight = 0.0F;
   CornerShapes shadowExclusionCorners{};
   RectInsets shadowExclusionLogicalInset{};
-  Radii shadowExclusionRadius;
+  Radii shadowExclusionRadius{};
+  std::optional<float> shadowExclusionPower = std::nullopt;
+  // Coordinates are local logical pixels, transformed with the rectangle.
+  std::optional<RoundedPaintClip> paintClip = std::nullopt;
 };
 
 constexpr bool operator==(const RoundedRectStyle& lhs, const RoundedRectStyle& rhs) noexcept {
-  return lhs.fill == rhs.fill
+  return lhs.cornerPower == rhs.cornerPower
+      && lhs.shadowExclusionPower == rhs.shadowExclusionPower
+      && lhs.paintClip == rhs.paintClip
+      && lhs.fill == rhs.fill
       && lhs.border == rhs.border
       && lhs.fillMode == rhs.fillMode
       && lhs.gradientDirection == rhs.gradientDirection
@@ -121,7 +164,16 @@ constexpr bool operator==(const RoundedRectStyle& lhs, const RoundedRectStyle& r
       && lhs.softness == rhs.softness
       && lhs.noAa == rhs.noAa
       && lhs.invertFill == rhs.invertFill
+      && lhs.frameContour == rhs.frameContour
+      && lhs.contourBorderLayers == rhs.contourBorderLayers
+      && lhs.segmentContour == rhs.segmentContour
       && lhs.borderWidth == rhs.borderWidth
+      && lhs.liquidGlass == rhs.liquidGlass
+      && lhs.relief == rhs.relief
+      && lhs.material == rhs.material
+      && lhs.materialBackdrop == rhs.materialBackdrop
+      && lhs.materialPlane == rhs.materialPlane
+      && lhs.customBackground == rhs.customBackground
       && lhs.outerShadow == rhs.outerShadow
       && lhs.shadowCutoutOffsetX == rhs.shadowCutoutOffsetX
       && lhs.shadowCutoutOffsetY == rhs.shadowCutoutOffsetY
@@ -175,6 +227,11 @@ struct AudioSpectrumStyle {
   bool mirrored = false;
   bool reversed = false;
   bool centered = false;
+  float gapRatio = 0.5F;
+  float cornerRadius = 0.0F;
+  float cornerPower = 2.0F;
+  float reflectionHeight = 0.0F;
+  float reflectionOpacity = 0.2F;
 };
 
 constexpr bool operator==(const AudioSpectrumStyle& lhs, const AudioSpectrumStyle& rhs) noexcept {
@@ -183,7 +240,12 @@ constexpr bool operator==(const AudioSpectrumStyle& lhs, const AudioSpectrumStyl
       && lhs.orientation == rhs.orientation
       && lhs.mirrored == rhs.mirrored
       && lhs.reversed == rhs.reversed
-      && lhs.centered == rhs.centered;
+      && lhs.centered == rhs.centered
+      && lhs.gapRatio == rhs.gapRatio
+      && lhs.cornerPower == rhs.cornerPower
+      && lhs.cornerRadius == rhs.cornerRadius
+      && lhs.reflectionHeight == rhs.reflectionHeight
+      && lhs.reflectionOpacity == rhs.reflectionOpacity;
 }
 
 enum class FancyAudioVisualizerMode : std::uint8_t {
@@ -208,6 +270,7 @@ struct FancyAudioVisualizerStyle {
   float waveThickness = 1.0F;
   float innerDiameter = 0.7F;
   float cornerRadius = 12.0F;
+  float cornerPower = 2.0F;
 };
 
 constexpr bool operator==(const FancyAudioVisualizerStyle& lhs, const FancyAudioVisualizerStyle& rhs) noexcept {
@@ -222,6 +285,7 @@ constexpr bool operator==(const FancyAudioVisualizerStyle& lhs, const FancyAudio
       && lhs.bloomIntensity == rhs.bloomIntensity
       && lhs.waveThickness == rhs.waveThickness
       && lhs.innerDiameter == rhs.innerDiameter
+      && lhs.cornerPower == rhs.cornerPower
       && lhs.cornerRadius == rhs.cornerRadius;
 }
 

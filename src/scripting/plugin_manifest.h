@@ -2,6 +2,7 @@
 
 #include "config/config_types.h"
 
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -35,9 +36,28 @@ namespace scripting {
     std::string labelKey;
   };
 
-  struct ManifestVisibility {
+  struct ManifestVisibilityCondition {
     std::string key;
     std::vector<std::string> values;
+  };
+  struct ManifestVisibility {
+    std::vector<ManifestVisibilityCondition> any;
+    std::vector<ManifestVisibilityCondition> all;
+  };
+
+  // A graph edits four existing plugin-level numeric fields in one transaction.
+  // The anchor is keys[0]; numeric controls remain available independently.
+  struct ManifestCurveGroup {
+    std::array<std::string, 4> keys;
+    std::string labelKey;
+    std::string descriptionKey;
+    std::string activationKey;
+    std::string activationValue;
+  };
+  struct ManifestSpringResponseGroup {
+    std::array<std::string, 3> keys;
+    std::string labelKey;
+    std::string descriptionKey;
   };
 
   // Labels and descriptions are always plugin translation keys, resolved against the
@@ -59,9 +79,12 @@ namespace scripting {
     std::optional<double> maxValue;
     double step = 1.0;
     std::vector<ManifestSelectOption> options;
+    std::string optionsFrom;
     std::vector<std::string> extensions;
     bool advanced = false;
     std::optional<ManifestVisibility> visibleWhen;
+    std::optional<ManifestCurveGroup> curve;
+    std::optional<ManifestSpringResponseGroup> springResponse;
 
     // The declared default mapped to a settings value.
     [[nodiscard]] WidgetSettingValue defaultValue() const;
@@ -128,6 +151,7 @@ namespace scripting {
     std::string panelLayerDefault = "top";
     // false: keep open on outside click (auth prompts)
     bool panelDismissOnOutsideClick = true;
+    bool panelDecorated = true;
     // Keyboard focus policy: "on_demand" (focus on click), "exclusive" (focus on
     // open), or "none" (never focus, so the panel can drive the app the user is
     // actually typing into). "none" requires panelDismissOnOutsideClick = false.
@@ -141,6 +165,7 @@ namespace scripting {
     // the host, so the panel can drive its own key interactions. Verbatim spec strings:
     // the script is called back with the same text declared here.
     std::vector<std::string> panelCaptureKeys;
+    bool panelDirectionalNavigation = false;
   };
 
   struct PluginManifest {
@@ -160,6 +185,16 @@ namespace scripting {
     // shared across every entry (widget, shortcut, service). Distinct from a
     // per-entry instance setting; seeded into all of the plugin's runtimes.
     std::vector<ManifestField> settings;
+    // Optional select-setting key whose choices become native Settings tabs.
+    std::string settingsTabs;
+    std::vector<std::string> presetSections, presetTabs;
+    std::string presetActions;
+    // Direct argv command; the native editor appends one guarded JSON request.
+    std::vector<std::string> presetCommand;
+    std::string presetSelection;
+    std::unordered_map<std::string, std::string> settingsTabTargets;
+    struct SettingsOwnership { std::vector<std::string> path; std::string when; std::string setting; };
+    std::vector<SettingsOwnership> settingsOwnership;
 
     [[nodiscard]] const PluginEntry* findEntry(std::string_view entryId) const;
   };

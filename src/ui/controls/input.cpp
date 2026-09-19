@@ -1,3 +1,4 @@
+#include "render/animation/motion_service.h"
 #include "ui/controls/input.h"
 
 #include "core/deferred_call.h"
@@ -18,6 +19,7 @@
 #include "ui/controls/label.h"
 #include "ui/palette.h"
 #include "ui/style.h"
+#include "ui/surface_material.h"
 #include "wayland/text_input_service.h"
 
 #include <algorithm>
@@ -36,6 +38,8 @@ namespace {
 
   TextClipboard* g_clipboard = nullptr;
   Input::PasswordMaskStyle g_passwordMaskStyle = Input::PasswordMaskStyle::CircleFilled;
+  CaretSettings g_caretSettings;
+  Signal<> g_caretSettingsChanged;
   std::function<bool(std::uint32_t, std::uint32_t)> g_validateKeyMatcher;
 
   std::optional<std::string> readClipboardText() {
@@ -43,13 +47,11 @@ namespace {
   }
 
   constexpr float kMinWidth = 48.0F;
-  constexpr float kCursorWidth = 1.25F;
   constexpr float kCursorPadV = 4.0F;
   constexpr float kCursorMinHeight = 14.0F;
   constexpr float kCursorHeightRatio = 0.50F;
   constexpr float kCursorRevealPadding = 2.0F;
   constexpr float kClearGlyphScale = 0.85F;
-  constexpr auto kCursorBlinkInterval = std::chrono::milliseconds(530);
   constexpr auto kCursorBlinkResumeDelay = std::chrono::milliseconds(650);
   constexpr float kTextInnerInset = 3.0F;
   constexpr float kPlaceholderAlpha = 0.68F;
@@ -63,7 +65,7 @@ namespace {
   constexpr auto kTypingUndoCoalesceWindow = std::chrono::milliseconds(1000);
   // Multiline mode: vertical text inset, wheel step in lines, and the stub
   // highlight width (in em) marking a selected line break.
-  constexpr float kMultilinePadV = Style::spaceSm;
+  const auto kMultilinePadV = []() -> float { return Style::spaceSm; };
   constexpr int kWheelScrollLines = 3;
   constexpr float kSelectionLineBreakStubEm = 0.4F;
   constexpr float kLineYEpsilon = 0.5F;
@@ -240,7 +242,7 @@ Input::Input() {
       m_goalCaretX = -1.0F;
       const float textStartX = m_horizontalPadding + kTextInnerInset;
       const std::size_t offset = m_multiline
-          ? pointToByteOffset(data.localX - textStartX, data.localY - kMultilinePadV + m_scrollOffsetY)
+          ? pointToByteOffset(data.localX - textStartX, data.localY - kMultilinePadV() + m_scrollOffsetY)
           : xToByteOffset(data.localX - textStartX + m_scrollOffset - m_contentLeadSlack);
       const auto now = std::chrono::steady_clock::now();
       const bool inMultiClickWindow = data.button == BTN_LEFT
@@ -298,7 +300,7 @@ Input::Input() {
         }
         clampScrollOffsetY();
         const std::size_t offset =
-            pointToByteOffset(data.localX - textStartX, data.localY - kMultilinePadV + m_scrollOffsetY);
+            pointToByteOffset(data.localX - textStartX, data.localY - kMultilinePadV() + m_scrollOffsetY);
         extendPointerSelectionToByteOffset(offset);
         updateInteractiveGeometry();
         updateCursorVisibility();
@@ -395,14 +397,38 @@ Input::Input() {
     updateDisplayText();
     applyVisualState();
   });
+  m_motionConn = MotionService::instance().changed().connect([this] {
+    snapCaretMotion();
+    if (m_inputArea != nullptr && m_inputArea->focused()) revealCursor();
+    else stopCursorBlink();
+  });
+  m_caretSettingsConn = g_caretSettingsChanged.connect([this] {
+    snapCaretMotion();
+    m_caretTargetValid = false;
+    updateInteractiveGeometry();
+    applyCaretStyle();
+    revealCursor();
+    notifyTextInputStateChanged(TextInputChangeCause::Other);
+  });
+  m_materialConn = Style::surfaceMaterialChanged().connect([this] { applyVisualState(); });
   m_inputBordersConn = Style::inputBordersChanged().connect([this] { applyVisualState(); });
 }
 
 Input::~Input() {
+  snapCaretMotion();
   if (m_textInputService != nullptr) {
     m_textInputService->clearFocusedClient(this);
   }
 }
+
+void Input::setCaretSettings(CaretSettings settings) {
+  settings = sanitizedCaretSettings(settings);
+  if (settings == g_caretSettings) return;
+  g_caretSettings = settings;
+  g_caretSettingsChanged.emit();
+}
+
+const CaretSettings& Input::caretSettings() noexcept { return g_caretSettings; }
 
 void Input::setValue(std::string_view value) {
   m_value = std::string(value);
@@ -681,27 +707,16 @@ TextInputState Input::textInputState() const {
     anchor = adjustOffset(anchor);
   }
 
-  float cursorSceneX = 0.0F;
-  float cursorSceneY = 0.0F;
-  if (m_textViewport != nullptr) {
-    Node::absolutePosition(m_textViewport, cursorSceneX, cursorSceneY);
-  }
-  if (m_cursor != nullptr) {
-    cursorSceneX += m_cursor->x();
-    cursorSceneY += m_cursor->y();
-  }
-
   const bool password = m_passwordMode;
-  const float cursorWidth = m_cursor != nullptr ? m_cursor->width() : 1.0F;
-  const float cursorHeight = m_cursor != nullptr ? m_cursor->height() : m_controlHeight;
+  const auto cursorRect = caretProtocolRect();
   return TextInputState{
       .surroundingText = password ? std::string{} : std::move(surrounding),
       .cursor = byteOffsetToProtocolInt(cursor),
       .anchor = byteOffsetToProtocolInt(anchor),
-      .cursorRectX = static_cast<std::int32_t>(std::round(cursorSceneX)),
-      .cursorRectY = static_cast<std::int32_t>(std::round(cursorSceneY)),
-      .cursorRectWidth = static_cast<std::int32_t>(std::max(1.0F, std::round(cursorWidth))),
-      .cursorRectHeight = static_cast<std::int32_t>(std::max(1.0F, std::round(cursorHeight))),
+      .cursorRectX = cursorRect[0],
+      .cursorRectY = cursorRect[1],
+      .cursorRectWidth = cursorRect[2],
+      .cursorRectHeight = cursorRect[3],
       .purpose = password ? TextInputPurpose::Password : TextInputPurpose::Normal,
       .sendSurroundingText = !password,
       .sensitiveData = password,
@@ -1008,7 +1023,7 @@ void Input::doLayout(Renderer& renderer) {
   if (m_multiline) {
     m_label->setMaxWidth(textViewportWidth());
     m_label->measure(renderer);
-    m_cachedLabelY = kMultilinePadV;
+    m_cachedLabelY = kMultilinePadV();
   } else if (!showPasswordGlyphs) {
     if (m_value.empty() && !m_placeholder.empty()) {
       m_label->measure(renderer);
@@ -1075,6 +1090,7 @@ void Input::doLayout(Renderer& renderer) {
   updateInteractiveGeometry();
   applyVisualState();
   updateCursorVisibility();
+  queueCaretGeometryNotification();
 }
 
 void Input::handleKey(std::uint32_t sym, std::uint32_t utf32, std::uint32_t modifiers, bool preedit) {
@@ -1529,7 +1545,7 @@ void Input::applyVisualState() {
       resolvedBorderWidth = Style::borderWidth;
     }
 
-    m_background->setStyle(
+    m_background->setStyle(SurfaceMaterial::styled(*m_background,
         RoundedRectStyle{
             .fill = fill,
             .border = border,
@@ -1537,7 +1553,7 @@ void Input::applyVisualState() {
             .radius = Style::scaledRadius(m_frameRadius, chromeScale),
             .softness = 1.0F,
             .borderWidth = resolvedBorderWidth,
-        }
+        }, -1.0F, MaterialBackdrop::Inherited, "input")
     );
   } else if (m_background != nullptr) {
     m_background->setVisible(false);
@@ -1547,7 +1563,7 @@ void Input::applyVisualState() {
     auto selectionStyleEmb = m_selectionRect->style();
     selectionStyleEmb.fill = resolved(ColorRole::Surface, 0.4F);
     selectionStyleEmb.fillMode = FillMode::Solid;
-    selectionStyleEmb.radius = 2.0F;
+    selectionStyleEmb.radius = Style::scaledRadius(2.0F);
     m_selectionRect->setStyle(selectionStyleEmb);
     for (auto* rect : m_selectionLineRects) {
       rect->setStyle(selectionStyleEmb);
@@ -1556,8 +1572,9 @@ void Input::applyVisualState() {
     auto cursorStyleEmb = m_cursor->style();
     cursorStyleEmb.fill = resolved(ColorRole::Surface);
     cursorStyleEmb.fillMode = FillMode::Solid;
-    cursorStyleEmb.radius = 1.0F;
+    cursorStyleEmb.radius = Style::scaledRadius(1.0F);
     m_cursor->setStyle(cursorStyleEmb);
+    applyCaretStyle();
 
     const bool showingPlaceholder = m_value.empty() && !m_placeholder.empty();
     if (m_invalid) {
@@ -1585,7 +1602,7 @@ void Input::applyVisualState() {
   auto selectionStyle = m_selectionRect->style();
   selectionStyle.fill = resolved(ColorRole::Primary);
   selectionStyle.fillMode = FillMode::Solid;
-  selectionStyle.radius = 2.0F;
+  selectionStyle.radius = Style::scaledRadius(2.0F);
   m_selectionRect->setStyle(selectionStyle);
   for (auto* rect : m_selectionLineRects) {
     rect->setStyle(selectionStyle);
@@ -1594,8 +1611,9 @@ void Input::applyVisualState() {
   auto cursorStyle = m_cursor->style();
   cursorStyle.fill = resolved(ColorRole::Primary);
   cursorStyle.fillMode = FillMode::Solid;
-  cursorStyle.radius = 1.0F;
+  cursorStyle.radius = Style::scaledRadius(1.0F);
   m_cursor->setStyle(cursorStyle);
+  applyCaretStyle();
 
   const bool showingPlaceholder = m_value.empty() && !m_placeholder.empty();
   const ColorSpec textColor = m_invalid
@@ -1681,8 +1699,14 @@ void Input::updateInteractiveGeometry() {
     if (multilineStopsValid()) {
       stop = m_stopRect[stopIndexForByte(m_cursorPos)];
     }
-    m_cursor->setPosition(stop.x, stop.y + kMultilinePadV - m_scrollOffsetY);
-    m_cursor->setFrameSize(kCursorWidth, std::max(1.0F, stop.height));
+    float cellEnd = stop.x + std::max(g_caretSettings.widthPx, m_fontSize * 0.6F);
+    if (multilineStopsValid()) {
+      const std::size_t index = stopIndexForByte(m_cursorPos);
+      if (index + 1 < m_stopRect.size() && sameLineY(m_stopRect[index + 1].y, stop.y))
+        cellEnd = m_stopRect[index + 1].x;
+    }
+    updateCaretGeometry(stop.x, stop.y + kMultilinePadV() - m_scrollOffsetY,
+        std::max(1.0F, stop.height), std::min(stop.x, cellEnd), std::abs(cellEnd - stop.x));
 
     m_selectionRect->setVisible(false);
     updateMultilineSelection();
@@ -1721,8 +1745,10 @@ void Input::updateInteractiveGeometry() {
       std::clamp(controlHeight * kCursorHeightRatio, std::min(kCursorMinHeight, maxCursorHeight), maxCursorHeight);
   const float cursorY = std::round((controlHeight - cursorHeight) * 0.5F);
   const float cursorX = stopXForByte(m_cursorPos) - m_scrollOffset + m_contentLeadSlack;
-  m_cursor->setPosition(cursorX, cursorY);
-  m_cursor->setFrameSize(kCursorWidth, cursorHeight);
+  float cellEnd = cursorX + std::max(g_caretSettings.widthPx, m_fontSize * 0.6F);
+  const std::size_t index = stopIndexForByte(m_cursorPos);
+  if (index + 1 < m_stopX.size()) cellEnd = m_stopX[index + 1] - m_scrollOffset + m_contentLeadSlack;
+  updateCaretGeometry(cursorX, cursorY, cursorHeight, std::min(cursorX, cellEnd), std::abs(cellEnd - cursorX));
 
   if (hasSelection()) {
     const float selX0 = stopXForByte(selectionStart()) - m_scrollOffset + m_contentLeadSlack;
@@ -1752,7 +1778,9 @@ void Input::ensureCursorVisible() {
   const float slack = m_contentLeadSlack;
   const float cursorVx = cursorContentX - m_scrollOffset + slack;
   const float leftEdge = revealPad;
-  const float rightEdge = viewportWidth - revealPad - kCursorWidth;
+  const float caretReserve = g_caretSettings.shape == CaretShape::Bar
+      ? g_caretSettings.widthPx : std::max(g_caretSettings.widthPx, m_fontSize * 0.6F);
+  const float rightEdge = viewportWidth - revealPad - caretReserve;
 
   if (cursorVx < leftEdge) {
     m_scrollOffset = cursorContentX + slack - leftEdge;
@@ -1769,7 +1797,9 @@ void Input::clampScrollOffset() {
     return;
   }
   const float textExtent = *std::ranges::max_element(m_stopX);
-  const float maxOffset = std::max(0.0F, textExtent - textViewportWidth() + kCursorWidth + kCursorRevealPadding);
+  const float caretReserve = g_caretSettings.shape == CaretShape::Bar
+      ? g_caretSettings.widthPx : std::max(g_caretSettings.widthPx, m_fontSize * 0.6F);
+  const float maxOffset = std::max(0.0F, textExtent - textViewportWidth() + caretReserve + kCursorRevealPadding);
   m_scrollOffset = std::clamp(m_scrollOffset, 0.0F, maxOffset);
 }
 
@@ -1797,7 +1827,7 @@ float Input::contentTextHeight() const noexcept {
 
 float Input::textViewportHeight() const noexcept {
   const float h = height() > 0.0F ? height() : m_controlHeight;
-  return std::max(0.0F, h - kMultilinePadV * 2.0F);
+  return std::max(0.0F, h - kMultilinePadV() * 2.0F);
 }
 
 float Input::currentLineHeight() const noexcept {
@@ -1871,6 +1901,109 @@ LayoutSize Input::doMeasure(Renderer& renderer, const LayoutConstraints& constra
   return constraints.constrain(LayoutSize{.width = w, .height = assignH});
 }
 
+void Input::applyCaretStyle() {
+  if (m_cursor == nullptr) return;
+  auto style = m_cursor->style();
+  const Color color = resolved(m_embeddedOnSolidPrimary && !m_frameVisible ? ColorRole::Surface : ColorRole::Primary);
+  style.fill = color;
+  style.border = color;
+  style.radius = g_caretSettings.shape == CaretShape::Bar ? Style::scaledRadius(1.0F) : 0.0F;
+  // Keep the shaped glyph visible: the block is a cell outline, never an opaque overlay.
+  style.fillMode = g_caretSettings.shape == CaretShape::Block ? FillMode::None : FillMode::Solid;
+  style.borderWidth = g_caretSettings.shape == CaretShape::Block
+      ? std::min(g_caretSettings.widthPx, std::max(1.0F, std::min(m_cursor->width(), m_cursor->height()) * 0.2F)) : 0.0F;
+  m_cursor->setStyle(style);
+}
+
+void Input::queueCaretGeometryNotification() {
+  if (m_textInputService == nullptr || m_caretGeometryNotifyQueued) return;
+  if (m_caretGeometryNotified && caretProtocolRect() == m_lastCaretProtocolRect) return;
+  m_caretGeometryNotifyQueued = true;
+  const std::weak_ptr<int> alive = m_aliveToken;
+  DeferredCall::callLater([this, alive] {
+    if (alive.expired()) return;
+    m_caretGeometryNotifyQueued = false;
+    m_lastCaretProtocolRect = caretProtocolRect();
+    m_caretGeometryNotified = true;
+    // Shaping/scrolling can finish after the edit notification. Publish its
+    // final logical rectangle once, never the interpolated paint each frame.
+    notifyTextInputStateChanged(TextInputChangeCause::Other);
+  });
+}
+
+std::array<std::int32_t, 4> Input::caretProtocolRect() const {
+  float x = 0.0F;
+  float y = 0.0F;
+  if (m_textViewport != nullptr) Node::absolutePosition(m_textViewport, x, y);
+  return {static_cast<std::int32_t>(std::round(x + m_caretTarget.x)),
+      static_cast<std::int32_t>(std::round(y + m_caretTarget.y)),
+      static_cast<std::int32_t>(std::max(1.0F, std::round(m_caretTarget.width))),
+      static_cast<std::int32_t>(std::max(1.0F, std::round(m_caretTargetValid ? m_caretTarget.height : m_controlHeight)))};
+}
+
+void Input::snapCaretMotion() {
+  if (m_caretAnimId != 0 && animationManager() != nullptr) animationManager()->cancel(m_caretAnimId);
+  m_caretAnimId = 0;
+  if (m_cursor != nullptr && m_caretTargetValid) {
+    m_cursor->setPosition(m_caretPaintTarget.x, m_caretPaintTarget.y);
+    m_cursor->setFrameSize(m_caretPaintTarget.width, m_caretPaintTarget.height);
+  }
+}
+
+void Input::updateCaretGeometry(float x, float y, float height, float cellX, float cellWidth) {
+  const auto close = [](float a, float b) { return std::abs(a - b) < 0.001F; };
+  CaretRect paint{x, y, g_caretSettings.widthPx, height};
+  if (g_caretSettings.shape != CaretShape::Bar) {
+    paint.x = cellX;
+    paint.width = std::max(g_caretSettings.widthPx + 2.0F, cellWidth);
+    if (g_caretSettings.shape == CaretShape::Underline) {
+      paint.height = std::min(height, g_caretSettings.widthPx);
+      paint.y += height - paint.height;
+    }
+  }
+  const bool changed = !m_caretTargetValid || !close(paint.x, m_caretPaintTarget.x)
+      || !close(paint.y, m_caretPaintTarget.y) || !close(paint.width, m_caretPaintTarget.width)
+      || !close(paint.height, m_caretPaintTarget.height);
+  const bool animate = m_caretTargetValid && changed && m_cursorPos != m_caretTargetByte
+      && m_inputArea != nullptr && m_inputArea->focused() && !m_inputArea->pressed()
+      && m_preeditLen == 0 && !hasSelection() && !m_textMetricsDirty
+      && close(height, m_caretTarget.height) && close(m_scrollOffset, m_caretScrollX)
+      && close(m_scrollOffsetY, m_caretScrollY)
+      && MotionService::instance().enabled() && g_caretSettings.motionMs > 0.0F && animationManager() != nullptr;
+  m_caretTarget = {x, y, g_caretSettings.widthPx, height};
+  m_caretPaintTarget = paint;
+  // A text edit may reach us before shaping has rebuilt stops. Keep its byte
+  // transition pending until the authoritative geometry arrives from layout.
+  if (!m_textMetricsDirty) m_caretTargetByte = m_cursorPos;
+  m_caretScrollX = m_scrollOffset;
+  m_caretScrollY = m_scrollOffsetY;
+  m_caretTargetValid = true;
+  if (!changed) {
+    // Ordinary layout must not restart a transition, but composition and
+    // immediate policies must stop even when the final rectangle is unchanged.
+    if (m_preeditLen > 0 || hasSelection() || m_inputArea == nullptr || !m_inputArea->focused()
+        || m_inputArea->pressed() || !MotionService::instance().enabled() || g_caretSettings.motionMs <= 0.0F)
+      snapCaretMotion();
+    return;
+  }
+  const float fromX = m_cursor->x();
+  const float fromY = m_cursor->y();
+  if (m_caretAnimId != 0 && animationManager() != nullptr) animationManager()->cancel(m_caretAnimId);
+  m_caretAnimId = 0;
+  m_cursor->setFrameSize(paint.width, paint.height);
+  applyCaretStyle();
+  if (!animate) {
+    m_cursor->setPosition(paint.x, paint.y);
+    return;
+  }
+  m_caretAnimId = animationManager()->animateProgress(0.0F, 1.0F, g_caretSettings.motionMs,
+      [this, fromX, fromY, paint](float t) {
+        const float native = applyEasing(Easing::EaseOutCubic, t);
+        const float progress = MotionService::instance().easedProgress(t, native);
+        m_cursor->setPosition(fromX + (paint.x - fromX) * progress, fromY + (paint.y - fromY) * progress);
+      }, [this] { m_caretAnimId = 0; }, this);
+}
+
 void Input::updateCursorVisibility() {
   const bool focused = m_inputArea != nullptr && m_inputArea->focused();
   m_cursor->setVisible(focused && m_cursorBlinkVisible);
@@ -1880,7 +2013,7 @@ void Input::revealCursor() {
   m_cursorBlinkVisible = true;
   updateCursorVisibility();
   markPaintDirty();
-  if (m_inputArea != nullptr && m_inputArea->focused()) {
+  if (m_inputArea != nullptr && m_inputArea->focused() && MotionService::instance().enabled() && g_caretSettings.blink) {
     m_cursorBlinkTimer.start(kCursorBlinkResumeDelay, [this]() { startCursorBlink(); });
   } else {
     m_cursorBlinkTimer.stop();
@@ -1888,7 +2021,15 @@ void Input::revealCursor() {
 }
 
 void Input::startCursorBlink() {
-  m_cursorBlinkTimer.startRepeating(kCursorBlinkInterval, [this]() {
+  if (!MotionService::instance().enabled() || !g_caretSettings.blink) {
+    m_cursorBlinkTimer.stop();
+    m_cursorBlinkVisible = true;
+    updateCursorVisibility();
+    markPaintDirty();
+    return;
+  }
+  const auto interval = std::chrono::milliseconds(static_cast<int>(std::round(g_caretSettings.blinkIntervalMs)));
+  m_cursorBlinkTimer.startRepeating(interval, [this]() {
     if (m_inputArea == nullptr || !m_inputArea->focused()) {
       stopCursorBlink();
       return;
@@ -1900,6 +2041,7 @@ void Input::startCursorBlink() {
 }
 
 void Input::stopCursorBlink() {
+  snapCaretMotion();
   m_cursorBlinkTimer.stop();
   m_cursorBlinkVisible = false;
 }
@@ -2469,7 +2611,7 @@ void Input::updateMultilineSelection() {
   for (std::size_t i = 0; i < lines.size(); ++i) {
     const LineSpan& span = lines[i];
     RectNode* rect = m_selectionLineRects[i];
-    rect->setPosition(span.x0, span.y + kMultilinePadV - m_scrollOffsetY);
+    rect->setPosition(span.x0, span.y + kMultilinePadV() - m_scrollOffsetY);
     rect->setFrameSize(std::max(1.0F, span.x1 - span.x0), std::max(1.0F, span.h));
     rect->setVisible(true);
   }

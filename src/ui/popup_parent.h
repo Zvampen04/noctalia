@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 
 struct wl_output;
 struct wl_surface;
@@ -21,6 +22,8 @@ struct XdgPopupParent {
   std::uint32_t serial = 0;
   std::uint32_t width = 0;
   std::uint32_t height = 0;
+  // Detached scene roots retain the opener's semantic material scope.
+  std::string materialSurface{};
 };
 
 struct PopupSurfaceParent {
@@ -31,4 +34,6 @@ struct PopupSurfaceParent {
   // interactivity is None (e.g. a bar), the popup owner flips it to OnDemand
   // while open so the grabbing popup inherits keyboard focus.
   wl_surface* wlSurface = nullptr;
+  // Detached scene roots retain the opener's semantic material scope.
+  std::string materialSurface{};
 };

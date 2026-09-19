@@ -9,8 +9,9 @@
 class AnimationManager {
 public:
   using Id = std::uint32_t;
+  using Clock = std::function<std::chrono::steady_clock::time_point()>;
 
-  AnimationManager();
+  explicit AnimationManager(Clock clock = std::chrono::steady_clock::now);
   ~AnimationManager();
 
   AnimationManager(const AnimationManager&) = delete;
@@ -23,10 +24,15 @@ public:
       std::function<void()> onComplete = {}, const void* owner = nullptr
   );
   // Real elapsed-time driver: ignores global motion enable/speed. Use for timeouts,
-  // and for visual effects with a deliberate fixed duration that must stay independent
-  // of the global animation settings (e.g. the wallpaper crossfade).
+  // never use this bypass for decorative visual effects.
   Id animateTimer(
       float from, float to, float durationMs, Easing easing, std::function<void(float)> setter,
+      std::function<void()> onComplete = {}, const void* owner = nullptr
+  );
+  // Visual elapsed progress for controls that resolve easing themselves. This
+  // still obeys motion enable/speed; it is not a deadline/timer bypass.
+  Id animateProgress(
+      float from, float to, float durationMs, std::function<void(float)> setter,
       std::function<void()> onComplete = {}, const void* owner = nullptr
   );
   void cancel(Id id);
@@ -43,14 +49,17 @@ private:
     Id id = 0;
     const void* owner = nullptr;
     bool respectMotionEnabled = true;
+    bool resolveMotionCurve = true;
     Animation animation;
   };
 
   std::vector<Entry> m_animations;
   Id m_nextId = 1;
+  Clock m_clock;
 
   Id animateInternal(
       float from, float to, float durationMs, Easing easing, std::function<void(float)> setter,
-      std::function<void()> onComplete, const void* owner, bool scaleDuration, bool respectMotionEnabled
+      std::function<void()> onComplete, const void* owner, bool scaleDuration, bool respectMotionEnabled,
+      bool resolveMotionCurve
   );
 };

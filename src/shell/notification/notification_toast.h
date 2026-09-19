@@ -1,12 +1,15 @@
 #pragma once
 
 #include "core/timer_manager.h"
+#include "config/config_types.h"
 #include "notification/notification.h"
 #include "render/animation/animation_manager.h"
 #include "render/scene/input_dispatcher.h"
 #include "system/icon_resolver.h"
 
 #include <memory>
+#include <functional>
+#include <utility>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -20,7 +23,9 @@ class NotificationManager;
 class Node;
 class ProgressBar;
 class RenderContext;
+class TransientActivityService;
 class WaylandConnection;
+struct TransientActivityViewModel;
 enum class NotificationEvent;
 struct KeyboardEvent;
 struct PointerEvent;
@@ -43,6 +48,9 @@ public:
       RenderContext* renderContext, HttpClient* httpClient = nullptr
   );
   void onConfigReload();
+  void setActivityService(TransientActivityService* service) noexcept { m_activityService = service; }
+  void setOpenHistoryCallback(std::function<void()> callback) { m_openHistory = std::move(callback); }
+  void showActivityFallback(const TransientActivityViewModel& activity);
   void onOutputChange();
   void hideDndSuppressed();
   void requestLayout();
@@ -97,6 +105,7 @@ private:
 
     // Per-entry visual nodes for this instance
     struct CardState {
+      uint32_t notificationId=0;
       Node* cardNode = nullptr;
       Node* cardContent = nullptr;
       Node* cardForeground = nullptr;
@@ -120,6 +129,7 @@ private:
   };
 
   void onNotificationEvent(const Notification& n, NotificationEvent event);
+  [[nodiscard]] bool tryPublishActivity(const Notification& notification);
   void schedulePendingAdds();
   void flushPendingAdds();
   void addPopup(const Notification& n);
@@ -195,9 +205,15 @@ private:
 
   WaylandConnection* m_wayland = nullptr;
   ConfigService* m_config = nullptr;
+  std::optional<NotificationConfig> m_appearanceNotification;
+  Style::Metrics m_appearanceDesign{};
+  float m_appearanceUiScale=1.0F, m_appearancePadY=0.0F, m_appearanceCornerScale=1.0F;
+  std::string m_appearanceFont;
   NotificationManager* m_notifications = nullptr;
   RenderContext* m_renderContext = nullptr;
   HttpClient* m_httpClient = nullptr;
+  TransientActivityService* m_activityService = nullptr;
+  std::function<void()> m_openHistory;
 
   std::vector<PopupEntry> m_entries;
   std::vector<Notification> m_pendingAdds;
@@ -208,6 +224,7 @@ private:
   std::unordered_map<std::string, std::string> m_remoteIconCache;
   std::unordered_set<std::string> m_pendingRemoteIconDownloads;
   std::unordered_set<std::string> m_failedRemoteIconDownloads;
+  std::unordered_set<std::uint32_t> m_embeddedNotificationIds;
   std::string m_lastPosition;
   std::string m_lastLayer;
   std::vector<std::string> m_lastMonitorSelectors;

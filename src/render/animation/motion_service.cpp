@@ -37,6 +37,26 @@ void MotionService::setEnabled(bool enabled) {
       }
     }
   }
+  m_changed.emit();
 }
 
 void MotionService::setSpeed(float speed) { m_speed = std::clamp(speed, 0.05F, 4.0F); }
+
+void MotionService::setStyle(MotionStyle style, MotionCurve curve) {
+  if (!validMotionCurve(curve)) return;
+  if (m_style == style && m_curve == curve) return;
+  m_style = style;
+  m_curve = curve;
+  m_changed.emit();
+}
+
+float MotionService::easedProgress(float progress, float nativeValue) const noexcept {
+  if (!m_enabled) return 1.0F;
+  switch (m_style) {
+  case MotionStyle::Native: return nativeValue;
+  case MotionStyle::Linear: return std::clamp(progress, 0.0F, 1.0F);
+  case MotionStyle::Expressive: return applyMotionCurve(progress, MotionCurve{});
+  case MotionStyle::Custom: return applyMotionCurve(progress, m_curve);
+  }
+  return nativeValue;
+}

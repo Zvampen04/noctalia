@@ -6,6 +6,7 @@
 #include "cursor-shape-v1-client-protocol.h"
 #include "dwl-ipc-unstable-v2-client-protocol.h"
 #include "ext-background-effect-v1-client-protocol.h"
+#include "noctalia-material-v1-client-protocol.h"
 #include "ext-data-control-v1-client-protocol.h"
 #include "ext-foreign-toplevel-list-v1-client-protocol.h"
 #include "ext-idle-notify-v1-client-protocol.h"
@@ -17,6 +18,7 @@
 #include "hyprland-focus-grab-v1-client-protocol.h"
 #include "hyprland-toplevel-mapping-v1-client-protocol.h"
 #include "idle-inhibit-unstable-v1-client-protocol.h"
+#include "material/scene_transport.h"
 #include "org-kde-plasma-virtual-desktop-client-protocol.h"
 #include "text-input-unstable-v3-client-protocol.h"
 #include "util/string_utils.h"
@@ -1151,6 +1153,14 @@ void WaylandConnection::bindGlobal(
     return;
   }
 
+  if (interfaceName == noctalia_material_manager_v1_interface.name) {
+    m_materialManager = static_cast<noctalia_material_manager_v1*>(
+        wl_registry_bind(registry, name, &noctalia_material_manager_v1_interface,
+                         std::min(version, noctalia::material::kMaterialProtocolVersion)));
+    m_customEffectTransport.setManager(m_materialManager);
+    return;
+  }
+
   if (interfaceName == ext_background_effect_manager_v1_interface.name) {
     const auto bindVersion = std::min(version, kExtBackgroundEffectManagerVersion);
     m_backgroundEffectManager = static_cast<ext_background_effect_manager_v1*>(
@@ -1390,6 +1400,11 @@ void WaylandConnection::cleanup() {
   if (m_idleInhibitManager != nullptr) {
     zwp_idle_inhibit_manager_v1_destroy(m_idleInhibitManager);
     m_idleInhibitManager = nullptr;
+  }
+  if (m_materialManager != nullptr) {
+    m_customEffectTransport.reset();
+    noctalia_material_manager_v1_destroy(m_materialManager);
+    m_materialManager = nullptr;
   }
   if (m_backgroundEffectManager != nullptr) {
     ext_background_effect_manager_v1_destroy(m_backgroundEffectManager);

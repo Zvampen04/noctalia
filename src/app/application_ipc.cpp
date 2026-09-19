@@ -132,9 +132,33 @@ void Application::initIpc() {
         json += panelOpen ? "true" : "false";
         json += ",\n  \"activePanelId\": ";
         json += panelOpen ? ("\"" + m_panelManager.activePanelId() + "\"") : "null";
+        json += ",\n  \"activePanelContext\": ";
+        json += panelOpen ? nlohmann::json(std::string(m_panelManager.activePanelContext())).dump() : "null";
         json += ",\n  \"locked\": ";
         json += m_lockScreen.isActive() ? "true" : "false";
-        json += "\n}\n";
+        nlohmann::json quick={{"enabled",m_configService.config().shell.panel.quickSettingsEnabled},
+            {"dnd",m_notificationManager.doNotDisturb()}};
+        if (m_pipewireService) {
+            if (const auto* sink=m_pipewireService->defaultSink())
+                quick["audio"]={{"volume",sink->volume},{"muted",sink->muted},{"name",audioDeviceLabel(*sink)}};
+        }
+        if (m_networkService && m_networkService->hasStateSnapshot()) {
+            const auto& network=m_networkService->state();
+            quick["wifi"]={{"enabled",network.wirelessEnabled},{"connected",network.connected && network.kind==NetworkConnectivity::Wireless},
+                {"name",network.ssid}};
+        }
+        if (m_bluetoothService) {
+            const auto& bluetooth=m_bluetoothService->state();
+            quick["bluetooth"]={{"available",bluetooth.adapterPresent},{"enabled",bluetooth.powered},
+                {"name",bluetooth.adapterName}};
+        }
+        if (m_powerProfilesService)
+            quick["power"]={{"active",m_powerProfilesService->activeProfile()},{"profiles",m_powerProfilesService->profiles()}};
+        quick["displays"]=nlohmann::json::array();
+        if (m_brightnessService) for (const auto& display:m_brightnessService->displays())
+            quick["displays"].push_back({{"id",display.id},{"name",display.label},
+                {"value",display.brightness},{"available",display.controllable}});
+        json += ",\n  \"quickSettings\": "+quick.dump()+"\n}\n";
         return json;
       },
       IpcService::HandlerOptions{.actionEditorVisibility = IpcService::ActionEditorVisibility::Hidden}

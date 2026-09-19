@@ -751,7 +751,8 @@ void TrayMenu::ensureSurface() {
     return;
   }
 
-  popup_chrome::setContentInputRegion(*inst->surface, inst->chrome);
+  popup_chrome::setContentInputRegion(
+      *inst->surface, inst->chrome, Style::scaledRadiusLg(contentScale()), Style::cornerPower);
   inst->wlSurface = inst->surface->wlSurface();
   m_instance = std::move(inst);
 
@@ -811,7 +812,8 @@ void TrayMenu::resizeMainSurfaceToEntries() {
 
   closeSubmenu();
   m_instance->chrome = chrome;
-  popup_chrome::setContentInputRegion(*m_instance->surface, m_instance->chrome);
+  popup_chrome::setContentInputRegion(
+      *m_instance->surface, m_instance->chrome, Style::scaledRadiusLg(contentScale()), Style::cornerPower);
   if (!m_instance->surface->resize(desiredWidth, desiredHeight)) {
     m_instance->surface->requestLayout();
   }
@@ -1202,7 +1204,8 @@ void TrayMenu::openSubmenuAtLevel(std::size_t levelIndex, std::int32_t parentEnt
     return;
   }
 
-  popup_chrome::setContentInputRegion(*inst->surface, inst->chrome);
+  popup_chrome::setContentInputRegion(
+      *inst->surface, inst->chrome, Style::scaledRadiusLg(contentScale()), Style::cornerPower);
   inst->wlSurface = inst->surface->wlSurface();
   level.instance = std::move(inst);
 

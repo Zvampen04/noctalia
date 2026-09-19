@@ -55,6 +55,7 @@ namespace shell::dock {
     float launcherRestCrossPos = 0.0F;
     float launcherHoverMainOffset = 0.0F;
     float launcherVisualScale = -1.0F;
+    DockHoverMotion launcherHoverMotion;
     AnimationManager::Id launcherScaleAnimId = 0;
     // Auto-hide: tracks visibility [0,1] driven by hover.
     float hideOpacity = 1.0F;

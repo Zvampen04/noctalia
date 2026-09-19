@@ -11,6 +11,7 @@
 #include "dbus/upower/upower_service.h"
 #include "i18n/i18n.h"
 #include "ipc/ipc_service.h"
+#include "render/backend/render_backend.h"
 #include "render/render_context.h"
 #include "render/scene/input_area.h"
 #include "render/scene/node.h"
@@ -22,6 +23,8 @@
 #include "shell/settings/settings_content.h"
 #include "shell/settings/settings_content_common.h"
 #include "shell/settings/settings_content_plugins.h"
+#include "shell/settings/settings_control_factory.h"
+#include "scripting/plugin_registry.h"
 #include "shell/settings/settings_sidebar.h"
 #include "shell/settings/settings_window.h"
 #include "shell/tooltip/tooltip_manager.h"
@@ -153,6 +156,11 @@ namespace {
     if (path.size() >= 2 && path[0] == "calendar" && path[1] == "account") {
       return true;
     }
+    if (path.size() >= 2 && path[0] == "shell"
+        && (path[1] == "material_override_editor_scope" || path[1] == "material_override_editor_target"
+            || path[1] == "material" || path[1] == "material_overrides")) {
+      return true;
+    }
     if (path.size() >= 2 && path[0] == "shell" && path[1] == "greeter_sync") {
       return true;
     }
@@ -224,6 +232,9 @@ namespace {
       return true;
     }
     if (auto* select = std::get_if<settings::SelectSetting>(&entry.control)) {
+      // Composite selectors derive their label from multiple stored values.
+      // Rebuild that mapping rather than display a raw bool/number as the label.
+      if (select->groupedCommit) return false;
       auto selected = overrideSelectValue(value);
       if (!selected.has_value()) {
         return false;
@@ -782,8 +793,7 @@ settings::RegistryEnvironment SettingsWindow::buildRegistryEnvironment() const {
         }
     );
   }
-  static const std::vector<settings::SelectOption> kFontFamilies = discoverFontFamilyOptions();
-  env.fontFamilies = kFontFamilies;
+  env.fontFamilies = discoverFontFamilyOptions();
   const auto allBatteryDeviceOptions = upowerBatteryDeviceOptions(m_upower);
   const auto* systemBattery = m_upower != nullptr ? m_upower->defaultSystemBattery() : nullptr;
   env.systemBatteryAvailable = systemBattery != nullptr;
@@ -802,6 +812,10 @@ settings::RegistryEnvironment SettingsWindow::buildRegistryEnvironment() const {
     }
   }
   env.keyboardLayoutNames = m_wayland != nullptr ? m_wayland->keyboardLayoutNames() : std::vector<std::string>{};
+  env.customEffectStatus = [this](std::string_view stableId) -> std::optional<CustomEffectCompileStatus> {
+    if (m_renderContext == nullptr) return std::nullopt;
+    return m_renderContext->backend().customEffectStatus(stableId);
+  };
   if (m_wayland != nullptr) {
     for (const auto& output : m_wayland->outputs()) {
       if (output.output == nullptr || output.connectorName.empty()) {
@@ -910,7 +924,15 @@ settings::SettingsContentContext SettingsWindow::makeContentContext(
       .expandedGroupsByPage = m_expandedSettingGroups,
       .pageTitleRow = m_pageTitleRow,
       .groupJumpRow = m_groupJumpRow,
+      .selectedGroupsByPage = &m_selectedSettingGroups,
       .actionCatalog = gestureActionCatalog(),
+      .setInteractiveEdit = [this](bool active) {
+        m_interactiveSettingEdit = active;
+        if (!active && m_deferredRebuildQueued) {
+          m_deferredRebuildQueued = false;
+          scheduleDeferredRebuild();
+        }
+      },
       .requestRebuild = requestRebuild,
       .requestContentRebuild = requestContent,
       .resetContentScroll = [this]() { m_contentScrollState.offset = 0.0F; },
@@ -929,6 +951,9 @@ settings::SettingsContentContext SettingsWindow::makeContentContext(
       .setOverrides = setOverrides,
       .clearOverride = clearOverride,
       .clearOverrides = clearOverrides,
+      .showStatus = [this](std::string message, bool error) {
+        showTransientStatus(std::move(message), error);
+      },
       .resetBarLane = resetLane,
       .isResetConfirmationPending =
           [this](const std::vector<std::vector<std::string>>& paths) { return m_pendingResetSettingPaths == paths; },
@@ -970,6 +995,14 @@ settings::SettingsContentContext SettingsWindow::makeContentContext(
       .afterNotificationFilterApply = {},
       .closeHostedEditor = {},
       .supportsTaskbarWorkspaceGrouping = m_platform != nullptr && m_platform->supportsTaskbarWorkspaceGrouping(),
+      .profileTransitionBusy = m_profileTransitionBusy,
+      .profileAction = [this](std::string action) {
+        showProfilePrompt();
+        runProfileTransition(std::move(action));
+      },
+      .selectPreset = [this](std::string pluginId, std::string selected) {
+        requestPresetSelection(std::move(pluginId), std::move(selected));
+      },
   };
 }
 
@@ -1027,6 +1060,9 @@ void SettingsWindow::rebuildSettingsContent() {
   logSettingsProfile("rebuildContent setup", phaseProfileWatch);
   phaseProfileWatch.reset();
 
+  settings::SettingsControlFactory presetFactory(makeContentContext(cfg, selectedBar, selectedMonitorOverride));
+  settings::addPresetActions(*m_contentContainer, cfg, presetFactory, m_selectedSection, scale);
+
   settings::addSettingsBarManagement(
       *m_contentContainer,
       settings::SettingsBarManagementContext{
@@ -1060,8 +1096,23 @@ void SettingsWindow::rebuildSettingsContent() {
   logSettingsProfile("rebuildContent barManagement", phaseProfileWatch);
   phaseProfileWatch.reset();
 
+  std::vector<std::unique_ptr<Flex>> pluginBodies;
+  for (const auto& tab : settings::pluginSettingsTabs(cfg)) {
+    if (tab.id != m_selectedSection && tab.nativeSection != m_selectedSection && m_searchQuery.empty()) continue;
+    const auto* manifest = scripting::PluginRegistry::instance().findManifest(tab.pluginId);
+    if (!manifest) continue;
+    auto body = ui::column({.align = FlexAlign::Stretch, .gap = Style::spaceSm * scale,
+      .padding = Style::spaceLg * scale});
+    body->addChild(ui::label({.text = tab.label, .fontSize = Style::fontSizeTitle * scale}));
+    settings::SettingsControlFactory factory(makeContentContext(cfg, selectedBar, selectedMonitorOverride));
+    const bool rendered = settings::buildPluginSettingsEditor(*body, cfg, factory, tab.pluginId, *manifest, m_showAdvanced, scale, tab.value);
+    if (rendered || m_searchQuery.empty()) pluginBodies.push_back(std::move(body));
+  }
+
+  for (auto& body : pluginBodies) m_contentContainer->addChild(std::move(body));
   const std::size_t visibleEntries = settings::addSettingsContentSections(
-      *m_contentContainer, m_settingsRegistry, makeContentContext(cfg, selectedBar, selectedMonitorOverride)
+      *m_contentContainer, m_settingsRegistry, makeContentContext(cfg, selectedBar, selectedMonitorOverride),
+      pluginBodies.empty()
   );
 
   logSettingsProfile("rebuildContent sections", phaseProfileWatch);
@@ -1211,6 +1262,7 @@ std::unique_ptr<Flex> SettingsWindow::buildHeaderRow(float scale) {
 std::unique_ptr<Flex> SettingsWindow::buildFilterRow(
     float scale, const std::string& resetPageScope, std::vector<std::vector<std::string>> resetPagePaths
 ) {
+  const bool compact = m_config && m_config->config().shell.settingsCompactChrome;
   const auto requestRebuild = [this]() { requestSceneRebuild(); };
   const auto clearOverrides = [this](std::vector<std::vector<std::string>> paths) {
     clearSettingOverrides(std::move(paths));
@@ -1232,7 +1284,7 @@ std::unique_ptr<Flex> SettingsWindow::buildFilterRow(
           .controlHeight = Style::controlHeight * scale,
           .horizontalPadding = Style::spaceSm * scale,
           .clearButtonEnabled = true,
-          .width = 320.0F * scale,
+          .width = (compact ? Style::settingsSidebarWidth : 320.0F) * scale,
           .height = Style::controlHeight * scale,
           .onChange = [this](const std::string& value) {
             const bool wasSearchActive = !m_searchQuery.empty();
@@ -1262,6 +1314,19 @@ std::unique_ptr<Flex> SettingsWindow::buildFilterRow(
   }
   filters->addChild(ui::spacer());
 
+  auto compactRows = ui::column({.align = FlexAlign::Stretch, .gap = Style::spaceSm * scale});
+  if (compact) {
+    filters->addChild(ui::button({.glyph = "adjustments", .variant = ButtonVariant::Ghost,
+        .minWidth = 28.F * scale, .minHeight = 28.F * scale,
+        .onClick = [this] { m_showCompactFilters = !m_showCompactFilters; requestSceneRebuild(); }}));
+    filters->addChild(ui::button({.out = &m_actionsMenuButton, .glyph = "more-vertical", .variant = ButtonVariant::Ghost,
+        .minWidth = 28.F * scale, .minHeight = 28.F * scale, .onClick = [this] { openActionsMenu(); }}));
+    filters->addChild(ui::button({.glyph = "close", .variant = ButtonVariant::Ghost,
+        .minWidth = 28.F * scale, .minHeight = 28.F * scale, .onClick = [this] { close(); }}));
+    compactRows->addChild(std::move(filters));
+    if (!m_showCompactFilters) return compactRows;
+    filters = ui::row({.align = FlexAlign::Center, .gap = Style::spaceSm * scale});
+  }
   static const bool translatorMode = SysUtils::isEnvFlagOn("NOCTALIA_TRANSLATOR");
   if (translatorMode) {
     auto enLabel =
@@ -1362,6 +1427,7 @@ std::unique_ptr<Flex> SettingsWindow::buildFilterRow(
     );
   }
 
+  if (compact) { compactRows->addChild(std::move(filters)); return compactRows; }
   return filters;
 }
 
@@ -1369,19 +1435,22 @@ std::unique_ptr<Flex> SettingsWindow::buildStatusRow(float scale) {
   const auto* legacyIssue = m_config != nullptr && !m_config->legacyConfigIssues().empty()
       ? &m_config->legacyConfigIssues().front()
       : nullptr;
-  if (m_statusMessage.empty() && legacyIssue == nullptr) {
-    return nullptr;
-  }
+  const auto preparation = m_config ? m_config->profilePreparation() : ConfigService::ProfilePreparation{};
+  if (m_statusMessage.empty() && legacyIssue == nullptr && !preparation.pending
+      && preparation.error.empty() && preparation.skipped.empty()) return nullptr;
 
-  const bool transientStatus = !m_statusMessage.empty();
-  const bool statusIsError = transientStatus ? m_statusIsError : true;
-  const std::string issueDescription = legacyIssue != nullptr
-      ? legacyIssue->origin.prefixed(legacyIssue->path + ": " + legacyIssue->message)
-      : std::string{};
-  const std::string messageText =
-      transientStatus ? m_statusMessage : i18n::tr("settings.window.legacy-config-warning", "issue", issueDescription);
+  const bool transientStatus = !m_statusMessage.empty() && preparation.error.empty();
+  const bool statusIsError = !preparation.error.empty() || (transientStatus ? m_statusIsError : legacyIssue != nullptr);
+  std::string messageText;
+  if (!preparation.error.empty()) messageText = preparation.error;
+  else if (transientStatus) messageText = m_statusMessage;
+  else if (legacyIssue) messageText = i18n::tr("settings.window.legacy-config-warning", "issue",
+      legacyIssue->origin.prefixed(legacyIssue->path + ": " + legacyIssue->message));
+  else if (preparation.pending) messageText = "Applying application caret appearance…";
+  else messageText = "Preserved " + std::to_string(preparation.skipped.size())
+      + " existing application caret preferences. Enable management of existing preferences to include them.";
 
-  return settings::makeSettingsStatusBanner({
+  auto banner = settings::makeSettingsStatusBanner({
       .message = messageText,
       .error = statusIsError,
       .scale = scale,
@@ -1391,6 +1460,21 @@ std::unique_ptr<Flex> SettingsWindow::buildStatusRow(float scale) {
       }}
                                    : std::function<void()>{},
   });
+  if (m_config && m_config->canRetryProfilePreparation()) {
+    banner->addChild(ui::button({
+        .text = i18n::tr("settings.window.retry-application-appearance"),
+        .fontSize = Style::fontSizeCaption * scale,
+        .variant = ButtonVariant::Ghost,
+        .minHeight = Style::controlHeightSm * scale,
+        .padding = Style::spaceXs * scale,
+        .radius = Style::scaledRadiusSm(scale),
+        .onClick = [this]() {
+          if (m_config && m_config->retryProfilePreparation()) clearStatusMessage();
+          onProfilePreparationChanged();
+        },
+    }));
+  }
+  return banner;
 }
 
 std::unique_ptr<Flex> SettingsWindow::buildBody(
@@ -1454,7 +1538,7 @@ std::unique_ptr<Flex> SettingsWindow::buildBody(
       ui::row({
           .out = &m_groupJumpRow,
           .align = FlexAlign::Center,
-          .wrap = true,
+          .wrap = false,
           .gap = Style::spaceXs * scale,
           .fillWidth = true,
           .configure = [scale](Flex& flex) {
@@ -1480,10 +1564,11 @@ std::unique_ptr<Flex> SettingsWindow::buildBody(
   });
 
   auto* content = m_contentScrollView->content();
-  m_contentContainer = content;
   content->setDirection(FlexDirection::Vertical);
-  content->setAlign(FlexAlign::Stretch);
-  content->setGap(Style::spaceMd * scale);
+  content->setAlign(FlexAlign::Center);
+  auto column = ui::column({.align = FlexAlign::Stretch, .gap = Style::spaceMd * scale, .fillWidth = true});
+  column->setMaxWidth(Style::settingsContentMaxWidth * scale);
+  m_contentContainer = static_cast<Flex*>(content->addChild(std::move(column)));
   rebuildSettingsContent();
 
   contentColumn->addChild(std::move(scroll));
@@ -1498,6 +1583,8 @@ void SettingsWindow::refreshSettingsRegistry(const Config& cfg) {
   logSettingsProfile("refreshRegistry registryEnvironment", phaseProfileWatch);
   phaseProfileWatch.reset();
   m_settingsRegistry = settings::buildSettingsRegistry(cfg, nullptr, nullptr, env);
+  std::erase_if(m_settingsRegistry, [&](const auto& entry) { return settings::pluginOwnsSetting(cfg, entry.path); });
+  settings::applyPluginSettingRoutes(cfg, m_settingsRegistry);
   logSettingsProfile("refreshRegistry registry", phaseProfileWatch);
   phaseProfileWatch.reset();
 
@@ -2014,11 +2101,16 @@ std::vector<std::vector<std::string>> SettingsWindow::currentPageResetPaths() co
       }
     };
     appendIfOverridden(entry.path);
+    if (const auto* curve = std::get_if<settings::CurveSetting>(&entry.control)) {
+      for (const auto& path : curve->paths) appendIfOverridden(path);
+      appendIfOverridden(curve->stylePath);
+    }
     if (const auto* range = std::get_if<settings::RangeSliderSetting>(&entry.control)) {
       appendIfOverridden(range->highPath);
     }
     if (const auto* select = std::get_if<settings::SelectSetting>(&entry.control)) {
       appendIfOverridden(select->linkedPath);
+      for (const auto& path : select->linkedPaths) appendIfOverridden(path);
     }
   }
   return resetPagePaths;
@@ -2120,6 +2212,10 @@ void SettingsWindow::buildScene(std::uint32_t width, std::uint32_t height) {
   };
   if (m_selectedSection == "bar" && selectedBar == nullptr) {
     m_selectedSection.clear();
+  } else if (m_selectedSection.starts_with("plugin:")) {
+    const auto tabs = settings::pluginSettingsTabs(cfg);
+    if (!std::ranges::any_of(tabs, [this](const auto& tab) { return tab.id == m_selectedSection; }))
+      m_selectedSection.clear();
   } else if (m_selectedSection != "bar" && !m_selectedSection.empty()) {
     const auto selectedSection = settings::settingsSectionFromId(m_selectedSection);
     if (!selectedSection.has_value() || !containsSection(*selectedSection)) {
@@ -2149,6 +2245,7 @@ void SettingsWindow::buildScene(std::uint32_t width, std::uint32_t height) {
   m_panelBackground = nullptr;
   m_contentContainer = nullptr;
   m_sceneRoot = ui::node({});
+  m_sceneRoot->setMaterialSurface("settings");
   m_sceneRoot->setSize(w, h);
   m_sceneRoot->setAnimationManager(&m_animations);
   if (m_surface != nullptr && m_renderContext != nullptr && m_wayland != nullptr) {
@@ -2159,16 +2256,19 @@ void SettingsWindow::buildScene(std::uint32_t width, std::uint32_t height) {
   }
 
   const float bgOpacity = cfg.shell.settingsWindowTranslucent ? 0.8F : 1.0F;
+  const bool opaqueGlass = !cfg.shell.settingsWindowTranslucent &&
+      Style::surfaceMaterial() == Style::SurfaceMaterialMode::LiquidGlass;
 
   auto bg = ui::box({
       .width = w,
       .height = h,
-      .configure = [bgOpacity](Box& box) {
+      .configure = [bgOpacity, opaqueGlass, background = cfg.shell.settingsBackground](Box& box) {
         box.setPanelStyle();
+        if (opaqueGlass) box.setSurfaceRelief(0.0F);
         box.setRadius(0.0F);
         box.setBorder(clearColor(), 0);
         box.setPosition(0.0F, 0.0F);
-        box.setFill(colorSpecFromRole(ColorRole::Surface, bgOpacity));
+        box.setFill(scaleAlpha(background, bgOpacity));
       },
   });
   m_panelBackground = static_cast<Box*>(m_sceneRoot->addChild(std::move(bg)));
@@ -2184,7 +2284,7 @@ void SettingsWindow::buildScene(std::uint32_t width, std::uint32_t height) {
       .height = h,
   });
 
-  m_headerRow = main->addChild(centeredRow(buildHeaderRow(scale)));
+  if (!cfg.shell.settingsCompactChrome) m_headerRow = main->addChild(centeredRow(buildHeaderRow(scale)));
   m_filterRow = main->addChild(centeredRow(buildFilterRow(scale, resetPageScope, std::move(resetPagePaths))));
   if (auto status = buildStatusRow(scale)) {
     main->addChild(centeredRow(std::move(status)));

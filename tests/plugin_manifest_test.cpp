@@ -1281,6 +1281,154 @@ int main() {
   ok = expect(!scripting::parsePluginManifest(badActionPath, &error).has_value(), "a non-string action should fail")
       && ok;
 
+  // The native graph is metadata over four independent persisted coordinates.
+  const auto curvePath = root / "curve" / "plugin.toml";
+  const auto curveManifest = [](std::string_view group, std::string_view xType = "double",
+                                std::string_view yBounds = "min = -2.0\nmax = 2.0\n") {
+    std::string text = "id = \"me/curve\"\nname = \"Curve\"\nplugin_api = 23\n";
+    text += "[[setting]]\nkey = \"policy\"\nlabel_key = \"policy\"\ntype = \"select\"\ndefault = \"native\"\noptions = [{value = \"native\", label_key = \"native\"}, {value = \"configured\", label_key = \"configured\"}]\n";
+    for (const std::string key : {"x1", "y1", "x2", "y2"}) {
+      text += "[[setting]]\nkey = \"" + key + "\"\nlabel_key = \"" + key + "\"\ntype = \"" +
+          std::string(key[0] == 'x' ? xType : "double") + "\"\ndefault = 0\n";
+      text += key[0] == 'x' ? "min = 0\nmax = 1\n" : std::string(yBounds);
+      if (key == "x1") text += "curve = " + std::string(group) + "\n";
+    }
+    return text;
+  };
+  const std::string validGroup = R"({keys=["x1","y1","x2","y2"],label_key="curve",activation_key="policy",activation_value="configured"})";
+  ok = expect(writeManifest(curvePath, curveManifest(validGroup)), "write curve manifest") && ok;
+  error.clear();
+  const auto curveParsed = scripting::parsePluginManifest(curvePath, &error);
+  ok = expect(curveParsed && curveParsed->settings[1].curve &&
+      curveParsed->settings[1].curve->keys[3] == "y2" &&
+      curveParsed->settings[1].curve->activationValue == "configured", "parse complete curve metadata") && ok;
+  ok = expect(writeManifest(curvePath, curveManifest(R"({keys=["x1","y1","x2","y2"],label_key="curve"})")), "write curve without activation") && ok;
+  error.clear();
+  ok = expect(scripting::parsePluginManifest(curvePath, &error).has_value(), "curve activation must remain optional") && ok;
+  for (const auto& bad : {
+      R"({keys=["x1","y1","x1","y2"],label_key="curve"})",
+      R"({keys=["x1","y1","missing","y2"],label_key="curve"})",
+      R"({keys=["y1","x1","x2","y2"],label_key="curve"})",
+      R"({keys=["x1","y1","x2",42],label_key="curve"})",
+      R"({keys=["x1","y1","x2","y2"]})",
+      R"({keys=["x1","y1","x2","y2"],label_key="curve",activation_key="policy"})",
+      R"({keys=["x1","y1","x2","y2"],label_key="curve",activation_key="policy",activation_value="invalid"})",
+      R"({keys=["x1","y1","x2","y2"],label_key="curve",activation_key="x2",activation_value="configured"})",
+      R"({keys=["x1","y1","x2","y2"],label_key="curve",description_key=false})",
+      "42"}) {
+    ok = expect(writeManifest(curvePath, curveManifest(bad)), "write invalid curve manifest") && ok;
+    error.clear();
+    ok = expect(!scripting::parsePluginManifest(curvePath, &error) && !error.empty(), "reject invalid curve metadata") && ok;
+  }
+  for (const auto& text : {curveManifest(validGroup, "int"), curveManifest(validGroup, "double", "min = 0\nmax = 1\n")}) {
+    ok = expect(writeManifest(curvePath, text), "write incompatible curve bounds") && ok;
+    error.clear();
+    ok = expect(!scripting::parsePluginManifest(curvePath, &error), "reject graph that cannot represent field domain") && ok;
+  }
+
+  const auto springPath = root / "spring/plugin.toml";
+  const std::string springManifest = R"(id="me/spring"
+name="Spring"
+plugin_api=23
+[[setting]]
+key="mode"
+label_key="mode"
+type="select"
+default="spring"
+options=[{value="spring",label_key="spring"}]
+[[setting]]
+key="mass"
+label_key="mass"
+type="double"
+default=1.0
+visible_when={all=[{key="section",values=["general"]},{key="mode",values=["spring"]}]}
+spring_response={keys=["mass","stiffness","dampening"],label_key="response"}
+[[setting]]
+key="stiffness"
+label_key="stiffness"
+type="double"
+default=250.0
+[[setting]]
+key="dampening"
+label_key="dampening"
+type="double"
+default=25.0
+[[setting]]
+key="section"
+label_key="section"
+type="string"
+default="general"
+)";
+  ok = expect(writeManifest(springPath, springManifest), "write spring response manifest") && ok;
+  error.clear();
+  const auto springParsed=scripting::parsePluginManifest(springPath,&error);
+  ok = expect(springParsed && springParsed->settings[1].springResponse &&
+      springParsed->settings[1].visibleWhen && springParsed->settings[1].visibleWhen->all.size()==2,
+      "parse spring response and conjunctive visibility metadata") && ok;
+  for (const auto& malformed : {
+      std::string("spring_response={keys=[\"mass\",\"missing\",\"dampening\"],label_key=\"response\"}"),
+      std::string("spring_response={keys=[\"mass\",\"mass\",\"dampening\"],label_key=\"response\"}"),
+      std::string("spring_response={keys=[\"mass\",\"stiffness\"],label_key=\"response\"}")}) {
+    auto text=springManifest;
+    const auto begin=text.find("spring_response="); const auto end=text.find('\n',begin);
+    text.replace(begin,end-begin,malformed);
+    ok=expect(writeManifest(springPath,text),"write malformed spring response manifest")&&ok;
+    error.clear();
+    ok=expect(!scripting::parsePluginManifest(springPath,&error)&&!error.empty(),
+        "reject malformed spring response metadata")&&ok;
+  }
+
+  const auto ownershipPath = root / "ownership/plugin.toml";
+  const auto ownershipManifest = [](std::string_view path, std::string_view setting) {
+    return std::string("id = \"me/ownership\"\nname = \"Ownership\"\nplugin_api = 23\n[[settings_ownership]]\npath = ") + std::string(path) +
+        "\nwhen = \"integration\"\n" + std::string(setting) + R"(
+[[setting]]
+key = "integration"
+label_key = "integration"
+type = "bool"
+default = true
+[[setting]]
+key = "animations"
+label_key = "animations"
+type = "bool"
+default = true
+[[setting]]
+key = "text"
+label_key = "text"
+type = "string"
+default = ""
+[[setting]]
+key = "speed"
+label_key = "speed"
+type = "double"
+default = 1.0
+)";
+  };
+  ok = expect(writeManifest(ownershipPath, ownershipManifest(R"(["shell","animation","enabled"])", "setting = \"animations\"\n")), "write routed ownership") && ok;
+  error.clear();
+  const auto ownership = scripting::parsePluginManifest(ownershipPath, &error);
+  ok = expect(ownership && ownership->settingsOwnership.front().setting == "animations", "parse boolean ownership route") && ok;
+  ok = expect(writeManifest(ownershipPath, ownershipManifest(R"(["shell","animation","speed"])", "setting = \"speed\"\n")), "write numeric routed ownership") && ok;
+  error.clear();
+  const auto numericOwnership = scripting::parsePluginManifest(ownershipPath, &error);
+  ok = expect(numericOwnership && numericOwnership->settingsOwnership.front().setting == "speed",
+      "parse matching numeric ownership route") && ok;
+  for (const auto& text : {
+      ownershipManifest(R"(["shell","animation","enabled"])", "setting = false\n"),
+      ownershipManifest(R"(["shell","animation","enabled"])", "setting = \"missing\"\n"),
+      ownershipManifest(R"(["shell","animation","enabled"])", "setting = \"text\"\n"),
+      ownershipManifest(R"(["shell","animation","speed"])", "setting = \"animations\"\n"),
+      ownershipManifest(R"(["shell","animation","enabled"])", "setting = \"speed\"\n"),
+      ownershipManifest(R"(["shell","animation","absent"])", "setting = \"animations\"\n"),
+      ownershipManifest(R"(["bar","*","enabled"])", "setting = \"animations\"\n")}) {
+    ok = expect(writeManifest(ownershipPath, text), "write invalid ownership route") && ok;
+    error.clear();
+    ok = expect(!scripting::parsePluginManifest(ownershipPath, &error) && !error.empty(), "reject invalid ownership route") && ok;
+  }
+  ok = expect(writeManifest(ownershipPath, ownershipManifest(R"(["bar","*","enabled"])", "")), "write hide-only ownership") && ok;
+  error.clear();
+  ok = expect(scripting::parsePluginManifest(ownershipPath, &error).has_value(), "hide-only wildcard ownership remains supported") && ok;
+
   std::error_code ec;
   std::filesystem::remove_all(root, ec);
   return ok ? 0 : 1;

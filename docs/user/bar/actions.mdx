@@ -111,6 +111,14 @@ middle = "none"                 # no middle-click-opens-settings anywhere on thi
 middle = "exec gnome-calendar"  # …except on the clock
 ```
 
+Binding inheritance and pointer routing are separate. The four layers above decide what a widget does once that widget receives a gesture. The pointer location then selects the owning surface:
+
+1. a child control or interactive widget owns its hit area, even when that gesture is unbound;
+2. a dynamic section background, or legacy start/center/end lane, owns only background no widget covers;
+3. the bar's `dead_zone` binding is the final empty-space fallback.
+
+Section and lane actions therefore run only on uncovered background. They do not override a child widget's inherited action. Configure dynamic-section bindings under **Bar → Sections → Section background actions** and legacy lane bindings under the corresponding start, center, or end lane. Configure the final fallback under `[bar.<name>.dead_zone.actions]`.
+
 ## Widgets that own a gesture
 
 Some widgets handle a gesture on their individual items rather than as a whole, and those cannot be

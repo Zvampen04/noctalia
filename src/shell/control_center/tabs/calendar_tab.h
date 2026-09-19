@@ -2,9 +2,11 @@
 
 #include "core/timer_manager.h"
 #include "render/animation/animation_manager.h"
+#include "shell/control_center/calendar_month_open_intent.h"
 #include "shell/control_center/tab.h"
 #include "ui/controls/calendar_view.h"
 
+#include <cstdint>
 #include <limits>
 
 class Button;
@@ -17,13 +19,21 @@ class ScrollView;
 class CalendarTab : public Tab {
 public:
   explicit CalendarTab(ConfigService* config = nullptr, CalendarService* calendar = nullptr);
+  ~CalendarTab() override;
 
   std::unique_ptr<Flex> create() override;
   std::unique_ptr<Flex> createHeaderActions() override;
+  void setForceMonthView(bool force) noexcept { m_forceMonthView = force; }
   void setActive(bool active) override;
   void onClose() override;
 
 private:
+  std::unique_ptr<Flex> createWeekStrip();
+  void rebuildWeekStrip();
+  bool m_weekStrip = false;
+  bool m_forceMonthView = false;
+  CalendarMonthOpenIntent m_monthOpenIntent;
+  int m_weekOffsetDays = 0;
   void focusToday();
   void changeMonthBy(int delta);
   void cancelMonthSlide();
@@ -38,9 +48,10 @@ private:
 
   ConfigService* m_config = nullptr;
   CalendarService* m_calendar = nullptr;
-  bool m_changeCallbackRegistered = false;
+  std::uint64_t m_calendarCallbackId = 0;
   bool m_eventsDirty = false;
   Flex* m_rootLayout = nullptr;
+  InputArea* m_weekStripArea = nullptr;
   Button* m_toggleEventsCardButton = nullptr;
   InputArea* m_calendarArea = nullptr;
   Flex* m_card = nullptr;

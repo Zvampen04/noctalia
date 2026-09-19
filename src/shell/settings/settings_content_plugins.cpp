@@ -1,8 +1,10 @@
 #include "shell/settings/settings_content_plugins.h"
 
 #include "config/config_types.h"
+#include "config/config_service.h"
 #include "i18n/i18n.h"
 #include "net/url_open.h"
+#include "render/scene/input_area.h"
 #include "scripting/plugin_api.h"
 #include "scripting/plugin_i18n.h"
 #include "scripting/plugin_id.h"
@@ -11,6 +13,7 @@
 #include "shell/settings/settings_content_common.h"
 #include "shell/settings/settings_control_factory.h"
 #include "shell/settings/settings_registry.h"
+#include "shell/settings/style_gallery.h"
 #include "shell/settings/widget_settings_registry.h"
 #include "ui/builders.h"
 #include "ui/controls/flex.h"
@@ -22,6 +25,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstddef>
 #include <memory>
 #include <optional>
 #include <string>
@@ -60,6 +64,116 @@ namespace settings {
       props.radius = Style::scaledRadiusSm(scale);
       props.onClick = std::move(onClick);
       return ui::button(std::move(props));
+    }
+
+    std::unique_ptr<Flex> galleryBar(const StyleGalleryPreview& preview, bool vertical, float scale) {
+      const bool segmented = preview.barStyle == "islands";
+      auto bar = ui::row({
+          .align = FlexAlign::Stretch,
+          .gap = segmented ? 3.0F * scale : 0.0F,
+          .fill = colorSpecFromRole(ColorRole::Primary, 0.82F),
+          .radius = (preview.barStyle == "full" || preview.barStyle == "notch") ? 0.0F : 6.0F * scale,
+          .width = vertical ? 13.0F * scale : std::optional<float>{},
+          .height = vertical ? std::optional<float>{} : 13.0F * scale,
+          .flexGrow = vertical || preview.barStyle == "full" ? 1.0F : std::optional<float>{},
+      });
+      if (segmented) {
+        bar->clearFill();
+        for (int i = 0; i < 3; ++i)
+          bar->addChild(ui::box({.fill = colorSpecFromRole(ColorRole::Primary, 0.82F), .radius = 5.0F * scale,
+                                .width = vertical ? 13.0F * scale : std::optional<float>{},
+                                .height = vertical ? std::optional<float>{} : 13.0F * scale,
+                                .flexGrow = 1.0F}));
+      }
+      return bar;
+    }
+
+    std::unique_ptr<Flex> galleryWorkspace(const StyleGalleryPreview& preview, float scale) {
+      auto workspace = ui::row({.align = FlexAlign::Stretch, .gap = 5.0F * scale, .padding = 7.0F * scale, .flexGrow = 1.0F});
+      const float radius = preview.radius == 0.0F ? 0.0F : std::clamp(preview.radius * 0.18F, 1.0F, 12.0F) * scale;
+      const float border = preview.border > 0.0F ? std::max(1.0F, preview.border * 0.35F) * scale : 0.0F;
+      const auto window = [&](float grow) {
+        return ui::box({
+            .fill = colorSpecFromRole(ColorRole::Surface, preview.material == "glass" ? 0.52F : 0.90F),
+            .border = colorSpecFromRole(ColorRole::Outline, 0.72F),
+            .borderWidth = border,
+            .radius = radius,
+            .flexGrow = grow,
+        });
+      };
+      if (preview.layout == "tiled") {
+        workspace->addChild(window(1.5F));
+        auto stack = ui::column({.align = FlexAlign::Stretch, .gap = 5.0F * scale, .flexGrow = 1.0F});
+        stack->addChild(window(1.0F));
+        stack->addChild(window(1.0F));
+        workspace->addChild(std::move(stack));
+      } else if (preview.layout == "floating") {
+        workspace->setPadding(12.0F * scale, 18.0F * scale);
+        workspace->addChild(window(1.0F));
+      } else {
+        workspace->addChild(window(1.0F));
+        workspace->addChild(window(1.0F));
+        workspace->addChild(window(0.72F));
+      }
+      return workspace;
+    }
+
+    std::unique_ptr<Flex> gallerySchematic(const StyleGalleryPreview& preview, float scale) {
+      const bool vertical = preview.position == "left" || preview.position == "right";
+      auto desktop = vertical
+          ? ui::row({.align = FlexAlign::Stretch, .gap = 5.0F * scale, .padding = 5.0F * scale,
+                     .fill = colorSpecFromRole(ColorRole::SurfaceVariant, 0.78F),
+                     .radius = 9.0F * scale, .border = colorSpecFromRole(ColorRole::Outline, 0.45F),
+                     .borderWidth = Style::borderWidth, .fillWidth = true, .clipChildren = true,
+                     .height = 105.0F * scale})
+          : ui::column({.align = FlexAlign::Stretch, .gap = 5.0F * scale, .padding = 5.0F * scale,
+                        .fill = colorSpecFromRole(ColorRole::SurfaceVariant, 0.78F),
+                        .radius = 9.0F * scale, .border = colorSpecFromRole(ColorRole::Outline, 0.45F),
+                        .borderWidth = Style::borderWidth, .fillWidth = true, .clipChildren = true,
+                        .height = 105.0F * scale});
+      auto bar = galleryBar(preview, vertical, scale);
+      auto workspace = galleryWorkspace(preview, scale);
+      if (preview.position == "bottom" || preview.position == "right") {
+        desktop->addChild(std::move(workspace));
+        desktop->addChild(std::move(bar));
+      } else {
+        desktop->addChild(std::move(bar));
+        desktop->addChild(std::move(workspace));
+      }
+      return desktop;
+    }
+
+    std::unique_ptr<Button> galleryCard(
+        const StyleGalleryEntry& entry, std::string_view current, bool enabled, float scale,
+        std::function<void()> onClick
+    ) {
+      auto card = ui::button({
+          .enabled = enabled,
+          .selected = entry.name == current,
+          .contentAlign = ButtonContentAlign::Start,
+          .variant = entry.name == current ? ButtonVariant::Primary : ButtonVariant::Outline,
+          .badge = entry.category == "factory" ? i18n::tr("settings.plugins.style-gallery.badge-built-in")
+              : entry.category == "reference" ? i18n::tr("settings.plugins.style-gallery.badge-reference")
+              : i18n::tr("settings.plugins.style-gallery.badge-saved"),
+          .minWidth = 210.0F * scale,
+          .maxWidth = 270.0F * scale,
+          .padding = Style::spaceSm * scale,
+          .gap = Style::spaceXs * scale,
+          .radius = Style::scaledRadiusMd(scale),
+          .flexGrow = 1.0F,
+          .onClick = std::move(onClick),
+          .configure = [](Button& button) { button.setDirection(FlexDirection::Vertical); button.setAlign(FlexAlign::Stretch); },
+      });
+      card->addChild(gallerySchematic(entry.preview, scale));
+      card->addChild(makeLabel(entry.name, Style::fontSizeBody * scale, ColorRole::OnSurface, FontWeight::Bold));
+      auto description = makeLabel(entry.description, Style::fontSizeCaption * scale, ColorRole::OnSurfaceVariant);
+      description->setMaxLines(2);
+      description->setEllipsize(TextEllipsize::End);
+      card->addChild(std::move(description));
+      const std::string details = entry.preview.material + " · " + entry.preview.layout + " · " +
+          i18n::tr(entry.preview.motion ? "settings.plugins.style-gallery.motion" : "settings.plugins.style-gallery.still");
+      card->addChild(makeLabel(details, Style::fontSizeCaption * scale, ColorRole::OnSurfaceVariant));
+      return card;
     }
 
     std::unique_ptr<Flex>
@@ -592,6 +706,162 @@ namespace settings {
 
   } // namespace
 
+  std::vector<PluginSettingsTab> pluginSettingsTabs(const Config& cfg) {
+    std::vector<PluginSettingsTab> tabs;
+    for (const auto& id : cfg.plugins.enabled) {
+      const auto* manifest = scripting::PluginRegistry::instance().findManifest(id);
+      if (!manifest || manifest->settingsTabs.empty()) continue;
+      const auto field = std::ranges::find(manifest->settings, manifest->settingsTabs, &scripting::ManifestField::key);
+      if (field == manifest->settings.end()) continue;
+      scripting::PluginTranslationCatalog translations;
+      if (auto dir = scripting::PluginRegistry::instance().findPluginDir(id)) translations.load(*dir);
+      for (const auto& option : field->options) {
+        tabs.push_back({"plugin:" + id + ":" + option.value, id, option.value,
+          option.labelKey.empty() ? option.value : translations.translate(option.labelKey),
+          manifest->icon.empty() ? "puzzle" : manifest->icon,
+          manifest->settingsTabTargets.contains(option.value) ? manifest->settingsTabTargets.at(option.value) : "",
+          std::ranges::contains(manifest->presetTabs, option.value)});
+      }
+    }
+    return tabs;
+  }
+
+  std::vector<std::string> presetNativeSections(const Config& cfg) {
+    std::vector<std::string> result;
+    for (const auto& id : cfg.plugins.enabled) {
+      if (const auto* manifest = scripting::PluginRegistry::instance().findManifest(id))
+        for (const auto& section : manifest->presetSections)
+          if (!std::ranges::contains(result, section)) result.push_back(section);
+    }
+    return result;
+  }
+
+  void addPresetActions(Flex& body, const Config& cfg, SettingsControlFactory& factory,
+                        std::string_view section, float scale) {
+    (void)cfg;
+    (void)section;
+    const auto& ctx = factory.context();
+    if (!ctx.configService || !ctx.configService->profilePreviewDirty() || !ctx.profileAction) return;
+    auto row = ui::row({.align = FlexAlign::Center, .gap = Style::spaceSm * scale,
+                       .padding = Style::spaceSm * scale});
+    const bool conflict = ctx.configService->profilePreviewConflict();
+    row->addChild(makeLabel(conflict ? "Appearance changed elsewhere. Discard to reload before saving."
+          : "Unsaved appearance changes", Style::fontSizeCaption * scale,
+          conflict ? ColorRole::Error : ColorRole::OnSurfaceVariant));
+    row->addChild(ui::spacer());
+    for (const auto& [action, label] : std::vector<std::pair<std::string, std::string>>{
+          {"discard", "Cancel"}, {"save", "Save"}}) {
+      auto button = makeConfirmButton(label, action == "save" ? ButtonVariant::Primary : ButtonVariant::Secondary,
+          scale, [callback = ctx.profileAction, action] { callback(action); });
+      button->setEnabled(!ctx.profileTransitionBusy && !(conflict && action == "save"));
+      if (button->inputArea()) button->inputArea()->setTabFocusKey("profile-action-" + action);
+      row->addChild(std::move(button));
+    }
+    body.addChild(std::move(row));
+  }
+
+  std::optional<PluginSettingRoute> pluginSettingRoute(const Config& cfg, const std::vector<std::string>& path) {
+    for (const auto& id : cfg.plugins.enabled) {
+      const auto* manifest = scripting::PluginRegistry::instance().findManifest(id);
+      if (!manifest) continue;
+      const auto boolean = [&](const std::string& key) {
+        const auto field = std::ranges::find(manifest->settings, key, &scripting::ManifestField::key);
+        bool value = field != manifest->settings.end() && field->boolDefault;
+        if (const auto plugin = cfg.plugins.pluginSettings.find(id); plugin != cfg.plugins.pluginSettings.end())
+          if (const auto stored = plugin->second.find(key); stored != plugin->second.end())
+            if (const auto* enabled = std::get_if<bool>(&stored->second)) value = *enabled;
+        return value;
+      };
+      for (const auto& rule : manifest->settingsOwnership)
+        if (!rule.setting.empty() && rule.path == path && boolean(rule.when))
+          return PluginSettingRoute{{"plugin_settings", id, rule.setting}, boolean(rule.setting)};
+    }
+    return std::nullopt;
+  }
+
+  bool routePluginSettingWrites(const Config& cfg,
+      std::vector<std::pair<std::vector<std::string>, ConfigOverrideValue>>& writes) {
+    auto routed = writes;
+    for (auto& [path, value] : routed) {
+      if (const auto route = pluginSettingRoute(cfg, path)) {
+        const auto* manifest = scripting::PluginRegistry::instance().findManifest(route->path[1]);
+        if (manifest == nullptr) return false;
+        const auto field = std::ranges::find(manifest->settings, route->path[2], &scripting::ManifestField::key);
+        if (field == manifest->settings.end()) return false;
+        const bool valid = [&] {
+          switch (field->type) {
+          case scripting::ManifestFieldType::Bool: return std::holds_alternative<bool>(value);
+          case scripting::ManifestFieldType::Int: return std::holds_alternative<std::int64_t>(value);
+          case scripting::ManifestFieldType::Double: return std::holds_alternative<double>(value);
+          case scripting::ManifestFieldType::String:
+          case scripting::ManifestFieldType::File:
+          case scripting::ManifestFieldType::Folder:
+          case scripting::ManifestFieldType::Glyph:
+          case scripting::ManifestFieldType::Select:
+          case scripting::ManifestFieldType::Color: return std::holds_alternative<std::string>(value);
+          case scripting::ManifestFieldType::StringList:
+            return std::holds_alternative<std::vector<std::string>>(value);
+          case scripting::ManifestFieldType::StringMap: return false;
+          }
+          return false;
+        }();
+        if (!valid) return false;
+        path = route->path;
+      }
+    }
+    // A grouped control must not send contradictory values to the same owner.
+    for (std::size_t i = 0; i < routed.size(); ++i) {
+      for (std::size_t j = i + 1; j < routed.size();) {
+        if (routed[i].first != routed[j].first) { ++j; continue; }
+        if (routed[i].second != routed[j].second) return false;
+        routed.erase(routed.begin() + static_cast<std::ptrdiff_t>(j));
+      }
+    }
+    writes = std::move(routed);
+    return true;
+  }
+
+  void routePluginSettingResets(const Config& cfg, std::vector<std::vector<std::string>>& paths) {
+    for (auto& path : paths) if (const auto route = pluginSettingRoute(cfg, path)) path = route->path;
+    std::ranges::sort(paths);
+    paths.erase(std::unique(paths.begin(), paths.end()), paths.end());
+  }
+
+  void applyPluginSettingRoutes(const Config& cfg, std::vector<SettingEntry>& entries) {
+    for (auto& entry : entries) {
+      if (auto* select = std::get_if<SelectSetting>(&entry.control)) {
+        if (const auto route = pluginSettingRoute(cfg, select->linkedPath)) {
+          if (select->linkedBooleanValues)
+            select->selectedValue = route->value ? select->linkedBooleanValues->second : select->linkedBooleanValues->first;
+          select->linkedPath = route->path;
+        }
+        routePluginSettingResets(cfg, select->linkedPaths);
+      }
+    }
+  }
+
+  bool pluginOwnsSetting(const Config& cfg, const std::vector<std::string>& path) {
+    for (const auto& id : cfg.plugins.enabled) {
+      const auto* manifest = scripting::PluginRegistry::instance().findManifest(id);
+      if (!manifest) continue;
+      for (const auto& rule : manifest->settingsOwnership) {
+        if (rule.path.size() != path.size()) continue;
+        bool match = true;
+        for (std::size_t i = 0; i < path.size(); ++i)
+          if (rule.path[i] != "*" && rule.path[i] != path[i]) match = false;
+        if (!match) continue;
+        const auto field = std::ranges::find(manifest->settings, rule.when, &scripting::ManifestField::key);
+        if (field == manifest->settings.end()) continue;
+        bool enabled = field->boolDefault;
+        if (const auto plugin = cfg.plugins.pluginSettings.find(id); plugin != cfg.plugins.pluginSettings.end())
+          if (const auto value = plugin->second.find(rule.when); value != plugin->second.end())
+            if (const auto* toggle = std::get_if<bool>(&value->second)) enabled = *toggle;
+        if (enabled) return true;
+      }
+    }
+    return false;
+  }
+
   bool pluginHasSettings(const scripting::PluginManifest& manifest) {
     if (!manifest.settings.empty()) {
       return true;
@@ -601,9 +871,9 @@ namespace settings {
     });
   }
 
-  void buildPluginSettingsEditor(
+  bool buildPluginSettingsEditor(
       Flex& body, const Config& cfg, SettingsControlFactory& factory, const std::string& pluginId,
-      const scripting::PluginManifest& manifest, bool showAdvanced, float scale
+      const scripting::PluginManifest& manifest, bool showAdvanced, float scale, std::string_view tab
   ) {
     scripting::PluginTranslationCatalog translations;
     if (const auto pluginDir = scripting::PluginRegistry::instance().findPluginDir(pluginId)) {
@@ -634,12 +904,46 @@ namespace settings {
         specs.push_back(panelSpec);
       }
     }
+    Config pageConfig = cfg;
+    if (!tab.empty()) pageConfig.plugins.pluginSettings[pluginId][manifest.settingsTabs] = std::string(tab);
     bool rendered = false;
-    for (const auto& spec : specs) {
+    for (auto spec : specs) {
+      if (!manifest.presetCommand.empty() && spec.schema.key == manifest.presetActions) {
+        // Save/Cancel use the acknowledged native transaction controls below.
+        std::erase_if(spec.options, [](const auto& option) {
+          return option.value == "commit" || option.value == "cancel" || option.value == "apply";
+        });
+      }
+      const auto field = std::ranges::find(manifest.settings, spec.schema.key, &scripting::ManifestField::key);
+      if (field != manifest.settings.end() && !field->optionsFrom.empty()) {
+        const auto source = std::ranges::find_if(specs, [&](const auto& item) { return item.schema.key == field->optionsFrom; });
+        if (source != specs.end()) {
+          spec.options.clear();
+          for (const auto& name : valueAsStringList(pluginSettingValue(cfg, pluginId, *source))) {
+            if (spec.options.size() == 64) break;
+            spec.options.push_back({name, name});
+          }
+        }
+      }
+      if (!tab.empty() && spec.schema.key == manifest.settingsTabs) continue;
+      // Automatic panel controls belong to the declared Panels destination,
+      // not every tab in an integrated settings plugin.
+      if (!tab.empty()) {
+        const auto panelTab = std::ranges::find_if(manifest.settingsTabTargets,
+            [](const auto& item) { return item.second == "panels"; });
+        if (panelTab != manifest.settingsTabTargets.end() && tab != panelTab->first) {
+          const bool panelField = std::ranges::any_of(manifest.entries, [&](const auto& entry) {
+            return entry.kind == scripting::PluginEntryKind::Panel &&
+                (scripting::isPanelShellSettingKey(entry.id, spec.schema.key) ||
+                 std::ranges::any_of(entry.settings, [&](const auto& field) { return field.key == spec.schema.key; }));
+          });
+          if (panelField) continue;
+        }
+      }
       if (spec.advanced && !showAdvanced) {
         continue;
       }
-      if (!pluginSettingVisible(cfg, pluginId, spec, specs)) {
+      if (!pluginSettingVisible(pageConfig, pluginId, spec, specs)) {
         continue;
       }
       const std::vector<std::string> path = {"plugin_settings", pluginId, spec.schema.key};
@@ -654,6 +958,132 @@ namespace settings {
           .advanced = spec.advanced,
           .searchText = {},
       };
+      // Optional presentation metadata groups existing scalar fields. Values and
+      // persistence still belong to their ordinary plugin settings paths.
+      if (field != manifest.settings.end() && field->curve) {
+        const auto& group = *field->curve;
+        CurveSetting curve;
+        bool available = true;
+        bool overridden = false;
+        for (std::size_t i = 0; i < group.keys.size(); ++i) {
+          const auto coordinate = std::ranges::find_if(specs, [&](const auto& item) { return item.schema.key == group.keys[i]; });
+          if (coordinate == specs.end() || (coordinate->advanced && !showAdvanced) ||
+              !pluginSettingVisible(pageConfig, pluginId, *coordinate, specs)) {
+            available = false;
+            break;
+          }
+          curve.paths[i] = {"plugin_settings", pluginId, group.keys[i]};
+          curve.value[i] = static_cast<float>(valueAsDouble(pluginSettingValue(cfg, pluginId, *coordinate)));
+          if (factory.context().configService)
+            overridden |= factory.context().configService->hasEffectiveOverride(curve.paths[i]);
+        }
+        if (!group.activationKey.empty()) {
+          const auto activation = std::ranges::find_if(specs, [&](const auto& item) { return item.schema.key == group.activationKey; });
+          if (activation == specs.end()) available = false;
+          else {
+            curve.stylePath = {"plugin_settings", pluginId, group.activationKey};
+            curve.initialStyle = valueAsString(pluginSettingValue(cfg, pluginId, *activation));
+            curve.editedStyle = group.activationValue;
+            if (factory.context().configService)
+              overridden |= factory.context().configService->hasEffectiveOverride(curve.stylePath);
+          }
+        }
+        SettingEntry graph = entry;
+        graph.title = translations.translate(group.labelKey);
+        graph.subtitle = group.descriptionKey.empty() ? std::string{} : translations.translate(group.descriptionKey);
+        graph.control = curve;
+        // Coordinate labels remain searchable alongside the graph label.
+        for (const auto& key : group.keys) graph.searchText += " " + key;
+        if (available && matchesSettingQuery(graph, factory.context().searchQuery) &&
+            (!factory.context().showOverriddenOnly || !factory.context().configService || overridden)) {
+          factory.makeRow(body, graph, factory.makeCurve(curve));
+          rendered = true;
+        }
+      }
+      if (field != manifest.settings.end() && field->springResponse) {
+        const auto& group=*field->springResponse;
+        std::array<double,3> values{}; bool available=true,overridden=false;
+        for(std::size_t i=0;i<group.keys.size();++i) {
+          const auto parameter=std::ranges::find_if(specs,[&](const auto& item){return item.schema.key==group.keys[i];});
+          if(parameter==specs.end() || !pluginSettingVisible(pageConfig,pluginId,*parameter,specs)){available=false;break;}
+          values[i]=valueAsDouble(pluginSettingValue(cfg,pluginId,*parameter));
+          if(factory.context().configService) overridden|=factory.context().configService->hasEffectiveOverride({"plugin_settings",pluginId,group.keys[i]});
+        }
+        SettingEntry graph=entry; graph.title=translations.translate(group.labelKey);
+        graph.subtitle=group.descriptionKey.empty()?std::string{}:translations.translate(group.descriptionKey);
+        graph.control=SliderSetting{values[0],0.01,1000,0.01,false};
+        if(available && matchesSettingQuery(graph,factory.context().searchQuery) &&
+            (!factory.context().showOverriddenOnly || !factory.context().configService || overridden)) {
+          factory.makeRow(body,graph,factory.makeSpringResponse(values[0],values[1],values[2])); rendered=true;
+        }
+      }
+      if (!matchesSettingQuery(entry, factory.context().searchQuery)) continue;
+      if (factory.context().showOverriddenOnly && factory.context().configService &&
+          !factory.context().configService->hasEffectiveOverride(path)) continue;
+      if (spec.schema.key == manifest.presetSelection && factory.context().selectPreset) {
+        std::vector<SelectOption> options;
+        for (const auto& option : spec.options)
+          options.push_back({option.value, spec.literalLabels ? option.labelKey : i18n::tr(option.labelKey)});
+        const std::string current = valueAsString(value);
+        StyleGallery gallery;
+        if (const auto gallerySpec = std::ranges::find_if(specs, [](const auto& item) {
+              return item.schema.key == "preset_gallery";
+            }); gallerySpec != specs.end()) {
+          gallery = parseStyleGallery(valueAsString(pluginSettingValue(cfg, pluginId, *gallerySpec)));
+        }
+        auto copy = ui::column({.gap = Style::spaceXs * scale, .flexGrow = 1.0F});
+        copy->addChild(makeLabel(entry.title, Style::fontSizeBody * scale, ColorRole::OnSurface, FontWeight::Bold));
+        copy->addChild(makeSettingSubtitleLabel(entry.subtitle, scale));
+        auto row = ui::row({.align = FlexAlign::Center, .gap = Style::spaceSm * scale});
+        row->addChild(std::move(copy));
+        auto picker = ui::button({
+            .text = gallery.entries.empty() ? (current.empty() ? i18n::tr("settings.plugins.style-gallery.choose") : current)
+                                             : i18n::tr("settings.plugins.style-gallery.search"),
+            .glyph = gallery.entries.empty() ? std::optional<std::string>{} : std::optional<std::string>{"search"},
+            .enabled = !factory.context().profileTransitionBusy,
+            .variant = ButtonVariant::Secondary,
+            .onClick = [open = factory.context().openSearchPickerPopup,
+                        select = factory.context().selectPreset, options = std::move(options),
+                        pluginId, current, title = entry.title] {
+              if (!open) return;
+              open(SearchPickerOpenRequest{
+                  .title = title, .options = options, .selectedValue = current,
+                  .onSelect = [select, pluginId](const std::string& next) { select(pluginId, next); },
+              });
+            },
+        });
+        if (picker->inputArea()) picker->inputArea()->setTabFocusKey("preset-selection-" + pluginId);
+        row->addChild(std::move(picker));
+        body.addChild(std::move(row));
+        if (!gallery.entries.empty()) {
+          std::string category;
+          Flex* cards = nullptr;
+          for (const auto& galleryEntry : gallery.entries) {
+            if (galleryEntry.category != category) {
+              category = galleryEntry.category;
+              const std::string heading = category == "factory" ? i18n::tr("settings.plugins.style-gallery.built-in")
+                  : category == "reference" ? i18n::tr("settings.plugins.style-gallery.reference")
+                  : i18n::tr("settings.plugins.style-gallery.saved");
+              body.addChild(makeLabel(heading, Style::fontSizeCaption * scale, ColorRole::OnSurfaceVariant, FontWeight::Bold));
+              auto group = ui::row({.align = FlexAlign::Stretch, .wrap = true, .gap = Style::spaceSm * scale, .fillWidth = true});
+              cards = static_cast<Flex*>(body.addChild(std::move(group)));
+            }
+            auto card = galleryCard(
+                galleryEntry, current, !factory.context().profileTransitionBusy, scale,
+                [select = factory.context().selectPreset, pluginId, name = galleryEntry.name] { select(pluginId, name); }
+            );
+            if (card->inputArea()) card->inputArea()->setTabFocusKey("style-gallery-" + pluginId + "-" + galleryEntry.name);
+            cards->addChild(std::move(card));
+          }
+        } else if (!gallery.error.empty()) {
+          body.addChild(makeLabel(
+              i18n::tr("settings.plugins.style-gallery.unavailable"), Style::fontSizeCaption * scale,
+              ColorRole::OnSurfaceVariant
+          ));
+        }
+        rendered = true;
+        continue;
+      }
       if (spec.control == WidgetControlKind::StringList) {
         factory.makeListBlock(body, entry, ListSetting{.items = valueAsStringList(value)});
       } else if (spec.control == WidgetControlKind::StringMap) {
@@ -670,11 +1100,12 @@ namespace settings {
       }
       rendered = true;
     }
-    if (!rendered) {
+    if (!rendered && factory.context().searchQuery.empty()) {
       body.addChild(makeLabel(
           i18n::tr("settings.plugins.settings.empty"), Style::fontSizeCaption * scale, ColorRole::OnSurfaceVariant
       ));
     }
+    return rendered;
   }
 
   void addSettingsPlugins(Flex& content, SettingsPluginsContext ctx) {

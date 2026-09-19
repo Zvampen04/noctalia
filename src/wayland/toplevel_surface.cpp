@@ -93,6 +93,10 @@ bool ToplevelSurface::initialize(wl_output* output, ToplevelSurfaceConfig config
 
 void ToplevelSurface::setClosedCallback(std::function<void()> callback) { m_closedCallback = std::move(callback); }
 
+void ToplevelSurface::setCloseRequestedCallback(std::function<bool()> callback) {
+  m_closeRequestedCallback = std::move(callback);
+}
+
 void ToplevelSurface::setMinSize(std::uint32_t minWidth, std::uint32_t minHeight) {
   if (m_toplevel != nullptr) {
     xdg_toplevel_set_min_size(m_toplevel, static_cast<std::int32_t>(minWidth), static_cast<std::int32_t>(minHeight));
@@ -138,6 +142,8 @@ void ToplevelSurface::handleToplevelConfigure(
 
 void ToplevelSurface::handleToplevelClose(void* data, xdg_toplevel* /*toplevel*/) {
   auto* self = static_cast<ToplevelSurface*>(data);
+  const auto requestClose = self->m_closeRequestedCallback;
+  if (requestClose && requestClose()) return;
   self->setRunning(false);
   if (self->m_closedCallback) {
     self->m_closedCallback();

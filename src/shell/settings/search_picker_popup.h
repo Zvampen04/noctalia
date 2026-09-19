@@ -27,6 +27,7 @@ namespace settings {
     std::string placeholder;
     std::string emptyText;
     float scale = 1.0F;
+    bool fontFamilies = false;
   };
 
   class SearchPickerPopup final : public DialogPopupHost {
@@ -43,6 +44,7 @@ namespace settings {
 
     void open(SearchPickerPopupRequest request);
     void close();
+    void refreshFontFamilies();
 
     [[nodiscard]] bool isOpen() const noexcept;
     [[nodiscard]] bool onPointerEvent(const PointerEvent& event);
@@ -63,6 +65,7 @@ namespace settings {
     std::shared_ptr<void> m_aliveGuard = std::make_shared<int>(0);
 
     float m_scale = 1.0F;
+    bool m_fontFamilies = false;
     std::string m_title;
     std::vector<SearchPickerOption> m_options;
     std::string m_selectedValue;

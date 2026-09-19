@@ -3,6 +3,7 @@
 #include "i18n/i18n.h"
 #include "render/core/renderer.h"
 #include "shell/settings/settings_registry.h"
+#include "shell/settings/settings_content_plugins.h"
 #include "ui/builders.h"
 #include "ui/controls/roving_list_nav.h"
 #include "ui/palette.h"
@@ -20,7 +21,6 @@
 namespace settings {
   namespace {
 
-    constexpr float kSidebarWidth = 200.0F;
     constexpr float kSidebarPadding = 6.0F;
     constexpr float kSidebarGap = 2.0F;
     constexpr float kPrimaryNavGlyphSize = 18.0F;
@@ -165,11 +165,11 @@ namespace settings {
         .scrollbarVisible = true,
         .viewportPaddingH = 0.0F,
         .viewportPaddingV = 0.0F,
-        .fill = ctx.config.shell.settingsWindowTranslucent ? clearColorSpec() : colorSpecFromRole(ColorRole::Surface),
+        .fill = ctx.config.shell.settingsWindowTranslucent ? clearColorSpec() : ctx.config.shell.settingsBackground,
         .radius = Style::scaledRadiusXl(scale),
-        .minWidth = kSidebarWidth * scale,
+        .minWidth = Style::settingsSidebarWidth * scale,
         .fillHeight = true,
-        .width = kSidebarWidth * scale,
+        .width = Style::settingsSidebarWidth * scale,
         .height = 0.0F,
         .configure = [](ScrollView& scrollView) { scrollView.clearBorder(); },
     });
@@ -186,7 +186,10 @@ namespace settings {
     sidebarNav->setPadding(kSidebarPadding * scale);
     RovingListNavHost* nav = sidebarNav.get();
 
+    const auto presetSections = presetNativeSections(cfg);
+    const auto addNativeSections = [&](bool managed) {
     for (const auto& section : ctx.sections) {
+      if (std::ranges::contains(presetSections, std::string(settingsSectionId(section))) != managed) continue;
       const std::string sectionId(settingsSectionId(section));
       const bool selected = showActiveTab && sectionId == *selectedSection;
       const auto onClick = [selectedSection, scroll, sectionId, searchActive, clearTransientState, clearSearchQuery,
@@ -207,6 +210,23 @@ namespace settings {
           onClick
       );
     }
+    };
+    const auto addPluginSections = [&](bool managed) {
+    for (const auto& tab : pluginSettingsTabs(cfg)) {
+      if (!tab.nativeSection.empty() || tab.presetManaged != managed) continue;
+      const auto onClick = [selectedSection, scroll, id = tab.id, clearTransientState, clearSearchQuery, requestRebuild]() {
+        if (*selectedSection != id) scroll->offset = 0.0F;
+        *selectedSection = id;
+        clearSearchQuery();
+        clearTransientState();
+        requestRebuild();
+      };
+      addNavButton(*nav, makePrimaryNavButton(tab.glyph, tab.label, scale,
+        showActiveTab && tab.id == *selectedSection, onClick), onClick);
+    }
+    };
+    addNativeSections(true);
+    addPluginSections(true);
 
     for (const auto& barName : ctx.availableBars) {
       const bool barSelected =
@@ -463,6 +483,12 @@ namespace settings {
     auto* sidebar = sidebarScroll->content();
     sidebar->setDirection(FlexDirection::Vertical);
     sidebar->setAlign(FlexAlign::Stretch);
+    if (!presetSections.empty()) {
+      nav->addChild(ui::label({.text = "Not included in presets", .fontSize = Style::fontSizeCaption * scale}));
+    }
+    addNativeSections(false);
+    addPluginSections(false);
+
     sidebar->addChild(std::move(sidebarNav));
 
     if (ctx.outNav != nullptr) {

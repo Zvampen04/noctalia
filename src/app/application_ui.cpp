@@ -137,6 +137,10 @@ void Application::initUiRenderSurfacesAndSettings() {
       m_wayland, &m_configService, &m_renderContext, &m_dependencyService, m_upowerService.get(), &m_idleManager,
       &m_compositorPlatform, m_accountsService.get()
   );
+  m_renderContext.backend().setCustomEffectStatusChanged([this](std::string_view) {
+    DeferredCall::callLater([this]() { m_settingsWindow.onExternalOptionsChanged(); });
+  });
+  m_customEffectStatusCallbackInstalled = true;
   m_settingsWindow.setPluginManager(&m_pluginManager);
   m_settingsWindow.setIpcService(&m_ipcService);
   m_settingsWindow.setAsyncTextureCache(&m_asyncTextureCache);
@@ -433,6 +437,8 @@ void Application::initInputDispatch() {
     }
     if (m_settingsWindow.onPointerEvent(event))
       return;
+    if (m_transientActivityPopup.onPointerEvent(event))
+      return;
     if (m_bar.onPointerEvent(event))
       return;
     if (m_dock.onPointerEvent(event))
@@ -716,6 +722,10 @@ void Application::initPanelManagerAndPanels() {
 
 void Application::initNotificationAndOsd() {
   m_notificationToast.initialize(m_wayland, &m_configService, &m_notificationManager, &m_renderContext, &m_httpClient);
+  m_notificationToast.setActivityService(&m_transientActivity);
+  m_notificationToast.setOpenHistoryCallback([this]() {
+    m_panelManager.openPanel("control-center", PanelOpenRequest{.context = "notifications"});
+  });
   m_configService.addReloadCallback([this]() { m_notificationToast.onConfigReload(); });
   auto applyNotificationFilterConfig = [this]() {
     m_notificationManager.setFilters(m_configService.config().notification.filters);
@@ -737,6 +747,22 @@ void Application::initNotificationAndOsd() {
 
   TooltipManager::instance().initialize(m_wayland, &m_configService, &m_renderContext);
   m_osdOverlay.initialize(m_wayland, &m_configService, &m_renderContext);
+  m_osdOverlay.setActivityService(&m_transientActivity);
+  m_osdOverlay.setOpenContextCallback([this](std::string context) {
+    m_panelManager.openPanel("control-center", PanelOpenRequest{.context = context});
+  });
+  m_transientActivity.setFallback([this](const TransientActivityViewModel& activity) {
+    if (activity.kind == TransientActivityKind::Notification) {
+      m_notificationToast.showActivityFallback(activity);
+    } else {
+      m_osdOverlay.showActivityFallback(activity);
+    }
+  });
+  m_configService.addReloadCallback([this]() {
+    DeferredCall::callLater([this]() {
+      m_transientActivity.reloadConfig(m_configService.config().osd.activity);
+    });
+  }, "transient-activity");
   m_windowSwitcher.initialize(
       m_wayland, &m_renderContext, m_compositorPlatform, &m_configService, &m_asyncTextureCache
   );
@@ -802,11 +828,13 @@ void Application::initNotificationAndOsd() {
       "idle"
   );
   m_audioOsd.bindOverlay(m_osdOverlay);
+  m_audioOsd.bindService(m_pipewireService.get());
   m_audioOsd.setSoundPlayer(m_soundPlayer.get());
   if (m_pipewireService != nullptr) {
     m_audioOsd.primeFromService(*m_pipewireService);
   }
   m_brightnessOsd.bindOverlay(m_osdOverlay);
+  m_brightnessOsd.bindService(m_brightnessService.get());
   if (m_brightnessService != nullptr) {
     m_brightnessOsd.primeFromService(*m_brightnessService);
   }
@@ -863,6 +891,34 @@ void Application::initBarDockAndLayout() {
       .fileWatcher = &m_fileWatcher,
       .screenshots = &m_screenshotService,
       .scriptApi = &m_scriptApi,
+  });
+  m_transientActivityPopup.initialize(m_wayland, m_renderContext, m_bar);
+  m_transientActivityPopup.setUnavailableCallback([this]() {
+    m_transientActivity.refreshPresentation();
+  });
+  m_transientActivity.setPresenter({
+      .canPresent = [this](const TransientActivityRoute& route) {
+        return route.presentation == TransientActivityPresentation::Attached
+            ? m_transientActivityPopup.canPresent(route) : m_bar.canPresentTransientActivity(route);
+      },
+      .present = [this](const TransientActivityViewModel& activity, const TransientActivityRoute& route) {
+        auto presented = activity;
+        presented.hoverChanged = [this, serial = activity.serial, producer = activity.hoverChanged](bool hovered) {
+          m_transientActivity.setHovered(serial, hovered);
+          if (producer) producer(hovered);
+        };
+        return route.presentation == TransientActivityPresentation::Attached
+            ? m_transientActivityPopup.present(presented, route)
+            : m_bar.presentTransientActivity(presented, route);
+      },
+      .withdraw = [this](std::uint64_t serial) {
+        m_bar.withdrawTransientActivity(serial);
+        m_transientActivityPopup.withdraw(serial);
+      },
+      .withdrawNow = [this](std::uint64_t serial) {
+        m_bar.withdrawTransientActivityImmediately(serial);
+        m_transientActivityPopup.withdrawImmediately(serial);
+      },
   });
   m_idleInhibitor.setAnchorSurfacesProvider([this]() { return m_bar.caffeineAnchorSurfaces(); });
   m_panelManager.setOpenWidgetSettingsCallback([this](std::string barName, std::string widgetName) {

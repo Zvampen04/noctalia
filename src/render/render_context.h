@@ -7,8 +7,10 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <span>
 #include <string>
 #include <utility>
+#include <vector>
 
 class GlSharedContext;
 class Node;
@@ -32,7 +34,9 @@ public:
   void restoreAfterGraphicsReset(GlSharedContext& shared);
   void finishGraphicsResetRecovery() noexcept { m_graphicsResetPending = false; }
 
-  void renderScene(RenderTarget& target, Node* sceneRoot, const WallpaperMaskDrawParams* wallpaperMask = nullptr);
+  void renderScene(RenderTarget& target, Node* sceneRoot, const WallpaperMaskDrawParams* wallpaperMask = nullptr,
+                   const std::function<void()>& beforePresent = {});
+  void removeCustomEffectConsumerSurface(const RenderTarget& target);
   void setGraphicsResetCallback(std::function<void(RenderGraphicsResetStatus)> callback) {
     m_graphicsResetCallback = std::move(callback);
   }
@@ -42,6 +46,9 @@ public:
   void setTextFontFamily(std::string family);
   void setTextBaseDirection(bool rtl);
   void notifyFontConfigChanged();
+  void setExternallyRenderedCustomEffectGroups(std::span<const std::uint32_t> groups) {
+    m_externalCustomEffectGroups.assign(groups.begin(), groups.end());
+  }
 
   // Request that uploaded text- and icon-glyph textures be dropped and
   // re-rasterized. The drop is deferred to the next renderScene so it runs with
@@ -95,4 +102,5 @@ private:
   bool m_glyphTexturesDirty = false;
   bool m_graphicsResetPending = false;
   std::function<void(RenderGraphicsResetStatus)> m_graphicsResetCallback;
+  std::vector<std::uint32_t> m_externalCustomEffectGroups;
 };

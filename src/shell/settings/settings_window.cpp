@@ -54,7 +54,7 @@ namespace {
   constexpr float kGoldenRatio = std::numbers::phi_v<float>;
   constexpr float kWindowWidth = 1280.0F;
   constexpr float kWindowHeight = 600.0F;
-  constexpr float kWindowMinWidth = 1020.0F;
+  constexpr float kWindowMinWidth = 760.0F;
   constexpr float kWindowMinHeight = 500.0F;
 
   // min_size hints are orientation-aware: portrait outputs constrain width, so the hint
@@ -166,7 +166,10 @@ namespace {
 
 SettingsWindow::SettingsWindow() = default;
 
-SettingsWindow::~SettingsWindow() { destroyWindow(); }
+SettingsWindow::~SettingsWindow() {
+  m_profileAlive.reset();
+  destroyWindow();
+}
 
 void SettingsWindow::initialize(
     WaylandConnection& wayland, ConfigService* config, RenderContext* renderContext, DependencyService* dependencies,
@@ -295,6 +298,7 @@ std::optional<LayerPopupParentContext> SettingsWindow::topmostPopupParentContext
         .output = output,
         .width = width,
         .height = height,
+        .materialSurface = "settings",
     };
   };
 
@@ -356,6 +360,7 @@ std::optional<LayerPopupParentContext> SettingsWindow::popupParentContextForSurf
         .output = output,
         .width = width,
         .height = height,
+        .materialSurface = "settings",
     };
   };
 
@@ -424,7 +429,10 @@ void SettingsWindow::open(std::string context) {
   m_surface->setRenderContext(m_renderContext);
   m_surface->setAnimationManager(&m_animations);
 
-  m_surface->setClosedCallback([this]() { destroyWindow(); });
+  m_surface->setCloseRequestedCallback([this]() {
+    close();
+    return true;
+  });
 
   m_surface->setOutputChangedCallback([this](wl_output* currentOutput) {
     m_output = currentOutput;
@@ -461,6 +469,14 @@ void SettingsWindow::open(std::string context) {
       desiredWidth = util::clampOrdered(outputW * kWindowOutputFraction, std::min(minWidthF, outputW), outputW);
       desiredHeight = util::clampOrdered(desiredWidth * kGoldenRatio, std::min(minHeightF, outputH), outputH);
     }
+  }
+  if (m_config != nullptr) {
+    const auto& shell = m_config->config().shell;
+    const auto* info = m_wayland->findOutputByWl(output);
+    const float maximumW = info && info->hasUsableGeometry() ? static_cast<float>(info->effectiveLogicalWidth()) : 3840.F;
+    const float maximumH = info && info->hasUsableGeometry() ? static_cast<float>(info->effectiveLogicalHeight()) : 2160.F;
+    if (shell.settingsWindowWidth > 0) desiredWidth = std::clamp(shell.settingsWindowWidth * scale, std::min(minWidthF, maximumW), maximumW);
+    if (shell.settingsWindowHeight > 0) desiredHeight = std::clamp(shell.settingsWindowHeight * scale, std::min(minHeightF, maximumH), maximumH);
   }
   const auto width = static_cast<std::uint32_t>(std::round(desiredWidth));
   const auto height = static_cast<std::uint32_t>(std::round(desiredHeight));
@@ -516,7 +532,11 @@ bool SettingsWindow::openToPlugin(std::string pluginId) {
   clearStatusMessage();
   m_searchQuery.clear();
   m_selectedSection = "plugins";
-  m_pendingOpenPluginSettingsId = std::move(pluginId);
+  m_pendingOpenPluginSettingsId.clear();
+  const auto tabs = settings::pluginSettingsTabs(m_config->config());
+  const auto tab = std::ranges::find(tabs, pluginId, &settings::PluginSettingsTab::pluginId);
+  if (tab != tabs.end()) m_selectedSection = tab->nativeSection.empty() ? tab->id : tab->nativeSection;
+  else m_pendingOpenPluginSettingsId = std::move(pluginId);
   m_contentScrollState.offset = 0.0F;
   m_sidebarScrollState.offset = 0.0F;
 
@@ -532,15 +552,23 @@ void SettingsWindow::close() {
   if (!isOpen()) {
     return;
   }
+  if (m_profileTransitionBusy) return;
+  if (m_config && m_config->profilePreviewDirty()) {
+    showProfilePrompt({}, true);
+    return;
+  }
   destroyWindow();
 }
 
 void SettingsWindow::closeForWidgetEditor() {
-  if (!isOpen()) {
+  if (!isOpen() || m_profileTransitionBusy) {
     return;
   }
   m_reopenAfterWidgetEditorSection = m_selectedSection;
-  DeferredCall::callLater([this]() { close(); });
+  const std::weak_ptr<void> alive = m_profileAlive;
+  DeferredCall::callLater([this, alive]() {
+    if (!alive.expired() && !m_profileTransitionBusy) destroyWindow(); // Internal navigation retains the live draft.
+  });
 }
 
 void SettingsWindow::reopenAfterWidgetEditor() {
@@ -557,9 +585,12 @@ void SettingsWindow::dismissOpenSelectDropdown() {
 }
 
 void SettingsWindow::destroyWindow() {
+  m_nativeProfileSavePending.reset();
+  m_profileTransitionBusy = false;
   m_modalHost.closeAll();
   m_configExportDialogModal.reset();
   m_editorSheetModal.reset();
+  m_profileSheetModal.reset();
   m_modalHost.detach();
   if (m_surface != nullptr) {
     // Drop stale pointer coords before tearing down the scene. Otherwise the next open
@@ -603,6 +634,13 @@ void SettingsWindow::destroyWindow() {
   m_lastSceneWidth = 0;
   m_lastSceneHeight = 0;
   m_settingsRegistry.clear();
+  ++m_settingsWindowGeneration;
+  m_deferredSceneRebuild = false;
+  m_deferredRefreshRegistry = false;
+  m_deferredRefreshFilterRow = false;
+  m_deferredRebuildEditorSheet = false;
+  m_interactiveSettingEdit = false;
+  m_deferredRebuildQueued = false;
   m_rebuildRequested = false;
   m_contentRebuildRequested = false;
   m_settingsRegistryRefreshRequested = false;
@@ -639,6 +677,7 @@ void SettingsWindow::destroyWindow() {
   m_sidebarScrollState = {};
   m_contentScrollState = {};
   m_expandedSettingGroups.clear();
+  m_selectedSettingGroups.clear();
 
   // Plugin-store thumbnails are the only async textures this window holds; drop the
   // zero-ref residents once the scene (and with it every Image) is gone.
@@ -677,6 +716,16 @@ void SettingsWindow::prepareFrame(bool needsUpdate, bool needsLayout) {
   const bool firstBuild = m_sceneRoot == nullptr;
   const bool sizeChanged = !firstBuild && (m_lastSceneWidth != width || m_lastSceneHeight != height);
   const bool needRebuild = firstBuild || m_rebuildRequested;
+
+  if (needRebuild || sizeChanged) {
+    // Toplevels need the same explicit backdrop region as shell panels.
+    // Refresh it on resize and material changes without recreating the window.
+    if (m_config != nullptr && m_config->config().shell.settingsWindowTranslucent) {
+      m_surface->setBlurRegion({{0, 0, static_cast<int>(width), static_cast<int>(height)}});
+    } else {
+      m_surface->clearBlurRegion();
+    }
+  }
 
   const float scale = uiScale();
   float minWidthF = kWindowMinWidth * scale;
@@ -806,7 +855,13 @@ void SettingsWindow::scheduleDeferredRebuild() {
     return;
   }
   m_deferredRebuildQueued = true;
-  DeferredCall::callLater([this]() {
+  const std::weak_ptr<void> alive = m_profileAlive;
+  const auto generation = m_settingsWindowGeneration;
+  DeferredCall::callLater([this, alive, generation]() {
+    if (alive.expired() || generation != m_settingsWindowGeneration) return;
+    // Live previews update other surfaces during a drag; retain the captured
+    // control until release, then perform the coalesced settings rebuild.
+    if (m_inputDispatcher.pointerCaptured() || m_interactiveSettingEdit) return;
     m_deferredRebuildQueued = false;
     const bool sceneRebuild = m_deferredSceneRebuild;
     const bool refreshRegistry = m_deferredRefreshRegistry;
@@ -1011,6 +1066,10 @@ bool SettingsWindow::onPointerEvent(const PointerEvent& event) {
           static_cast<float>(event.sx), static_cast<float>(event.sy), event.button, pressed, event.serial, event.time,
           event.touch
       );
+      if (!m_inputDispatcher.pointerCaptured() && m_deferredRebuildQueued) {
+        m_deferredRebuildQueued = false;
+        scheduleDeferredRebuild();
+      }
       consumed = m_pointerInside;
     }
     break;
@@ -1026,6 +1085,10 @@ bool SettingsWindow::onPointerEvent(const PointerEvent& event) {
     break;
   }
 
+  if (!m_inputDispatcher.pointerCaptured() && !m_interactiveSettingEdit && m_deferredRebuildQueued) {
+    m_deferredRebuildQueued = false;
+    scheduleDeferredRebuild();
+  }
   if (m_sceneRoot != nullptr && (m_sceneRoot->paintDirty() || m_sceneRoot->layoutDirty())) {
     if (m_sceneRoot->layoutDirty()) {
       m_surface->requestLayout();
@@ -1192,6 +1255,7 @@ void SettingsWindow::requestRedraw() {
 void SettingsWindow::onFontChanged() {
   text::invalidateFontWeightCatalogCache();
   if (isOpen()) {
+    if (m_searchPickerPopup) m_searchPickerPopup->refreshFontFamilies();
     if (m_widgetAddPopup != nullptr && m_widgetAddPopup->isOpen()) {
       m_widgetAddPopup->requestLayout();
     }
@@ -1209,6 +1273,18 @@ void SettingsWindow::onExternalOptionsChanged() { requestSceneRebuild(); }
 
 void SettingsWindow::onPluginsChanged() {
   markPluginListDirty();
+  if (isOpen() && m_config != nullptr) {
+    const auto tabs = settings::pluginSettingsTabs(m_config->config());
+    if (std::ranges::any_of(tabs, [this](const auto& tab) {
+          return tab.id == m_selectedSection || tab.nativeSection == m_selectedSection;
+        })) {
+      // Async backend acknowledgements change options, status and effective
+      // control values. Refresh native/embedded tabs just like the plugin store.
+      requestContentRebuild(/*refreshRegistry=*/true, /*refreshFilterRow=*/false,
+                            /*rebuildEditorSheet=*/false);
+    }
+  }
+
   if (isOpen() && m_selectedSection == "plugins") {
     // The plugin store's body shows install progress, so it needs the rebuild; any other
     // editor sheet would just lose its focus for an unrelated plugin event.

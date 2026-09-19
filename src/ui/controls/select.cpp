@@ -15,6 +15,7 @@
 #include "ui/controls/select_popup_context.h"
 #include "ui/palette.h"
 #include "ui/style.h"
+#include "ui/surface_material.h"
 
 #include <algorithm>
 #include <cmath>
@@ -91,6 +92,7 @@ Select::Select() {
   m_triggerArea = static_cast<InputArea*>(addChild(std::move(triggerArea)));
 
   applyVisualState();
+  m_materialConn = Style::surfaceMaterialChanged().connect([this] { applyVisualState(); });
   m_paletteConn = paletteChanged().connect([this] { applyVisualState(); });
   m_inputBordersConn = Style::inputBordersChanged().connect([this] { applyVisualState(); });
 }
@@ -284,6 +286,7 @@ void Select::doLayout(Renderer& renderer) {
       m_triggerIndicator->setBorder(colorSpecFromRole(ColorRole::Outline), indicatorBorder);
       m_triggerIndicator->setFrameSize(indicatorSize, indicatorSize);
       m_triggerIndicator->setRadius(indicatorSize * 0.5F);
+      m_triggerIndicator->setCornerPower(2.0F);
       const float indicatorX = Style::rtl() ? dropdownWidth - m_horizontalPadding - indicatorSize : m_horizontalPadding;
       m_triggerIndicator->setPosition(indicatorX, std::round((m_controlHeight - indicatorSize) * 0.5F));
     }
@@ -367,7 +370,7 @@ void Select::applyVisualState() {
     resolvedBorderWidth = Style::borderWidth;
   }
 
-  m_triggerBackground->setStyle(
+  m_triggerBackground->setStyle(SurfaceMaterial::styled(*m_triggerBackground,
       RoundedRectStyle{
           .fill = triggerBg,
           .border = triggerBorder,
@@ -375,7 +378,7 @@ void Select::applyVisualState() {
           .radius = Style::scaledRadiusMd(),
           .softness = 1.0F,
           .borderWidth = resolvedBorderWidth,
-      }
+      }, -0.8F, MaterialBackdrop::Inherited, "select")
   );
 }
 
@@ -464,6 +467,7 @@ void Select::openPopupDropdown() {
       .optionSwatchPreviews = m_optionSwatchPreviews,
       .selectedIndex = m_selectedIndex,
       .maxVisibleOptions = static_cast<std::size_t>(kMaxVisibleOptions),
+      .materialSurface = std::string(materialSurfaceName()),
   };
 
   SelectPopupContext::DropdownCallbacks callbacks{

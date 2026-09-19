@@ -39,7 +39,7 @@ using namespace control_center;
 
 namespace {
 
-  constexpr float kValueLabelWidth = Style::controlHeightLg + Style::spaceLg;
+  const auto kValueLabelWidth = []() -> float { return Style::controlHeightLg + Style::spaceLg; };
   constexpr Logger kLogProgramUi{"audio_tab"};
   constexpr float kVolumeSyncEpsilon = 0.005F; // 0.5%
   constexpr auto kVolumeCommitInterval = std::chrono::milliseconds(16);
@@ -1000,7 +1000,7 @@ namespace {
       constexpr float kCompactSliderControlHeight = 20.0F;
       m_iconSize = kIconSizeSm * scale;
       m_iconContentGap = Style::spaceSm * scale;
-      m_valueLabelMinWidth = kValueLabelWidth * scale;
+      m_valueLabelMinWidth = kValueLabelWidth() * scale;
 
       addChild(
           ui::row(
@@ -1782,7 +1782,7 @@ std::unique_ptr<Flex> AudioTab::createDeviceVolumeCard(DeviceVolumeCardSpec card
                   .text = "0%",
                   .fontSize = Style::fontSizeBody * scale,
                   .fontWeight = FontWeight::Bold,
-                  .minWidth = kValueLabelWidth * scale,
+                  .minWidth = kValueLabelWidth() * scale,
                   .textAlign = TextAlign::End,
               }),
               ui::button({

@@ -3,6 +3,7 @@
 #include "compositors/compositor_detect.h"
 #include "config/atomic_file.h"
 #include "config/config_export.h"
+#include "config/profile_scope.h"
 #include "config/config_merge.h"
 #include "config/config_migrations.h"
 #include "config/config_validate.h"
@@ -45,6 +46,7 @@
 #include <tuple>
 #include <unistd.h>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace schema = noctalia::config::schema;
@@ -562,6 +564,7 @@ ConfigService::ConfigService() {
   loadOverridesFromFile();
   m_stateStore.load();
   loadAll();
+  m_profileTransactionsReady = true;
   setupWatch();
 }
 
@@ -886,10 +889,13 @@ void ConfigService::checkReload() {
     }
   });
 
-  // Skip the echo of our own write.
+  // An external write can arrive in the same batch as our echo. Compare
+  // contents before skipping it; a pending flag alone loses that edit.
   if (overridesChanged && m_ownOverridesWritePending) {
     m_ownOverridesWritePending = false;
-    overridesChanged = false;
+    try {
+      if (toml::parse_file(m_overridesPath) == m_persistedOverridesTable) overridesChanged = false;
+    } catch (const toml::parse_error&) { /* Normal reload reports the error. */ }
   }
 
   const auto oldDefault = m_defaultWallpaperPath;
@@ -966,6 +972,20 @@ BarConfig ConfigService::resolveForOutput(const BarConfig& base, const WaylandOu
       resolved.radiusBottomLeft = *ovr.radiusBottomLeft;
     if (ovr.radiusBottomRight)
       resolved.radiusBottomRight = *ovr.radiusBottomRight;
+    if (ovr.background) resolved.background = *ovr.background;
+    if (ovr.islandOutward) resolved.islandOutward = *ovr.islandOutward;
+    if (ovr.islandPanelOffset) resolved.islandPanelOffset = *ovr.islandPanelOffset;
+    if (ovr.centeredSections) resolved.centeredSections = *ovr.centeredSections;
+    if (ovr.centerAlignment) resolved.centerAlignment = *ovr.centerAlignment;
+    if (ovr.edgeClusterPolicy) resolved.edgeClusterPolicy = *ovr.edgeClusterPolicy;
+    if (ovr.materialMode) resolved.materialMode = *ovr.materialMode;
+    if (ovr.islandHoverGrow) resolved.islandHoverGrow = *ovr.islandHoverGrow;
+    if (ovr.islandHoverOffset) resolved.islandHoverOffset = *ovr.islandHoverOffset;
+    if (ovr.islandMorph) resolved.islandMorph = *ovr.islandMorph;
+    if (ovr.islandMorphGap) resolved.islandMorphGap = *ovr.islandMorphGap;
+    if (ovr.maxLength) resolved.maxLength = *ovr.maxLength;
+    if (ovr.sectionBackgrounds)
+      resolved.sectionBackgrounds = *ovr.sectionBackgrounds;
     if (ovr.concaveEdgeCorners)
       resolved.concaveEdgeCorners = *ovr.concaveEdgeCorners;
     if (ovr.marginEnds)
@@ -1024,6 +1044,10 @@ BarConfig ConfigService::resolveForOutput(const BarConfig& base, const WaylandOu
     if (ovr.widgetCapsuleRadius.has_value()) {
       resolved.widgetCapsuleRadius = std::clamp(*ovr.widgetCapsuleRadius, 0.0, 80.0);
     }
+    if (ovr.widgetCapsuleContour) resolved.widgetCapsuleContour = *ovr.widgetCapsuleContour;
+    if (ovr.widgetCapsuleContourDepth) {
+      resolved.widgetCapsuleContourDepth = std::clamp(static_cast<float>(*ovr.widgetCapsuleContourDepth), 0.0F, 32.0F);
+    }
     if (ovr.widgetCapsuleOpacity) {
       resolved.widgetCapsuleOpacity = std::clamp(static_cast<float>(*ovr.widgetCapsuleOpacity), 0.0F, 1.0F);
     }
@@ -1036,6 +1060,11 @@ BarConfig ConfigService::resolveForOutput(const BarConfig& base, const WaylandOu
     break; // first match wins
   }
 
+  if (resolved.maxLength > 0 && output.hasUsableGeometry()) {
+    const bool vertical = resolved.position == "left" || resolved.position == "right";
+    const int extent = vertical ? output.effectiveLogicalHeight() : output.effectiveLogicalWidth();
+    resolved.marginEnds = std::max(resolved.marginEnds, std::max(0, (extent - resolved.maxLength) / 2));
+  }
   return resolved;
 }
 
@@ -1180,28 +1209,31 @@ void ConfigService::refreshIncludeWatches() {
 }
 
 void ConfigService::loadOverridesFromFile() {
-  m_overridesTable = toml::table{};
+  m_overridesParseError = {};
+  toml::table incoming;
+  if (!m_overridesPath.empty() && std::filesystem::exists(m_overridesPath)) {
+    try {
+      incoming = toml::parse_file(m_overridesPath);
+    } catch (const toml::parse_error& e) {
+      auto origin = noctalia::config::parseErrorOrigin(e, std::filesystem::path(m_overridesPath));
+      kLog.warn("{}", origin.prefixed(e.description()));
+      m_overridesParseError = ConfigProblem{std::move(origin), std::string(e.description())};
+      return; // Retain the last good committed settings and any live preview.
+    }
+  }
+  auto live = incoming;
+  if (m_profilePreview) {
+    if (noctalia::profile::subset(incoming) != noctalia::profile::subset(m_persistedOverridesTable))
+      m_profileConflict = true;
+    noctalia::profile::replace(live, m_overridesTable);
+    // Unrelated disk edits become part of the current baseline immediately.
+    m_profileBaseline = incoming;
+  }
+  m_persistedOverridesTable = std::move(incoming);
+  m_overridesTable = std::move(live);
   m_defaultWallpaperPath.clear();
   m_lastWallpaperPath.clear();
   m_monitorWallpaperPaths.clear();
-  m_overridesParseError = {};
-
-  if (m_overridesPath.empty() || !std::filesystem::exists(m_overridesPath)) {
-    m_persistedOverridesTable = toml::table{};
-    return;
-  }
-
-  kLog.info("loading {}", m_overridesPath);
-  try {
-    m_overridesTable = toml::parse_file(m_overridesPath);
-    m_persistedOverridesTable = m_overridesTable;
-  } catch (const toml::parse_error& e) {
-    auto origin = noctalia::config::parseErrorOrigin(e, std::filesystem::path(m_overridesPath));
-    kLog.warn("{}", origin.prefixed(e.description()));
-    m_overridesParseError = ConfigProblem{std::move(origin), std::string(e.description())};
-    m_overridesTable = toml::table{};
-    return;
-  }
   extractWallpaperFromOverrides();
 }
 
@@ -1537,9 +1569,7 @@ void ConfigService::loadAll() {
     if (sidecarNeedsPersist) {
       toml::table previousOverrides = m_overridesTable;
       m_overridesTable = std::move(effectiveOverrides);
-      if (writeOverridesToFile()) {
-        m_ownOverridesWritePending = m_inotify.fd() >= 0 && m_overridesWatchWd >= 0;
-      } else {
+      if (!writeOverridesToFile()) {
         kLog.warn("failed to persist migrated config overrides to {}", m_overridesPath);
         m_overridesTable = std::move(previousOverrides);
       }
@@ -1590,6 +1620,19 @@ void ConfigService::parseConfigTable(
         bar.position = *v;
       }
       readConfigSection(*barTbl, bar, schema::barFieldsSchema(), "bar." + bar.name, schemaDiag);
+      {
+        std::unordered_set<std::string> sectionIds;
+        for (const auto& section : bar.sections) {
+          if (section.id.empty()) {
+            schemaDiag.error("bar." + bar.name + ".section", "section id must not be empty");
+            continue;
+          }
+          if (!sectionIds.insert(section.id).second) {
+            schemaDiag.error(
+                "bar." + bar.name + ".section", "duplicate section id \"" + section.id + "\"");
+          }
+        }
+      }
 
       // Parse [bar.<name>.monitor.*] overrides — insertion order preserved by toml++.
       if (auto* monTblMap = (*barTbl)["monitor"].as_table()) {
@@ -1604,6 +1647,22 @@ void ConfigService::parseConfigTable(
               *monTbl, ovr, schema::barMonitorOverrideSchema(),
               "bar." + bar.name + ".monitor." + std::string(monName.str()), schemaDiag
           );
+          {
+            std::unordered_set<std::string> sectionIds;
+            for (const auto& section : ovr.sections) {
+              if (section.id.empty()) {
+                schemaDiag.error(
+                    "bar." + bar.name + ".monitor." + std::string(monName.str()) + ".section",
+                    "section id must not be empty");
+                continue;
+              }
+              if (!sectionIds.insert(section.id).second) {
+                schemaDiag.error(
+                    "bar." + bar.name + ".monitor." + std::string(monName.str()) + ".section",
+                    "duplicate section id \"" + section.id + "\"");
+              }
+            }
+          }
           bar.monitorOverrides.push_back(std::move(ovr));
         }
       }
@@ -1836,6 +1895,10 @@ bool ConfigService::matchesKeybind(KeybindAction action, std::uint32_t sym, std:
 }
 
 void ConfigService::registerIpc(IpcService& ipc) {
+  ipc.bind(noctalia::cli::msg::profile, [this](const std::string& request) {
+    return profileRequest(request);
+  }, {.actionEditorVisibility = IpcActionEditorVisibility::Hidden});
+
   ipc.bind(noctalia::cli::msg::configReload, [this](const std::string&) -> std::string {
     forceReload();
     return "ok\n";

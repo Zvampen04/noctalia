@@ -48,12 +48,23 @@ namespace settings {
     std::unordered_set<std::string>& expandedGroups;
     Button* pill = nullptr;
     std::function<void(const Node&)> scrollToTop;
+    bool connectedRows = false;
+    // Expands and scrolls to this retained card without rebuilding its controls.
+    std::function<void()>* jumpAction = nullptr;
   };
+
+  struct SettingsGroupJump {
+    std::string key;
+    std::string label;
+    std::function<void()> activate;
+  };
+  [[nodiscard]] std::unique_ptr<Flex> makeSettingsGroupNavigator(
+      std::shared_ptr<std::vector<SettingsGroupJump>> groups, std::string* selectedGroup, float scale);
 
   [[nodiscard]] Flex* addSettingsGroupCard(SettingsGroupCardProps props);
   // Same card as addSettingsGroupCard without the collapsible header, for transient groupings
   // (search results) that must never start hidden and hold no expanded state.
-  [[nodiscard]] Flex* addSettingsCard(Flex& parent, std::string_view title, float scale);
+  [[nodiscard]] Flex* addSettingsCard(Flex& parent, std::string_view title, float scale, bool connectedRows = false);
 
   [[nodiscard]] std::optional<std::size_t>
   optionIndex(const std::vector<SelectOption>& options, std::string_view value);

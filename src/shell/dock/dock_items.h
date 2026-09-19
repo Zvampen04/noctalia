@@ -22,6 +22,17 @@ struct DockConfig;
 
 namespace shell::dock {
 
+  struct DockHoverMotion {
+    float startScale = -1.0F;
+    float targetScale = -1.0F;
+    float startOffset = 0.0F;
+    float targetOffset = 0.0F;
+    float elapsedMs = 0.0F;
+    float lastPresentedScale = -1.0F;
+    float lastPresentedOffset = 0.0F;
+    bool active = false;
+  };
+
   struct DockInstance;
   struct DockSnapshot;
 
@@ -39,6 +50,7 @@ namespace shell::dock {
     bool isDragGhost = false;    // drawn at reduced opacity as the placeholder slot
     float visualScale = -1.0F;
     float visualOpacity = -1.0F;
+    DockHoverMotion hoverMotion;
     AnimationManager::Id scaleAnimId = 0;
     AnimationManager::Id opacityAnimId = 0;
   };

@@ -45,6 +45,8 @@ private:
   ColorSpec m_trackColor = colorSpecFromRole(ColorRole::SurfaceVariant);
   ColorSpec m_fillColor = colorSpecFromRole(ColorRole::Primary);
   float m_progress = 1.0F;
+  std::optional<float> m_unscaledRadius;
   ProgressBarOrientation m_orientation = ProgressBarOrientation::Horizontal;
   Signal<>::ScopedConnection m_paletteConn;
+  Signal<>::ScopedConnection m_materialConn;
 };

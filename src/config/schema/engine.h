@@ -123,7 +123,7 @@ namespace noctalia::config::schema {
   template <typename Parent, typename Elem>
   Field<Parent> arrayOf(
       std::vector<Elem> Parent::* member, std::string_view key, const Schema<Elem>& subSchema,
-      std::function<bool(const Elem&)> keep
+      std::function<bool(const Elem&)> keep, bool writeEmpty = true
   ) {
     return Field<Parent>{
         key,
@@ -146,7 +146,7 @@ namespace noctalia::config::schema {
             }
           }
         },
-        [member, key, &subSchema, keep](toml::table& tbl, const Parent& in) {
+        [member, key, &subSchema, keep, writeEmpty](toml::table& tbl, const Parent& in) {
           toml::array arr;
           for (const auto& elem : in.*member) {
             if (!keep(elem)) {
@@ -154,7 +154,7 @@ namespace noctalia::config::schema {
             }
             arr.push_back(writeTable(elem, subSchema));
           }
-          tbl.insert_or_assign(key, std::move(arr));
+          if (writeEmpty || !arr.empty()) tbl.insert_or_assign(key, std::move(arr));
         },
         [key, &subSchema](const toml::table& tbl, std::string_view parentPath, std::vector<std::string>& unknown) {
           if (auto* arr = tbl[key].as_array()) {
@@ -168,10 +168,53 @@ namespace noctalia::config::schema {
     };
   }
 
+  // Array-of-tables with explicit presence tracking. This lets an override
+  // distinguish inheritance from an intentionally empty replacement array.
+  template <typename Parent, typename Elem>
+  Field<Parent> optionalArrayOf(
+      std::vector<Elem> Parent::* member, bool Parent::* specified, std::string_view key,
+      const Schema<Elem>& subSchema, std::function<bool(const Elem&)> keep
+  ) {
+    return Field<Parent>{
+        key,
+        [member, specified, key, &subSchema,
+         keep](const toml::table& tbl, Parent& out, std::string_view parentPath, Diagnostics& diag) {
+          auto* arr = tbl[key].as_array();
+          if (arr == nullptr) return;
+          out.*specified = true;
+          (out.*member).clear();
+          for (const auto& node : *arr) {
+            const auto* sub = node.as_table();
+            if (sub == nullptr) continue;
+            Elem elem{};
+            readInto(*sub, elem, subSchema, joinPath(parentPath, key), diag);
+            if (keep(elem)) (out.*member).push_back(std::move(elem));
+          }
+        },
+        [member, specified, key, &subSchema, keep](toml::table& tbl, const Parent& in) {
+          if (!(in.*specified)) return;
+          toml::array arr;
+          for (const auto& elem : in.*member) {
+            if (keep(elem)) arr.push_back(writeTable(elem, subSchema));
+          }
+          tbl.insert_or_assign(key, std::move(arr));
+        },
+        [key, &subSchema](const toml::table& tbl, std::string_view parentPath, std::vector<std::string>& unknown) {
+          if (auto* arr = tbl[key].as_array()) {
+            for (const auto& node : *arr) {
+              if (auto* sub = node.as_table())
+                collectUnknownKeys(*sub, subSchema, joinPath(parentPath, key), unknown);
+            }
+          }
+        },
+    };
+  }
+
   // Nested struct under a fixed key (e.g. shell.shadow). Reads/writes via the
   // sub-schema and recurses for unknown-key detection.
   template <typename Struct, typename Sub>
-  Field<Struct> subTable(Sub Struct::* member, std::string_view key, const Schema<Sub>& subSchema) {
+  Field<Struct> subTable(Sub Struct::* member, std::string_view key, const Schema<Sub>& subSchema,
+      bool writeEmpty = true) {
     return Field<Struct>{
         key,
         [member, key, &subSchema](const toml::table& tbl, Struct& out, std::string_view parentPath, Diagnostics& diag) {
@@ -179,8 +222,9 @@ namespace noctalia::config::schema {
             readInto(*sub, out.*member, subSchema, joinPath(parentPath, key), diag);
           }
         },
-        [member, key, &subSchema](toml::table& tbl, const Struct& in) {
-          tbl.insert_or_assign(key, writeTable(in.*member, subSchema));
+        [member, key, &subSchema, writeEmpty](toml::table& tbl, const Struct& in) {
+          auto child = writeTable(in.*member, subSchema);
+          if (writeEmpty || !child.empty()) tbl.insert_or_assign(key, std::move(child));
         },
         [key, &subSchema](const toml::table& tbl, std::string_view parentPath, std::vector<std::string>& unknown) {
           if (auto* sub = tbl[key].as_table()) {

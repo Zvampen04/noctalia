@@ -1,80 +1,70 @@
 #pragma once
+#define NOCTALIA_HAS_SURFACE_MATERIALS 1
 
 #include "ui/signal.h"
+#include "ui/control_settings.h"
+#include "material/material.h"
+#include "ui/material_overrides.h"
+#include "render/custom_effect/custom_effect_types.h"
+
+#include <functional>
+#include <memory>
+#include <optional>
+#include <span>
 
 namespace Style {
 
-  inline constexpr int barThicknessDefault = 34;
+  // Values update with the active profile. Keep consumers live: do not capture
+  // these in namespace-scope constants or static geometry caches.
+#define STYLE_TOKEN(type, member, key, initial, low, high, step, label, group) inline type member = initial;
+#include "ui/style_tokens.def"
+#undef STYLE_TOKEN
 
-  inline constexpr int animFast = 100;
-  inline constexpr int animNormal = 200;
-  inline constexpr int animSlow = 400;
+  struct Metrics {
+#define STYLE_TOKEN(type, member, key, initial, low, high, step, label, group) type member = initial;
+#include "ui/style_tokens.def"
+#undef STYLE_TOKEN
+    bool operator==(const Metrics&) const = default;
+  };
+  [[nodiscard]] const Metrics& metrics() noexcept;
+  void setMetrics(const Metrics& values);
 
-  inline constexpr float radiusSm = 3.0F;
-  inline constexpr float radiusMd = 6.0F;
-  inline constexpr float radiusLg = 9.0F;
-  inline constexpr float radiusXl = 12.0F;
+  [[nodiscard]] const ControlSettings& controls() noexcept;
+  void setControls(const ControlSettings& settings);
 
-  inline constexpr float borderWidth = 1.0F;
-  inline constexpr float emphasizedBorderWidth = 3.0F;
-  inline constexpr float focusRingWidth = 2.0F;
-  inline constexpr float disabledOutlineAlpha = 0.5F;
+  struct MaterialSettings {
+#define MATERIAL_FIELD(member, key, initial, low, high, step, label, group) float key = initial;
+#include "material/fields.def"
+#undef MATERIAL_FIELD
+    [[nodiscard]] noctalia::material::Parameters parameters() const noexcept {
+      noctalia::material::Parameters result;
+#define MATERIAL_FIELD(member, key, initial, low, high, step, label, group) result.member = key;
+#include "material/fields.def"
+#undef MATERIAL_FIELD
+      return noctalia::material::sanitize(result);
+    }
+    bool operator==(const MaterialSettings&) const = default;
+  };
+  [[nodiscard]] const noctalia::material::Parameters& materialParameters() noexcept;
+  void setMaterialSettings(const MaterialSettings& settings);
+  [[nodiscard]] const MaterialOverrides& materialOverrides() noexcept;
+  void setMaterialOverrides(const MaterialOverrides& overrides);
+  [[nodiscard]] noctalia::material::Parameters materialFor(
+      std::string_view role = {}, std::string_view family = {}, std::string_view surface = {}) noexcept;
+  [[nodiscard]] noctalia::material::Parameters materialForPath(
+      std::string_view role, std::string_view family, std::span<const std::string_view> surfaces) noexcept;
+  using CustomEffectResolver = std::function<std::shared_ptr<const CustomEffectAsset>(const ResolvedCustomEffect&)>;
+  void setCustomEffectResolver(CustomEffectResolver resolver);
+  [[nodiscard]] std::optional<CustomEffectBinding> customEffectFor(
+      std::string_view role = {}, std::string_view family = {}, std::string_view surface = {});
+  [[nodiscard]] std::optional<CustomEffectBinding> customEffectForPath(
+      std::string_view role, std::string_view family, std::span<const std::string_view> surfaces);
 
-  inline constexpr float spaceXs = 4.0F;
-  inline constexpr float spaceSm = 8.0F;
-  inline constexpr float spaceMd = 12.0F;
-  inline constexpr float spaceLg = 16.0F;
-
-  inline constexpr float cardPadding = 14.0F;
-  inline constexpr float panelPadding = 14.0F;
-
-  // Default inner inset for bar widget capsules (logical px, before bar content scale).
-  inline constexpr float barCapsulePadding = 6.0F;
-  inline constexpr float baseGlyphSize = 16.0F;
-
-  inline constexpr float fontSizeMini = 11.0F;
-  inline constexpr float fontSizeCaption = 13.0F;
-  inline constexpr float fontSizeBody = 14.0F;
-  inline constexpr float fontSizeTitle = 16.0F;
-  inline constexpr float fontSizeHeader = 20.0F;
-
-  inline constexpr float controlHeightSm = 32.0F;
-  inline constexpr float controlHeight = 38.0F;
-  inline constexpr float controlHeightLg = 44.0F;
-  inline constexpr float scrollWheelStep = 56.0F;
-  // Pointer distance in logical px before an armed drag becomes active.
-  inline constexpr float dragStartThreshold = 6.0F;
-
-  // Base scrollbar thickness at rest, and while the pointer is over it. The bar overlays the
-  // content as it expands, so hovering never reflows the scroll view.
-  inline constexpr float scrollbarWidth = 6.0F;
-  inline constexpr float scrollbarHoverWidth = 12.0F;
-  inline constexpr float scrollbarGap = spaceSm;
-  // Shortest the thumb gets on a long document; it must stay a usable drag target and read as a
-  // bar rather than a lozenge next to the hovered thickness.
-  inline constexpr float scrollbarMinThumbHeight = 32.0F;
-  // Pointer margin on the content side of the bar, so a thin bar stays an easy grab target.
-  inline constexpr float scrollbarHitSlop = 6.0F;
-
-  // Growth cap (logical px, before content scale) for menus/dropdowns that size to their content.
-  inline constexpr float menuAutoMaxWidth = 420.0F;
-
-  // Toggle preset geometry. Track height = thumb + 2 * inset; track width = thumb + 2 * inset + travel.
-  inline constexpr float toggleThumbSizeSm = 14.0F;
-  inline constexpr float toggleInsetSm = 2.0F;
-  inline constexpr float toggleTravelSm = 12.0F;
-  inline constexpr float toggleThumbSizeMd = 18.0F;
-  inline constexpr float toggleInsetMd = 3.0F;
-  inline constexpr float toggleTravelMd = 16.0F;
-  inline constexpr float toggleThumbSizeLg = 22.0F;
-  inline constexpr float toggleInsetLg = 4.0F;
-  inline constexpr float toggleTravelLg = 20.0F;
-
-  // Slider geometry.
-  inline constexpr float sliderDefaultWidth = 180.0F;
-  inline constexpr float sliderTrackHeight = 8.0F;
-  inline constexpr float sliderThumbSize = 18.0F;
-  inline constexpr float sliderHorizontalPadding = 2.0F;
+  enum class SurfaceMaterialMode { Flat, Neumorphic, LiquidGlass, Illustrated };
+  [[nodiscard]] SurfaceMaterialMode surfaceMaterial() noexcept;
+  [[nodiscard]] bool neumorphicSurfaces() noexcept;
+  void setSurfaceMaterial(SurfaceMaterialMode material);
+  Signal<>& surfaceMaterialChanged();
 
   [[nodiscard]] float cornerRadiusScale() noexcept;
   void setCornerRadiusScale(float scale) noexcept;

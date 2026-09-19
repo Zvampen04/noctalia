@@ -34,6 +34,9 @@ namespace settings {
     [[nodiscard]] std::unique_ptr<Button>
     makeResetButton(const std::vector<std::string>& path, std::function<void()> onConfirmed);
 
+    [[nodiscard]] std::unique_ptr<Node> makeCurve(const CurveSetting& setting);
+    [[nodiscard]] std::unique_ptr<Node> makeSpringResponse(double mass, double stiffness, double dampening);
+
     void makeRow(Flex& section, const SettingEntry& entry, std::unique_ptr<Node> control);
 
     [[nodiscard]] std::unique_ptr<Toggle> makeToggle(

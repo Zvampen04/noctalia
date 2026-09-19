@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <protocol name="noctalia_material_v1">
   <copyright>Copyright © 2026 Noctalia contributors. MIT license; see ../LICENSE.</copyright>
-  <interface name="noctalia_material_manager_v1" version="2">
+  <interface name="noctalia_material_manager_v1" version="5">
     <description summary="double-buffered optical material scenes">
       A scene describes only its owning wl_surface. It never grants access to
       other clients, textures, screenshots, global theme settings, or lock content.
@@ -12,13 +12,52 @@
       <arg name="id" type="new_id" interface="noctalia_material_surface_v1"/>
       <arg name="surface" type="object" interface="wl_surface"/>
     </request>
+    <request name="import_effect" since="3">
+      <description summary="bounded content-addressed custom material source">
+        Imports at most 32768 bytes from fd. The receiver reads exactly source_size,
+        rejects trailing bytes, and recomputes the 32-byte transport SHA-256 over
+        the canonical ABI and source bytes. The import radius must be the ABI-fixed
+        256 logical-pixel host cap; each scene plane selects its own 0..256 radius
+        and parameters without re-keying source. accepted confirms
+        transport validation only. ready is sent later after compositor compilation;
+        clients must retain their native body until ready and a staged scene is applied.
+      </description>
+      <arg name="id" type="new_id" interface="noctalia_material_effect_v1"/>
+      <arg name="transport_digest" type="array"/>
+      <arg name="abi" type="uint"/>
+      <arg name="max_sample_radius" type="fixed"/>
+      <arg name="source" type="fd"/>
+      <arg name="source_size" type="uint"/>
+    </request>
   </interface>
-  <interface name="noctalia_material_surface_v1" version="2">
+  <interface name="noctalia_material_effect_v1" version="1">
+    <description summary="lifetime of one imported custom material effect">
+      accepted does not authorize removal of native pixels. ready means the current
+      compositor backend compiled the exact digest and ABI. rejected is terminal for
+      this object. Destroying the object releases the handle; committed scenes retain
+      their own bounded reference until replacement or surface destruction.
+    </description>
+    <request name="destroy" type="destructor"/>
+    <event name="accepted"/>
+    <event name="ready"/>
+    <event name="rejected">
+      <arg name="reason" type="uint"/><arg name="diagnostic" type="string"/>
+    </event>
+    <enum name="reject_reason">
+      <entry name="invalid_metadata" value="1"/>
+      <entry name="invalid_source" value="2"/>
+      <entry name="digest_mismatch" value="3"/>
+      <entry name="resource_limit" value="4"/>
+      <entry name="unsupported_abi" value="5"/>
+      <entry name="compile_failed" value="6"/>
+    </enum>
+  </interface>
+  <interface name="noctalia_material_surface_v1" version="5">
     <description summary="atomic logical material plane geometry">
       At most one object may exist per wl_surface. set_scene replaces pending
       scene state; the last valid pending scene becomes current with wl_surface
       commit. An empty plane list clears effects. Destruction clears effects.
-      Payload is the bounded little-endian v5 codec in scene_descriptor.h:
+      Payload is the bounded little-endian v5, v6 or v7 codec in scene_descriptor.h:
       at most 65536 bytes and 64 planes. All coordinates are logical surface
       coordinates. Per-plane affine transform, clipping, radii, continuous corner power (2 to 10), concave corner
       flags, material parameters, palette tint, opacity and semantic IDs are
@@ -38,6 +77,46 @@
     <event name="rejected">
       <arg name="serial" type="uint"/><arg name="reason" type="uint"/>
     </event>
+    <event name="armed" since="4">
+      <description summary="active custom scene validated before surface commit">
+        The latest complete pending active custom scene has been decoded, all
+        effect references are strongly retained and ready, and the receiver
+        will apply this exact serial on the next wl_surface commit unless it is
+        replaced or rejected first. Armed does not make the scene current and
+        does not identify a client buffer by itself.
+      </description>
+      <arg name="serial" type="uint"/>
+    </event>
+    <event name="lease_granted" since="5">
+      <arg name="request_serial" type="uint"/>
+      <arg name="token" type="uint"/>
+    </event>
+    <event name="lease_rejected" since="5">
+      <arg name="request_serial" type="uint"/>
+      <arg name="reason" type="uint"/>
+    </event>
+    <event name="lease_armed" since="5">
+      <arg name="scene_serial" type="uint"/>
+      <arg name="token" type="uint"/>
+    </event>
+    <event name="lease_revoked" since="5">
+      <description summary="restore native ownership with a matching commit">
+        The compositor keeps drawing a bounded standard fallback for the current
+        leased descriptor. The client must submit a token-zero v7 descriptor and
+        native-body buffer in the same wl_surface commit. Resources remain retained
+        until that commit is applied and lease_released is sent.
+      </description>
+      <arg name="token" type="uint"/>
+      <arg name="reason" type="uint"/>
+    </event>
+    <event name="lease_released" since="5">
+      <description summary="native replacement applied and lease resources released">
+        scene_serial names the token-zero descriptor committed with the native body.
+        Older-token release and revoke events do not affect a newer binding lease.
+      </description>
+      <arg name="token" type="uint"/>
+      <arg name="scene_serial" type="uint"/>
+    </event>
     <request name="set_scene_chunk" since="2">
       <description summary="bounded atomic scene upload">
         Each nonempty chunk has at most 3072 bytes. Total size is 1 to 65536.
@@ -47,14 +126,35 @@
         preserving valid pending/current state. Only a complete, valid descriptor
         replaces pending state. A surface commit discards any incomplete upload.
         set_scene also discards an incomplete upload. Surface destruction releases
-        upload state. The descriptor format remains v5; interface version does
-        not negotiate descriptor versions.
+        upload state. Version 3 or newer peers may use v6 custom-effect references.
+        Version 5 peers may use v7 only with the lease handshake. Version 1 or
+        2 peers use v5 and retain native rendering.
       </description>
       <arg name="serial" type="uint"/>
       <arg name="total_size" type="uint"/>
       <arg name="offset" type="uint"/>
       <arg name="payload" type="array"/>
     </request>
+    <request name="request_lease" since="5">
+      <description summary="request continuous ownership for an applied staged scene">
+        staged_scene_serial must name the current applied token-zero v7 scene.
+        The receiver derives its ordered target and ready-resource signature.
+        A grant retains those resources but does not authorize native omission
+        until lease_armed identifies the first active descriptor.
+      </description>
+      <arg name="request_serial" type="uint"/>
+      <arg name="staged_scene_serial" type="uint"/>
+    </request>
+    <enum name="lease_reject_reason">
+      <entry name="invalid_staged_scene" value="1"/>
+      <entry name="resources_not_ready" value="2"/>
+      <entry name="token_exhausted" value="3"/>
+    </enum>
+    <enum name="lease_revoke_reason">
+      <entry name="program_lost" value="1"/>
+      <entry name="resource_invalidated" value="2"/>
+      <entry name="protocol_shutdown" value="3"/>
+    </enum>
     <enum name="reject_reason">
       <entry name="invalid_descriptor" value="1"/>
       <entry name="surface_gone" value="2"/>

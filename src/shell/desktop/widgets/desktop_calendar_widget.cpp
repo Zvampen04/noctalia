@@ -26,9 +26,9 @@ namespace {
   constexpr float kCalendarWidth = 340.0F;
   constexpr float kEventsWidth = 240.0F;
   constexpr float kWidgetHeight = 390.0F;
-  constexpr float kSectionGap = Style::spaceLg;
-  constexpr float kGridGap = Style::spaceXs;
-  constexpr float kHeaderHeight = Style::controlHeight;
+  const auto kSectionGap = []() -> float { return Style::spaceLg; };
+  const auto kGridGap = []() -> float { return Style::spaceXs; };
+  const auto kHeaderHeight = []() -> float { return Style::controlHeight; };
   constexpr float kWeekdayHeight = 20.0F;
   constexpr float kDayCellHeight = 43.0F;
   constexpr float kDayButtonSize = 34.0F;
@@ -51,7 +51,7 @@ void DesktopCalendarWidget::create() {
   auto root = ui::row({
       .out = &m_rootLayout,
       .align = FlexAlign::Stretch,
-      .gap = kSectionGap * contentScale(),
+      .gap = kSectionGap() * contentScale(),
   });
 
   auto calendarArea = std::make_unique<InputArea>();
@@ -127,7 +127,7 @@ void DesktopCalendarWidget::create() {
   );
   calendarColumn->addChild(std::move(header));
 
-  auto grid = ui::column({.out = &m_grid, .align = FlexAlign::Stretch, .gap = kGridGap * contentScale()});
+  auto grid = ui::column({.out = &m_grid, .align = FlexAlign::Stretch, .gap = kGridGap() * contentScale()});
   calendarColumn->addChild(std::move(grid));
   calendarArea->addChild(std::move(calendarColumn));
   root->addChild(std::move(calendarArea));
@@ -202,26 +202,26 @@ void DesktopCalendarWidget::doLayout(Renderer& renderer) {
   }
 
   const float scale = contentScale();
-  const float calendarWidth = (kCalendarWidth + (m_showWeekNumbers ? kWeekColumnWidth + kGridGap : 0.0F)) * scale;
+  const float calendarWidth = (kCalendarWidth + (m_showWeekNumbers ? kWeekColumnWidth + kGridGap() : 0.0F)) * scale;
   const float eventsWidth = kEventsWidth * scale;
   const float height = kWidgetHeight * scale;
-  const float totalWidth = calendarWidth + (m_showEvents ? (kSectionGap * scale + eventsWidth) : 0.0F);
+  const float totalWidth = calendarWidth + (m_showEvents ? (kSectionGap() * scale + eventsWidth) : 0.0F);
 
-  m_rootLayout->setGap(kSectionGap * scale);
+  m_rootLayout->setGap(kSectionGap() * scale);
   m_rootLayout->setSize(totalWidth, height);
   m_calendarArea->setSize(calendarWidth, height);
   m_calendarColumn->setGap(Style::spaceSm * scale);
   m_calendarColumn->setSize(calendarWidth, height);
   if (m_header != nullptr) {
     m_header->setGap(Style::spaceSm * scale);
-    m_header->setSize(calendarWidth, kHeaderHeight * scale);
+    m_header->setSize(calendarWidth, kHeaderHeight() * scale);
   }
   for (Button* button : {m_previousButton, m_nextButton}) {
     if (button == nullptr) {
       continue;
     }
-    button->setMinWidth(kHeaderHeight * scale);
-    button->setMinHeight(kHeaderHeight * scale);
+    button->setMinWidth(kHeaderHeight() * scale);
+    button->setMinHeight(kHeaderHeight() * scale);
     button->setGlyphSize(Style::fontSizeBody * scale);
     button->setPadding(Style::spaceXs * scale, Style::spaceXs * scale);
     button->setRadius(Style::scaledRadiusMd(scale));
@@ -232,7 +232,7 @@ void DesktopCalendarWidget::doLayout(Renderer& renderer) {
   }
   if (m_monthLabel != nullptr) {
     m_monthLabel->setFontSize((Style::fontSizeTitle + Style::spaceXs) * scale);
-    m_monthLabel->setMaxWidth(std::max(1.0F, calendarWidth - 2.0F * kHeaderHeight * scale));
+    m_monthLabel->setMaxWidth(std::max(1.0F, calendarWidth - 2.0F * kHeaderHeight() * scale));
   }
   if (m_eventsColumn != nullptr) {
     m_eventsColumn->setVisible(m_showEvents);
@@ -313,8 +313,8 @@ void DesktopCalendarWidget::rebuildCalendar() {
     return;
   }
   const float scale = contentScale();
-  const float gap = kGridGap * scale;
-  const float calendarWidth = (kCalendarWidth + (m_showWeekNumbers ? kWeekColumnWidth + kGridGap : 0.0F)) * scale;
+  const float gap = kGridGap() * scale;
+  const float calendarWidth = (kCalendarWidth + (m_showWeekNumbers ? kWeekColumnWidth + kGridGap() : 0.0F)) * scale;
   const float weekWidth = m_showWeekNumbers ? kWeekColumnWidth * scale : 0.0F;
   const float dayGridWidth = calendarWidth - (m_showWeekNumbers ? weekWidth + gap : 0.0F);
   const float dayColumnWidth = std::max(1.0F, (dayGridWidth - 6.0F * gap) / 7.0F);

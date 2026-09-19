@@ -28,6 +28,7 @@
   polkit,
   librsvg,
   libqalculate,
+  gmp,
   libxml2,
   md4c,
   libsecret,
@@ -111,6 +112,7 @@ lib.warnIf cudaSupport
     polkit
     librsvg
     libqalculate
+    gmp
     libxml2
     md4c
     libsecret

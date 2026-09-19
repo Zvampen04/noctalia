@@ -2,6 +2,7 @@
 
 #include "ui/controls/flex.h"
 #include "ui/controls/roving_list_nav.h"
+#include "ui/controls/segmented_indicator.h"
 #include "ui/palette.h"
 
 #include <cstddef>
@@ -11,6 +12,7 @@
 #include <string_view>
 #include <vector>
 
+class Box;
 class Button;
 class InputArea;
 class Separator;
@@ -18,6 +20,7 @@ class Separator;
 class Segmented : public Flex {
 public:
   Segmented();
+  ~Segmented() override;
 
   std::size_t addOption(std::string_view label);
   std::size_t addOption(std::string_view label, std::string_view glyph);
@@ -57,8 +60,16 @@ private:
   void applyButtonMetrics(Button& button) const;
   void refreshVariants();
   void applyOuterStyle();
+  void updateIndicator(bool animate);
+  void paintIndicator();
+  void cancelIndicator();
+  void refreshPresentation();
   [[nodiscard]] float effectiveFontSize() const noexcept;
 
+  Box* m_indicator = nullptr;
+  SegmentedIndicatorTransition m_indicatorMotion;
+  std::uint32_t m_indicatorAnimation = 0;
+  Signal<>::ScopedConnection m_presentationConn, m_paletteConn, m_motionConn;
   RovingListNavController m_rovingNav;
   std::vector<Separator*> m_separators;
   std::vector<Button*> m_buttons;

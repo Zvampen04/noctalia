@@ -57,6 +57,7 @@ private:
   InputArea* m_thumbArea = nullptr;
 
   Signal<>::ScopedConnection m_paletteConn;
+  Signal<>::ScopedConnection m_materialConn;
   std::function<void(float)> m_onScrollChanged;
 
   float m_contentScale = 1.0F;

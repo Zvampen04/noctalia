@@ -39,6 +39,8 @@ namespace noctalia::config::schema {
   // Mirror of ConfigService's finiteDouble: accept a double or an int, reject
   // non-finite. Keeps float/double reads behaviorally identical to the old code.
   inline std::optional<double> finiteDouble(const toml::node_view<const toml::node>& node) {
+    // toml++ value<int64_t>() also converts booleans; numeric settings must not.
+    if (!node.is_integer() && !node.is_floating_point()) return std::nullopt;
     if (auto v = node.value<double>()) {
       if (!std::isfinite(*v)) {
         return std::nullopt;
@@ -412,6 +414,28 @@ namespace noctalia::config::schema {
         },
         [member, key, opts](toml::table& tbl, const Struct& in) {
           tbl.insert_or_assign(key, std::string(enumKeyOf(opts, N, in.*member)));
+        },
+    };
+  }
+
+  // Concrete enum with a backward-compatible implicit default. Reading is the
+  // same as enumField; writing omits the key only for that default value.
+  template <typename Struct, typename Enum, std::size_t N>
+  Field<Struct> enumFieldOmitDefault(Enum Struct::* member, std::string_view key,
+      const EnumOption<Enum> (&options)[N], Enum implicitDefault) {
+    const EnumOption<Enum>* opts = options;
+    return Field<Struct>{
+        key,
+        [member, key, opts](const toml::table& tbl, Struct& out, std::string_view parentPath, Diagnostics& diag) {
+          if (auto v = tbl[key].value<std::string>()) {
+            const std::string trimmed = StringUtils::trim(*v);
+            if (auto parsed = enumLookup(opts, N, trimmed)) out.*member = *parsed;
+            else diag.warn(joinPath(parentPath, key), "unknown value \"" + *v + "\"");
+          }
+        },
+        [member, key, opts, implicitDefault](toml::table& tbl, const Struct& in) {
+          if (in.*member != implicitDefault)
+            tbl.insert_or_assign(key, std::string(enumKeyOf(opts, N, in.*member)));
         },
     };
   }

@@ -1,4 +1,5 @@
 #include "shell/settings/search_picker_popup.h"
+#include "shell/settings/font_family_catalog.h"
 
 #include "core/deferred_call.h"
 #include "render/render_context.h"
@@ -63,6 +64,7 @@ namespace settings {
     }
 
     m_scale = std::max(0.1F, request.scale);
+    m_fontFamilies = request.fontFamilies;
     m_title = std::move(request.title);
     m_options = std::move(request.options);
     m_selectedValue = std::move(request.selectedValue);
@@ -84,6 +86,20 @@ namespace settings {
   }
 
   void SearchPickerPopup::close() { destroyPopup(); }
+
+  void SearchPickerPopup::refreshFontFamilies() {
+    if (!m_fontFamilies || !isOpen()) return;
+    std::vector<SearchPickerOption> options;
+    for (const auto& option : m_options) {
+      if (option.value.empty()) options.push_back(option);
+    }
+    for (const auto& family : discoverFontFamilies()) {
+      options.push_back(SearchPickerOption{.value = family, .label = family});
+    }
+    m_options = std::move(options);
+    if (m_searchPicker != nullptr) m_searchPicker->setOptions(m_options);
+    requestLayout();
+  }
 
   bool SearchPickerPopup::isOpen() const noexcept { return DialogPopupHost::isOpen(); }
 

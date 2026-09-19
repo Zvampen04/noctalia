@@ -3,7 +3,10 @@
 #include "render/core/render_styles.h"
 
 #include <cstdint>
+#include <cmath>
+#include <string>
 #include <string_view>
+#include <optional>
 
 enum class AttachedRevealDirection : std::uint8_t {
   Down,
@@ -12,18 +15,68 @@ enum class AttachedRevealDirection : std::uint8_t {
   Left,
 };
 
+enum class AttachedPanelSourceSection : std::uint8_t {
+  Unknown,
+  Start,
+  Center,
+  End,
+};
+
+// Output-local bounds of the retained bar island that opened a panel.
+struct AttachedPanelSource {
+  AttachedPanelSourceSection section = AttachedPanelSourceSection::Unknown;
+  // Stable identity for configured sections. Legacy start/center/end sources
+  // leave this empty and continue to use `section`.
+  std::string sectionId;
+  float x = 0.0F;
+  float y = 0.0F;
+  float width = 0.0F;
+  float height = 0.0F;
+  Radii radii{};
+  struct ContentOffset {
+    float x = 0, y = 0;
+    bool operator==(const ContentOffset&) const = default;
+  };
+  // Original section origin relative to the compact painted island, before
+  // clipping/reflow. A clipped end lane can legitimately have a negative offset.
+  std::optional<ContentOffset> contentOffset;
+
+  [[nodiscard]] bool valid() const noexcept {
+    return (section != AttachedPanelSourceSection::Unknown || !sectionId.empty()) && std::isfinite(x) && std::isfinite(y)
+        && std::isfinite(width) && std::isfinite(height) && width > 0.0F && height > 0.0F
+        && (!contentOffset || (std::isfinite(contentOffset->x) && std::isfinite(contentOffset->y)));
+  }
+};
+
 struct AttachedPanelGeometry {
   float x = 0.0F;
   float y = 0.0F;
   float width = 0.0F;
   float height = 0.0F;
-  // Full panel corner radius; used for the away-side convex corners, which are visible
-  // throughout the open/close animation and should always render rounded.
+  // Current away-side convex radius; grows continuously during a morph.
   float cornerRadius = 0.0F;
-  // Bar-side concave-corner radius. Animated with the reveal progress: zero while the
-  // bg's bar-side edge is still hidden behind the bar, ramps to cornerRadius as the
-  // bulges slide into view near the end of the open animation.
+  // Current bar-side concave radius. Morph uses the same evolving radius;
+  // the selectable legacy slide can reveal this edge separately.
   float bulgeRadius = 0.0F;
+  float cornerPower = 2.0F;
+  // Output-local silhouette. Unlike x/y, this remains valid when a morph-enabled
+  // bar uses a full-output surface instead of margin-trimmed layer geometry.
+  float outputX = 0.0F;
+  float outputY = 0.0F;
+  float outputWidth = 0.0F;
+  float outputHeight = 0.0F;
+  // Output-local final silhouette. The current panel reveal can have a
+  // nonzero seed width, so the bar interpolates from its compact source to
+  // these final bounds using revealProgress instead of following that seed.
+  float finalOutputX = 0.0F;
+  float finalOutputY = 0.0F;
+  float finalOutputWidth = 0.0F;
+  float finalOutputHeight = 0.0F;
+  float revealProgress = 0.0F;
+  AttachedPanelSource source;
+  // Set only after the panel surface has a painted replacement for the retained
+  // source island. The bar must not hide its source before this becomes true.
+  bool panelOwnsSource = false;
 };
 
 namespace attached_panel {

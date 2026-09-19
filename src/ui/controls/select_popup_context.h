@@ -28,6 +28,8 @@ public:
     std::vector<ColorSwatchPreview> optionSwatchPreviews;
     std::size_t selectedIndex = static_cast<std::size_t>(-1);
     std::size_t maxVisibleOptions = 6;
+    // Copied from the opening Select; popup roots are separate scene trees.
+    std::string materialSurface{};
   };
 
   struct DropdownCallbacks {

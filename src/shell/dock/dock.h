@@ -105,6 +105,7 @@ private:
   shell::dock::DockInstance* m_popupOwnerInstance = nullptr; // instance that owns the current open popup
   std::unique_ptr<shell::dock::DockPopup> m_itemMenu;        // right-click context menu
   Signal<>::ScopedConnection m_appIconColorizeConn;
+  Signal<>::ScopedConnection m_motionConn;
   bool m_overlayDisplaySuppressed = false;
   bool m_hadInstancesBeforeOverlaySuppress = false;
   bool m_smartAutoHideReevalQueued = false;

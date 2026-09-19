@@ -319,6 +319,7 @@ _protocol_headers = []
 # xml_input can be a string (path) or a custom_target.
 
 foreach _p : [
+  ['noctalia-material-v1', 'src/material/protocol/noctalia-material-v1.xml'],
   # ── wlr-layer-shell needs namespace→name_space substitution first ──────────
   # Handled separately below.
 
@@ -447,6 +448,9 @@ _noctalia_sources = files(
   'src/config/config_migrations.cpp',
   'src/config/config_origins.cpp',
   'src/config/config_overrides.cpp',
+  'src/wayland/material_scene.cpp',
+  'src/wayland/custom_effect_transport.cpp',
+  'src/config/profile_preview.cpp',
   'src/config/config_service.cpp',
   'src/config/config_types.cpp',
   'src/config/config_validate.cpp',
@@ -564,6 +568,8 @@ _noctalia_sources = files(
   'src/render/core/blur_cache.cpp',
   'src/render/core/cached_layer.cpp',
   'src/render/core/shared_texture_cache.cpp',
+  'src/render/custom_effect/custom_effect_types.cpp',
+  'src/render/custom_effect/custom_effect_program.cpp',
   'src/render/gl_shared_context.cpp',
   'src/render/render_context.cpp',
   'src/render/render_target.cpp',
@@ -574,6 +580,7 @@ _noctalia_sources = files(
   'src/render/scene/node.cpp',
   'src/render/text/cairo_text_renderer.cpp',
   'src/render/text/font_registry.cpp',
+  'src/render/text/profile_font_resources.cpp',
   'src/render/text/font_weight_catalog.cpp',
   'src/render/text/cairo_glyph_renderer.cpp',
   'src/render/wallpaper_renderer.cpp',
@@ -647,8 +654,10 @@ _noctalia_sources = files(
   'src/shell/control_center/tabs/power_tab.cpp',
   'src/shell/control_center/tabs/screen_time_tab.cpp',
   'src/shell/control_center/tabs/home_tab.cpp',
+  'src/shell/control_center/tabs/compact_home_tab.cpp',
   'src/shell/control_center/plugin_shortcut.cpp',
   'src/shell/control_center/shortcut_registry.cpp',
+  'src/shell/control_center/shortcut_identity.cpp',
   'src/shell/control_center/tabs/system_tab.cpp',
   'src/shell/control_center/tab.cpp',
   'src/shell/control_center/tabs/weather_tab.cpp',
@@ -680,6 +689,8 @@ _noctalia_sources = files(
   'src/shell/osd/keyboard_layout_osd.cpp',
   'src/shell/osd/privacy_osd.cpp',
   'src/shell/osd/osd_overlay.cpp',
+  'src/shell/activity/transient_activity.cpp',
+  'src/shell/activity/transient_activity_popup.cpp',
   'src/shell/tooltip/tooltip_manager.cpp',
   'src/shell/hot_corners/hot_corners.cpp',
   'src/shell/screen_corners/screen_corners.cpp',
@@ -702,6 +713,8 @@ _noctalia_sources = files(
   'src/shell/settings/settings_content.cpp',
   'src/shell/settings/settings_content_common.cpp',
   'src/shell/settings/settings_content_plugins.cpp',
+  'src/shell/settings/custom_effect_asset_service.cpp',
+  'src/shell/settings/style_gallery.cpp',
   'src/shell/settings/path_browse.cpp',
   'src/shell/settings/plugin_store_content.cpp',
   'src/shell/settings/plugin_store_tile.cpp',
@@ -868,6 +881,7 @@ _noctalia_sources = files(
   'src/ui/controls/collapsible.cpp',
   'src/ui/controls/context_menu.cpp',
   'src/ui/controls/context_menu_popup.cpp',
+  'src/ui/material_target_catalog.cpp',
   'src/ui/controls/countdown_ring.cpp',
   'src/ui/controls/flex.cpp',
   'src/ui/controls/glyph.cpp',
@@ -893,6 +907,8 @@ _noctalia_sources = files(
   'src/ui/controls/range_slider.cpp',
   'src/ui/controls/screen_corner.cpp',
   'src/ui/controls/segmented.cpp',
+  'src/ui/controls/bezier_editor.cpp',
+  'src/ui/controls/spring_response_preview.cpp',
   'src/ui/controls/select.cpp',
   'src/ui/controls/select_dropdown_popup.cpp',
   'src/ui/controls/separator.cpp',
@@ -908,6 +924,7 @@ _noctalia_sources = files(
   'src/ui/app_icon_colorization.cpp',
   'src/ui/palette.cpp',
   'src/ui/popup_chrome.cpp',
+  'src/ui/popup_transition.cpp',
   'src/ui/scroll_into_view.cpp',
   'src/ui/split_pane_focus.cpp',
   'src/ui/style.cpp',
@@ -1151,6 +1168,7 @@ if build_tests
     'calendar_cache_permissions',
     'calendar_credential_store',
     'calendar_discovery_state',
+    'calendar_month_open_intent',
     'calendar_view_passed_event',
     'capsule_group_lane_override',
     'capsule_group_reconcile',
@@ -1222,6 +1240,28 @@ if build_tests
     'plugin_source_locks',
     'plugin_source_paths',
     'process',
+    'profile_values',
+    'profile_preview',
+    'motion_controls',
+    'control_variants',
+    'bar_dynamic_section_geometry',
+    'bar_widget_material_target',
+    'material_target_catalog',
+    'control_center_material_target',
+    'material_surface_bleed',
+    'popup_transition',
+    'custom_effect_shader_asset',
+    'custom_effect_capture',
+    'custom_effect_consumers',
+    'custom_effect_asset_service',
+    'material_frame_plan',
+    'material_lease_plan',
+    'material_lease_scene',
+    'bar_section_geometry',
+    'bar_island_morph_geometry',
+    'bezier_editor',
+    'bezier_editor_geometry',
+    'attached_panel_scene',
     'scheme',
     'scrollbar_geometry',
     'secret_store',
@@ -1232,6 +1272,7 @@ if build_tests
     'system_monitor_service',
     'taskbar_widget',
     'template_apply_notify',
+    'transient_activity',
     'template_hook_async',
     'template_hook_runner',
     'theme_shell_mode',
@@ -1269,6 +1310,25 @@ if build_tests
     endif
     test(test_name, test_exe, args: test_args)
   endforeach
+
+  custom_effect_gl_exe = executable('custom_effect_gl_test',
+    sources: files('tests/custom_effect_gl_test.cpp'),
+    dependencies: noctalia_core_dep,
+    override_options: ['b_ndebug=false'],
+  )
+  custom_effect_gl_env = environment()
+  custom_effect_gl_env.set('EGL_PLATFORM', 'surfaceless')
+  custom_effect_gl_env.set('LIBGL_ALWAYS_SOFTWARE', '1')
+  custom_effect_gl_env.set('GALLIUM_DRIVER', 'llvmpipe')
+  custom_effect_gl_env.set('LP_NUM_THREADS', '1')
+  test('custom_effect_gl', custom_effect_gl_exe, env: custom_effect_gl_env)
+
+  scene_material_scope_exe = executable('scene_material_scope_test',
+    sources: files('src/material/tests/scene_material_scope_test.cpp'),
+    dependencies: noctalia_core_dep,
+    override_options: ['b_ndebug=false'],
+  )
+  test('scene_material_scope', scene_material_scope_exe)
 
   upower_integration_exe = executable('upower_charge_limit_integration_test',
     sources: files('tests/upower_charge_limit_integration_test.cpp'),

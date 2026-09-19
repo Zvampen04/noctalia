@@ -181,6 +181,8 @@ Application::Application()
 }
 
 Application::~Application() {
+  if (m_customEffectStatusCallbackInstalled)
+    m_renderContext.backend().setCustomEffectStatusChanged({});
   ColorPickerDialog::setPresenter(nullptr);
   GlyphPickerDialog::setPresenter(nullptr);
   FileDialog::setPresenter(nullptr);

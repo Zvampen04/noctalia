@@ -347,6 +347,15 @@ offset_x = 20            # absolute horizontal margin from the screen edge
 offset_y = 8             # absolute vertical margin from the screen edge
 # monitors = ["DP-1"]    # connector names; omit or leave empty for all monitors
 
+[osd.activity]
+presentation = "standalone" # standalone | section | attached
+bar = ""                    # stable [bar.<name>] name; empty matches any bar
+section = ""                # stable [[bar.<name>.section]] id
+output = "focused"          # focused | all | output connector/selector
+placement = "auto"          # auto | before | after | below | above | left | right
+motion = "inherit"          # inherit | off
+material = "inherit"        # inherit | surface | transparent
+
 [osd.kinds]
 volume = true            # master volume OSD toggle
 volume_output = true     # output (speaker) volume; requires volume = true
@@ -384,6 +393,67 @@ level popups.
 `lock_keys = false` disables Caps/Num/Scroll Lock popups; when no `lock_keys` bar widget is configured, this also stops
 lock-key state polling. `keyboard_layout = false` disables layout-change popups. `privacy = false` disables popups shown
 when microphone, camera, or screen share capture starts or stops.
+
+### Activity presentation
+
+`[osd.activity]` routes volume, brightness, and notification activity without tying the renderer to a theme or
+profile name. The default `standalone` presentation preserves the normal OSD and notification toast surfaces on every
+theme. `section` temporarily replaces a configured bar section. `attached` presents the activity beside that section.
+If the selected bar, section, or output is unavailable, Noctalia uses the standalone surface so the event remains
+visible.
+
+`bar` is the stable name from `[bar.<name>]`, and `section` is the stable `id` from a
+`[[bar.<name>.section]]` entry. `output = "focused"` follows the interactive output, `"all"` presents on every matching
+bar, and a connector or output selector targets matching outputs. `placement = "auto"` chooses the side facing into the
+screen; the other values place attached activity relative to its section. `motion = "inherit"` follows the shared
+animation policy, while `"off"` updates immediately. `material = "inherit"` uses the shared UI material; `"surface"`
+forces a filled surface and `"transparent"` removes the activity fill.
+
+Embedded volume and brightness activity keeps its live slider, including pointer and wheel adjustment. Clicking its
+card opens the matching Audio or Brightness controls. For notifications, left-click invokes the default action when one
+exists and otherwise opens notification history; right-click dismisses it. Hovering any routed activity pauses its
+transient timeout, and leaving resumes the remaining time. Section presentation uses the named section's existing
+bounds rather than opening a separate hover panel.
+
+Each supported kind can override any part of the base route. Empty fields inherit the base value:
+
+```toml
+[osd.activity.volume]
+presentation = ""
+bar = ""
+section = ""
+output = ""
+placement = ""
+motion = ""
+material = ""
+
+[osd.activity.brightness]
+presentation = ""
+
+[osd.activity.notification]
+presentation = ""
+```
+
+For a neutral, terminal-oriented layout, define a stable status section and attach immediate activity below it. The
+activity still inherits the same material and colors as the rest of the shell:
+
+```toml
+[[bar.default.section]]
+id = "terminal-status"
+widgets = ["network", "volume", "notifications"]
+anchor = "end"
+alignment = "end"
+
+[osd.activity]
+presentation = "attached"
+bar = "default"
+section = "terminal-status"
+output = "focused"
+placement = "below"
+motion = "off"
+material = "inherit"
+```
+
 
 ---
 

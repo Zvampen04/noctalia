@@ -119,8 +119,8 @@ Configure this directory directly as a Meson project; it must not be added with
 
 ```sh
 meson setup /tmp/noctalia-material-build /path/to/noctalia/src/material
-meson compile -C /tmp/noctalia-material-build -j 1
-meson test -C /tmp/noctalia-material-build
+meson compile -C /tmp/noctalia-material-build
+meson test -C /tmp/noctalia-material-build --print-errorlogs
 ```
 
 It installs `material/*.h` and `material/fields.def` under
@@ -178,12 +178,12 @@ keeps explicit bounds, and preserves attribution in `LIQUID-GLASS-LICENSE`.
 The rest of this module follows the Noctalia repository's MIT license, included
 as `LICENSE` in the standalone package.
 
-## Atomic compositor scene transport (v2)
+## Atomic compositor scene transport (Wayland interface v5)
 
 `protocol/noctalia-material-v1.xml` binds one material object to the same client's
 `wl_surface`. `scene_descriptor.h` defines the byte codec. The wire header is
-little-endian magic `0x4d53434e`, version 5, float32 surface width/height and uint32
-plane count. Each plane encodes its group ID, length-prefixed role and surface ID,
+little-endian magic `0x4d53434e`, descriptor version 5 or 6, float32 surface
+width/height and uint32 plane count. Each plane encodes its group ID, length-prefixed role and surface ID,
 float32 local width/height, six affine coefficients, four clipping coordinates,
 a uint32 optional-mask flag followed by six local floats (x,y,width,height,radius,power)
 when present, plane corner power, four radii, four insets, concave-corner bitmask, straight RGBA tint, opacity,
@@ -201,11 +201,18 @@ ownership follows the Wayland surface; no PID, app-title or filesystem identity
 is used for transport. Surface destruction clears the scene, and a remaining
 material object is inert until destroyed. Protocol removal destroys all resources.
 Version 1 protocol bindings use only the inline request, whose payload is limited
-to 4,080 bytes. Version 2 bindings upload larger scenes through contiguous chunks
-of at most 3,072 bytes, with one bounded 64 KiB assembly per surface. A malformed,
-replaced or incomplete upload cannot become current. Protocol version does not
-negotiate the descriptor codec: the v1 large-scene empty fallback is understood
-only by a compositor that already supports descriptor v5.
+to 4,080 bytes. Version 2 and newer bindings upload larger scenes through contiguous
+chunks of at most 3,072 bytes, with one bounded 64 KiB assembly per surface. A
+malformed, replaced or incomplete upload cannot become current. Interface version 3
+adds content-addressed custom-effect import and descriptor v6 references. Imported
+source is capped at 32 KiB and keyed by the canonical ABI plus source bytes; per-plane
+parameters and sampling radius do not recompile or re-key that source. `accepted`
+confirms transport validation, while `ready` follows real compilation on the
+compositor render thread. Version 4 adds `armed(serial)`: it confirms that one exact
+active v6 scene is ready to latch on the next matching `wl_surface.commit`, but does
+not identify a client buffer or authorize native-pixel omission by itself. Version 1
+or 2 peers use descriptor v5 and retain native rendering. Protocol version does not
+otherwise negotiate the descriptor codec.
 
 Noctalia's `MaterialSceneSender` sends before EGL presentation. Optical plane ownership resolves from the semantic default or explicit `optical_plane`.
 Outer planes group ordinary nested controls; contained sibling planes also inherit the
@@ -269,10 +276,18 @@ image crops, CPU surface regions, and external optical descriptors carry the sam
 resolved geometry. A rounded paint mask carries independent power. Explicit lens
 radius remains a sampling option and cannot change foreground/mask coverage.
 
-Payload v5 adds plane and mask geometry power. The Wayland interface is v2;
-matching material-core 5.0.0 and compositor packages are required. Older payloads
-are rejected atomically rather than reinterpreted. No mixed-version negotiation
-is provided. Publish matching packages into a fresh compositor session.
+Payload v5 adds plane and mask geometry power. Payload v6 adds optional custom-effect
+transport digest, ABI, per-plane sampling radius, eight vec4 parameters and staged
+state. The Wayland interface is v5; matching material-core 7.0.0 and compositor
+packages are required for continuous custom-effect leases. Version 4 retains the
+per-descriptor armed commit handshake.
+Codec v7 adds a surface lease token. A version-5 lease fixes the ordered
+`(group, role, surface, transport digest, ABI)` target signature while bounded
+geometry, opacity, tint, material, sampling radius and parameter fields may vary
+with each matching surface commit. Tokens are fresh nonzero uint32 values scoped
+to one surface binding and are never reused; exhaustion requires rebinding.
+Older or unsupported payloads are rejected atomically rather than reinterpreted.
+Publish matching packages into a fresh compositor session.
 
 Powered convex distances use gradient normalization near the contour to preserve
 logical bevel widths; concave boundaries retain the existing composed-edge field.

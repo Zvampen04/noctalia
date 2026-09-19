@@ -15,7 +15,7 @@ namespace {
 
   [[nodiscard]] bool volumeChanged(float a, float b) { return std::abs(a - b) > kVolumeChangeEpsilon; }
 
-  OsdContent makeOutputContent(float volume, bool muted) {
+  OsdContent makeOutputContent(float volume, bool muted, std::function<void(float)> setProgress = {}) {
     const int percent = static_cast<int>(std::round(std::max(0.0F, volume) * 100.0F));
     return OsdContent{
         .kind = OsdKind::Volume,
@@ -24,6 +24,7 @@ namespace {
         .progress = std::clamp(volume, 0.0F, 1.0F),
         .overLimit = percent > 100,
         .inactive = muted,
+        .setProgress = std::move(setProgress),
     };
   }
 
@@ -37,7 +38,7 @@ namespace {
     };
   }
 
-  OsdContent makeInputContent(float volume, bool muted) {
+  OsdContent makeInputContent(float volume, bool muted, std::function<void(float)> setProgress = {}) {
     const int percent = static_cast<int>(std::round(std::max(0.0F, volume) * 100.0F));
     return OsdContent{
         .kind = OsdKind::Microphone,
@@ -46,6 +47,7 @@ namespace {
         .progress = std::clamp(volume, 0.0F, 1.0F),
         .overLimit = percent > 100,
         .inactive = muted,
+        .setProgress = std::move(setProgress),
     };
   }
 
@@ -91,7 +93,10 @@ void AudioOsd::showOutput(std::uint32_t sinkId, float volume, bool muted, bool p
   }
   m_suppressAutoInputOsdUntil = now + kSuppressInputOsdAfterOutput;
   if (m_overlay != nullptr) {
-    m_overlay->show(makeOutputContent(volume, muted));
+    auto setProgress = [service = m_service, sinkId](float value) {
+      if (service != nullptr) service->setSinkVolume(sinkId, value);
+    };
+    m_overlay->show(makeOutputContent(volume, muted, std::move(setProgress)));
     m_currentKind = OsdKind::Volume;
   }
   if (playFeedback && m_soundPlayer != nullptr && now - m_lastSoundAt >= kVolumeSoundCooldown) {
@@ -122,7 +127,10 @@ void AudioOsd::showInput(std::uint32_t sourceId, float volume, bool muted, bool 
     return;
   }
   if (m_overlay != nullptr) {
-    m_overlay->show(makeInputContent(volume, muted));
+    auto setProgress = [service = m_service, sourceId](float value) {
+      if (service != nullptr) service->setSourceVolume(sourceId, value);
+    };
+    m_overlay->show(makeInputContent(volume, muted, std::move(setProgress)));
     m_currentKind = OsdKind::Microphone;
   }
   if (playFeedback && m_soundPlayer != nullptr && now - m_lastSoundAt >= kVolumeSoundCooldown) {
@@ -150,7 +158,10 @@ void AudioOsd::showOutputValue(float volume, bool muted) {
   if (m_overlay == nullptr) {
     return;
   }
-  m_overlay->show(makeOutputContent(volume, muted));
+  auto setProgress = [service = m_service, sinkId = m_lastSinkId](float value) {
+    if (service != nullptr && sinkId != 0) service->setSinkVolume(sinkId, value);
+  };
+  m_overlay->show(makeOutputContent(volume, muted, std::move(setProgress)));
   m_currentKind = OsdKind::Volume;
 }
 
@@ -158,7 +169,10 @@ void AudioOsd::showInputValue(float volume, bool muted) {
   if (m_overlay == nullptr) {
     return;
   }
-  m_overlay->show(makeInputContent(volume, muted));
+  auto setProgress = [service = m_service, sourceId = m_lastSourceId](float value) {
+    if (service != nullptr && sourceId != 0) service->setSourceVolume(sourceId, value);
+  };
+  m_overlay->show(makeInputContent(volume, muted, std::move(setProgress)));
   m_currentKind = OsdKind::Microphone;
 }
 
@@ -187,9 +201,15 @@ void AudioOsd::onAudioStateChanged(const PipeWireService& service) {
   // one already on screen; volume stays optimistic, only the mute state is reconciled.
   if (m_overlay != nullptr && m_overlay->isVisible()) {
     if (sink != nullptr && m_currentKind == OsdKind::Volume && sinkMuted != m_lastSinkMuted) {
-      m_overlay->show(makeOutputContent(sinkVolume, sinkMuted));
+      auto setProgress = [service = m_service, sinkId](float value) {
+        if (service != nullptr) service->setSinkVolume(sinkId, value);
+      };
+      m_overlay->show(makeOutputContent(sinkVolume, sinkMuted, std::move(setProgress)));
     } else if (source != nullptr && m_currentKind == OsdKind::Microphone && sourceMuted != m_lastSourceMuted) {
-      m_overlay->show(makeInputContent(sourceVolume, sourceMuted));
+      auto setProgress = [service = m_service, sourceId](float value) {
+        if (service != nullptr) service->setSourceVolume(sourceId, value);
+      };
+      m_overlay->show(makeInputContent(sourceVolume, sourceMuted, std::move(setProgress)));
     }
   }
 

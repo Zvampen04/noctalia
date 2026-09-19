@@ -96,6 +96,7 @@ public:
   void onFontChanged();
   void requestRedraw();
   void onExternalOptionsChanged();
+  void onProfilePreparationChanged();
   void onPluginsChanged();
   // Drop cached plugin-store files for a source that just advanced its git revision.
   void invalidatePluginSourceCache(const std::string& sourceName);
@@ -135,6 +136,7 @@ public:
   void showTransientStatus(std::string message, bool isError = false);
 
 private:
+  friend class SettingsWindowMutationTestAccess;
   void destroyWindow();
   [[nodiscard]] bool shouldUseModalDialogs() const noexcept;
   void prepareFrame(bool needsUpdate, bool needsLayout);
@@ -169,6 +171,15 @@ private:
   void
   requestContentRebuild(bool refreshRegistry = false, bool refreshFilterRow = false, bool rebuildEditorSheet = false);
   void scheduleDeferredRebuild();
+  // Ordinary mutations belong to the current window instance. Closing it or
+  // destroying its owner invalidates queued writes before they access members.
+  void deferSettingsMutation(std::function<void()> mutation);
+  void requestPresetSelection(std::string pluginId, std::string selected);
+  void showProfilePrompt(std::optional<std::string> selected = {}, bool closeAfter = false,
+                         std::string pluginId = {});
+  void runProfileTransition(std::string action, std::optional<std::string> selected = {},
+                            bool closeAfter = false, std::string pluginId = {});
+  void finishProfileTransition(bool success, std::string error, bool closeAfter);
   void markPluginListDirty();
   void refreshPluginListIfNeeded();
   void maybeOpenPendingEditor();
@@ -280,6 +291,11 @@ private:
   settings::SettingsModalHost m_modalHost;
   std::unique_ptr<settings::SettingsDialogPresenter> m_dialogPresenter;
   std::unique_ptr<settings::SettingsSheetModal> m_editorSheetModal;
+  std::unique_ptr<settings::SettingsSheetModal> m_profileSheetModal;
+  std::shared_ptr<void> m_profileAlive = std::make_shared<int>(0);
+  bool m_profileTransitionBusy = false;
+  std::optional<bool> m_nativeProfileSavePending;
+  bool m_nativeProfileCloseAfter = false;
   std::unique_ptr<settings::SettingsControlFactory> m_editorSheetFactory;
   std::vector<std::string> m_editorSheetListPath;
   std::unique_ptr<SelectDropdownPopup> m_selectPopup;
@@ -298,6 +314,8 @@ private:
   bool m_settingsRegistryRefreshRequested = false;
   bool m_filterRowRefreshRequested = false;
   bool m_deferredRebuildQueued = false;
+  bool m_interactiveSettingEdit = false;
+  std::uint64_t m_settingsWindowGeneration = 0;
   bool m_deferredSceneRebuild = false;
   bool m_deferredRefreshRegistry = false;
   bool m_deferredRefreshFilterRow = false;
@@ -331,6 +349,7 @@ private:
   // Expanded setting groups per page, keyed by content section key (pageScopeKey).
   // A page gets its default first-group expansion when first rendered this session.
   std::unordered_map<std::string, std::unordered_set<std::string>> m_expandedSettingGroups;
+  std::unordered_map<std::string, std::string> m_selectedSettingGroups;
   std::string m_creatingBarName;
   std::string m_renamingBarName;
   std::string m_pendingDeleteBarName;
@@ -350,6 +369,7 @@ private:
   std::vector<std::vector<std::string>> m_pendingResetSettingPaths;
   bool m_forceEnTranslation = false;
   bool m_showAdvanced = false;
+  bool m_showCompactFilters = false;
   bool m_showOverriddenOnly = false;
   bool m_statusIsError = false;
   bool m_pendingEncryptedStorageReset = false;

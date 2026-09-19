@@ -1,5 +1,7 @@
 #pragma once
 
+#include "wayland/custom_effect_transport.h"
+
 #include "wayland/ext_foreign_toplevels.h"
 #include "wayland/output_scale.h"
 #include "wayland/wayland_seat.h"
@@ -34,6 +36,7 @@ struct ext_idle_notifier_v1;
 struct ext_idle_notification_v1;
 struct zwp_idle_inhibit_manager_v1;
 struct ext_background_effect_manager_v1;
+struct noctalia_material_manager_v1;
 struct xdg_activation_v1;
 struct ext_session_lock_manager_v1;
 struct zwlr_foreign_toplevel_manager_v1;
@@ -190,6 +193,10 @@ public:
   [[nodiscard]] bool hasBackgroundEffectBlur() const noexcept;
   [[nodiscard]] zwlr_gamma_control_manager_v1* gammaControlManager() const noexcept;
   [[nodiscard]] ext_background_effect_manager_v1* backgroundEffectManager() const noexcept;
+  [[nodiscard]] noctalia_material_manager_v1* materialManager() const noexcept { return m_materialManager; }
+  [[nodiscard]] CustomEffectTransportRegistry& customEffectTransport() noexcept {
+    return m_customEffectTransport;
+  }
   [[nodiscard]] wp_fractional_scale_manager_v1* fractionalScaleManager() const noexcept;
   [[nodiscard]] hyprland_focus_grab_manager_v1* hyprlandFocusGrabManager() const noexcept;
   [[nodiscard]] FocusGrabService* focusGrabService() const noexcept;
@@ -293,6 +300,8 @@ public:
   bool recomputeConfiguredScale(WaylandOutput& out);
 
 private:
+  friend class WaylandConnectionTestAccess;
+
   void bindGlobal(wl_registry* registry, std::uint32_t name, const char* interface, std::uint32_t version);
   void bindClipboardService();
   void bindTextInputService();
@@ -314,6 +323,8 @@ private:
   ext_session_lock_manager_v1* m_sessionLockManager = nullptr;
   ext_idle_notifier_v1* m_idleNotifier = nullptr;
   zwp_idle_inhibit_manager_v1* m_idleInhibitManager = nullptr;
+  noctalia_material_manager_v1* m_materialManager = nullptr;
+  CustomEffectTransportRegistry m_customEffectTransport;
   ext_background_effect_manager_v1* m_backgroundEffectManager = nullptr;
   wp_fractional_scale_manager_v1* m_fractionalScaleManager = nullptr;
   hyprland_focus_grab_manager_v1* m_hyprlandFocusGrabManager = nullptr;

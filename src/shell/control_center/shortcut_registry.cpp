@@ -2,6 +2,7 @@
 
 #include "compositors/compositor_platform.h"
 #include "config/config_service.h"
+#include "core/process/process.h"
 #include "dbus/bluetooth/bluetooth_service.h"
 #include "dbus/mpris/mpris_service.h"
 #include "dbus/network/inetwork_service.h"
@@ -26,6 +27,7 @@
 #include <cmath>
 #include <deque>
 #include <format>
+#include <filesystem>
 #include <optional>
 #include <ranges>
 #include <vector>
@@ -414,6 +416,27 @@ namespace {
     void onRightClick() override { openTab("system"); }
   };
 
+  class SettingsShortcut final : public Shortcut {
+  public:
+    std::string_view id() const override { return "settings"; }
+    std::string defaultLabel() const override { return i18n::tr("control-center.shortcuts.settings"); }
+    std::string_view iconOn() const override { return "settings"; }
+    std::string_view iconOff() const override { return "settings"; }
+    void onClick() override { PanelManager::instance().openSettingsWindow(); }
+  };
+
+  class SystemUpdatesShortcut final : public Shortcut {
+  public:
+    std::string_view id() const override { return "system_updates"; }
+    std::string defaultLabel() const override { return i18n::tr("control-center.shortcuts.system-updates"); }
+    std::string_view iconOn() const override { return "refresh"; }
+    std::string_view iconOff() const override { return "refresh"; }
+    bool enabled() const override { return std::filesystem::exists("/run/current-system/sw/bin/storeit-open-updates"); }
+    void onClick() override {
+      if (enabled()) (void)process::runAsync({"/run/current-system/sw/bin/storeit-open-updates"});
+    }
+  };
+
   class ScreenTimeShortcut final : public Shortcut {
   public:
     std::string_view id() const override { return "screen_time"; }
@@ -519,6 +542,14 @@ namespace {
           .type = "system",
           .labelKey = "control-center.shortcuts.system",
           .isAvailable = [](const Config& config) { return config.system.monitor.enabled; },
+      }),
+      builtinShortcut<SettingsShortcut>({
+          .type = "settings",
+          .labelKey = "control-center.shortcuts.settings",
+      }),
+      builtinShortcut<SystemUpdatesShortcut>({
+          .type = "system_updates",
+          .labelKey = "control-center.shortcuts.system-updates",
       }),
       builtinShortcut<ScreenTimeShortcut>({
           .type = "screen_time",

@@ -1,7 +1,10 @@
+#include "ui/controls/bezier_editor.h"
+#include "ui/controls/spring_response_preview.h"
 #include "shell/settings/settings_control_factory.h"
 
 #include "config/config_service.h"
 #include "config/config_types.h"
+#include "core/deferred_call.h"
 #include "i18n/i18n.h"
 #include "render/scene/input_area.h"
 #include "shell/bar/widget_action.h"
@@ -41,6 +44,29 @@ namespace settings {
     // keeping every slider's value box at the same right edge.
     constexpr float kSuffixSlotWidth = 36.0F;
 
+    struct CurveCommitState {
+      CurveSetting setting;
+      std::function<void(std::vector<std::pair<std::vector<std::string>, ConfigOverrideValue>>)> setOverrides;
+      std::optional<BezierEditor::Curve> pending;
+      bool queued = false;
+    };
+
+    void commitPendingCurve(const std::shared_ptr<CurveCommitState>& state) {
+      if (!state || !state->pending.has_value() || !state->setOverrides) return;
+      const auto curve = *std::exchange(state->pending, std::nullopt);
+      std::vector<std::pair<std::vector<std::string>, ConfigOverrideValue>> changes;
+      changes.reserve(curve.size() + (state->setting.stylePath.empty() ? 0U : 1U));
+      for (std::size_t i = 0; i < curve.size(); ++i)
+        changes.emplace_back(state->setting.paths[i], static_cast<double>(curve[i]));
+      if (!state->setting.stylePath.empty()) {
+        changes.emplace_back(
+            state->setting.stylePath,
+            curve == state->setting.value ? state->setting.initialStyle : state->setting.editedStyle
+        );
+      }
+      state->setOverrides(std::move(changes));
+    }
+
     std::unique_ptr<Node> makeSuffixSlot(std::string suffix, float scale) {
       if (suffix.empty()) {
         return nullptr;
@@ -58,11 +84,11 @@ namespace settings {
     // Horizontal space the leading invert slot occupies: corner glyph + gap + a Small toggle.
     // Invertible sliders give this much (plus the row gap) back from their track so the toggle tucks
     // in on the left without widening the control cluster.
-    constexpr float kInvertSlotContentWidth = Style::fontSizeBody
+    const auto kInvertSlotContentWidth = []() -> float { return Style::fontSizeBody
         + Style::spaceXs
         + Style::toggleThumbSizeSm
         + (2.0F * Style::toggleInsetSm)
-        + Style::toggleTravelSm;
+        + Style::toggleTravelSm; };
 
     // Leading slot carrying the concave-corner invert toggle: a corner glyph (labelling the toggle
     // in lieu of a text caption) plus a Small toggle. The slot sizes to its content. Reserve builds
@@ -161,6 +187,23 @@ namespace settings {
 
   } // namespace
 
+  namespace {
+    // A typed row marks connected siblings without retaining pointers across
+    // rebuilds. Complex editors naturally break the chain.
+    class ConnectedSettingRow final : public Flex {
+    public:
+      ConnectedSettingRow(float topRadius, float bottomRadius) : m_topRadius(topRadius) {
+        setDirection(FlexDirection::Vertical);
+        setAlign(FlexAlign::Stretch);
+        setFillWidth(true);
+        joinBottom(bottomRadius);
+      }
+      void joinBottom(float radius) { setRadii(Radii{m_topRadius, m_topRadius, radius, radius}); }
+    private:
+      float m_topRadius;
+    };
+  }
+
   SettingsControlFactory::SettingsControlFactory(SettingsContentContext ctx)
       : m_ctx(std::move(ctx)), m_scale(m_ctx.scale) {}
 
@@ -250,6 +293,7 @@ namespace settings {
     const float scale = m_scale;
     const Config& cfg = m_ctx.config;
     // Range sliders own a second config path (high/critical); both reset and report "override" together.
+    const auto* curveSetting = std::get_if<CurveSetting>(&entry.control);
     const auto* rangeSlider = std::get_if<RangeSliderSetting>(&entry.control);
     const auto* selectSetting = std::get_if<SelectSetting>(&entry.control);
     const bool overridden = ctx.configService != nullptr && settingEntryHasEffectiveOverride(entry, *ctx.configService);
@@ -297,19 +341,24 @@ namespace settings {
     auto actions = ui::row({.align = FlexAlign::Center, .gap = Style::spaceSm * scale});
     if (overridden) {
       actions->addChild(makeOverrideBadge());
-      if (rangeSlider != nullptr) {
+      if (curveSetting != nullptr) {
+        std::vector<std::vector<std::string>> paths(curveSetting->paths.begin(), curveSetting->paths.end());
+        if (!curveSetting->stylePath.empty()) paths.push_back(curveSetting->stylePath);
+        actions->addChild(makeGroupedResetButton(std::move(paths)));
+      } else if (rangeSlider != nullptr) {
         actions->addChild(
             makeGroupedResetButton(std::vector<std::vector<std::string>>{entry.path, rangeSlider->highPath})
         );
-      } else if (selectSetting != nullptr && !selectSetting->linkedPath.empty()) {
-        actions->addChild(
-            makeGroupedResetButton(std::vector<std::vector<std::string>>{entry.path, selectSetting->linkedPath})
-        );
+      } else if (selectSetting != nullptr && (!selectSetting->linkedPath.empty() || !selectSetting->linkedPaths.empty())) {
+        auto paths = selectSetting->linkedPaths;
+        paths.push_back(entry.path);
+        if (!selectSetting->linkedPath.empty()) paths.push_back(selectSetting->linkedPath);
+        actions->addChild(makeGroupedResetButton(paths));
       } else {
         actions->addChild(makeResetButton(entry.path));
       }
     }
-    tagTabFocusKey(*control, joinSettingPath(entry.path));
+    tagTabFocusKey(*control, joinSettingPath(entry.path) + (curveSetting != nullptr ? ".curve" : ""));
     actions->addChild(std::move(control));
 
     auto row = ui::row(
@@ -322,7 +371,59 @@ namespace settings {
         std::move(copy), std::move(actions)
     );
 
-    section.addChild(std::move(row));
+    if (cfg.shell.settingsConnectedRows) {
+      const float outer = Style::scaledRadiusXl(scale);
+      const float inner = std::min(outer, Style::scaledRadius(Style::settingsRowInnerRadius) * scale);
+      auto* previous = section.children().empty() ? nullptr
+          : dynamic_cast<ConnectedSettingRow*>(section.children().back().get());
+      auto connected = std::make_unique<ConnectedSettingRow>(previous != nullptr ? inner : outer, outer);
+      if (previous != nullptr) previous->joinBottom(inner);
+      connected->setMaterialIdentity("surface", "settings-row", "settings");
+      connected->setSurfaceRelief(0.0F);
+      connected->setFill(colorSpecFromRole(ColorRole::SurfaceVariant));
+      connected->setPadding(Style::settingsRowPadding * scale);
+      connected->clearBorder();
+      row->setPadding(0.0F);
+      connected->addChild(std::move(row));
+      section.setGap(Style::settingsRowGap * scale);
+      section.addChild(std::move(connected));
+    } else {
+      section.addChild(std::move(row));
+    }
+  }
+
+  std::unique_ptr<Node> SettingsControlFactory::makeCurve(const CurveSetting& setting) {
+    auto editor = std::make_unique<BezierEditor>();
+    editor->setScale(m_scale);
+    editor->setCurve(setting.value);
+    auto commit = std::make_shared<CurveCommitState>(CurveCommitState{
+        .setting = setting,
+        .setOverrides = m_ctx.setOverrides,
+    });
+    editor->setOnChanged([commit, interaction = m_ctx.setInteractiveEdit](BezierEditor::Curve curve) {
+      if (interaction) interaction(true);
+      commit->pending = curve;
+      if (commit->queued) return;
+      commit->queued = true;
+      DeferredCall::callLater([weak = std::weak_ptr<CurveCommitState>(commit)] {
+        const auto state = weak.lock();
+        if (!state) return; // Editor was rebuilt or closed before the queued preview.
+        state->queued = false;
+        commitPendingCurve(state);
+      });
+    });
+    editor->setOnEditEnd([commit, interaction = m_ctx.setInteractiveEdit] {
+      // Persist the exact release/cancel value before allowing a deferred settings rebuild.
+      commitPendingCurve(commit);
+      if (interaction) interaction(false);
+    });
+    return editor;
+  }
+  std::unique_ptr<Node> SettingsControlFactory::makeSpringResponse(double mass, double stiffness, double dampening) {
+    auto preview = std::make_unique<SpringResponsePreview>();
+    preview->setScale(m_scale);
+    preview->setParameters({static_cast<float>(mass), static_cast<float>(stiffness), static_cast<float>(dampening)});
+    return preview;
   }
 
   std::unique_ptr<Toggle> SettingsControlFactory::makeToggle(
@@ -499,7 +600,7 @@ namespace settings {
     // Narrow the track by the leading slot so the cluster keeps its normal total width.
     const float sliderWidth = (invertSlot == SliderSetting::InvertSlot::None
                                    ? Style::sliderDefaultWidth
-                                   : Style::sliderDefaultWidth - kInvertSlotContentWidth - Style::spaceSm)
+                                   : Style::sliderDefaultWidth - kInvertSlotContentWidth() - Style::spaceSm)
         * scale;
 
     Input* valueInputPtr = nullptr;
@@ -560,6 +661,14 @@ namespace settings {
       commitValue = [commit, inverted](double magValue) { commit(*inverted ? -magValue : magValue); };
     }
 
+    // Pointer drags preview immediately. Programmatic reconciliation only updates
+    // the display; keyboard/wheel completion and explicit text submission retain
+    // their existing commit path. The window defers rebuilds while input is captured.
+    slider->setOnValueChanged([commitValue, sliderPtr, valueInputPtr, integerValue](double next) {
+      valueInputPtr->setInvalid(false);
+      valueInputPtr->setValue(formatSliderValue(next, integerValue));
+      if (sliderPtr->dragging()) commitValue(next);
+    });
     slider->setOnDragEnd([commitValue, sliderPtr]() { commitValue(sliderPtr->value()); });
 
     const auto commitInputText = [commitValue, sliderPtr, valueInputPtr, minValue, maxValue,

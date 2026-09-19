@@ -1,12 +1,12 @@
 # Standalone project: meson setup BUILD_DIR /path/to/noctalia/src/material
 # The shell can include the headers directly; do not subdir() this project.
 project('noctalia-material-core', 'cpp',
-  version: '5.0.0',
+  version: '7.0.0',
   license: ['MIT', 'BSD-3-Clause'],
   default_options: ['cpp_std=c++23', 'cpp_extensions=false', 'warning_level=3'],
 )
 
-material_headers = files('material.h', 'shader_source.h', 'fields.def', 'scene_descriptor.h', 'scene_transport.h', 'shape_source.h', 'shape_geometry.h')
+material_headers = files('material.h', 'shader_source.h', 'fields.def', 'custom_effect_resource.h', 'custom_effect_lease.h', 'scene_descriptor.h', 'scene_transport.h', 'shape_source.h', 'shape_geometry.h')
 install_headers(material_headers, subdir: 'noctalia/material')
 install_data('LICENSE', 'LIQUID-GLASS-LICENSE', 'NEUMORPHISM-LICENSE',
   install_dir: get_option('datadir') / 'licenses' / 'noctalia-material-core')
@@ -22,7 +22,7 @@ pkgconfig.generate(
   description: 'Palette-independent material parameters and shared GLSL primitives',
   version: meson.project_version(),
   subdirs: 'noctalia',
-  variables: ['material_schema_version=5', 'protocol_dir=${prefix}/' + get_option('datadir') / 'noctalia-material-core' / 'protocol'],
+  variables: ['material_schema_version=6', 'protocol_dir=${prefix}/' + get_option('datadir') / 'noctalia-material-core' / 'protocol'],
 )
 
 if get_option('tests')
@@ -37,4 +37,10 @@ if get_option('tests')
   transport_test = executable('material-scene-transport-test', 'tests/scene_transport_test.cpp',
     include_directories: include_directories('.'), install: false)
   test('material-scene-transport', transport_test)
+  effect_resource_test = executable('material-custom-effect-resource-test', 'tests/custom_effect_resource_test.cpp',
+    include_directories: include_directories('.'), install: false)
+  test('material-custom-effect-resource', effect_resource_test)
+  effect_lease_test = executable('material-custom-effect-lease-test', 'tests/custom_effect_lease_test.cpp',
+    include_directories: include_directories('.'), install: false)
+  test('material-custom-effect-lease', effect_lease_test)
 endif

@@ -36,6 +36,8 @@ public:
   [[nodiscard]] bool dragging() const noexcept;
 
 private:
+  Signal<>::ScopedConnection m_paletteConn;
+  Signal<>::ScopedConnection m_materialConn;
   enum class ActiveThumb : std::uint8_t { None, Low, High };
 
   void doLayout(Renderer& renderer) override;

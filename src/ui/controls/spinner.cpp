@@ -1,6 +1,7 @@
 #include "ui/controls/spinner.h"
 
 #include "render/animation/animation_manager.h"
+#include "render/animation/motion_service.h"
 #include "render/scene/spinner_node.h"
 #include "ui/palette.h"
 
@@ -18,6 +19,15 @@ namespace {
 
 Spinner::Spinner() {
   m_paletteConn = paletteChanged().connect([this] { applyPalette(); });
+  m_motionConn = MotionService::instance().changed().connect([this] {
+    if (!m_spinning || animationManager() == nullptr) return;
+    if (!MotionService::instance().enabled()) {
+      if (m_animId != 0) animationManager()->cancel(m_animId);
+      m_animId = 0;
+      return;
+    }
+    if (m_animId == 0) startLoop();
+  });
   auto node = std::make_unique<SpinnerNode>();
   node->setThickness(kDefaultThickness);
   m_spinnerNode = static_cast<SpinnerNode*>(addChild(std::move(node)));
@@ -76,7 +86,7 @@ void Spinner::applyPalette() {
 }
 
 void Spinner::startLoop() {
-  if (animationManager() == nullptr || !m_spinning) {
+  if (animationManager() == nullptr || !m_spinning || !MotionService::instance().enabled()) {
     return;
   }
 

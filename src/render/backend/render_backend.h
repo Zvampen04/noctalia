@@ -6,8 +6,11 @@
 #include "render/core/texture_handle.h"
 
 #include <cstdint>
+#include <functional>
 #include <memory>
+#include <optional>
 #include <span>
+#include <string_view>
 
 class GlSharedContext;
 class RenderTarget;
@@ -138,6 +141,14 @@ public:
       float surfaceWidth, float surfaceHeight, float width, float height, const RoundedRectStyle& style,
       const Mat3& transform
   ) = 0;
+  [[nodiscard]] virtual std::optional<CustomEffectCompileStatus>
+  customEffectStatus(std::string_view stableId) const = 0;
+  // Dispatched after the frame, never from shader compilation inside drawRect.
+  // The string_view is valid only for the duration of the callback.
+  virtual void setCustomEffectStatusChanged(std::function<void(std::string_view)> callback) = 0;
+  virtual void beginCustomEffectConsumerFrame(const void* surfaceOwner) = 0;
+  virtual void endCustomEffectConsumerFrame() = 0;
+  virtual void removeCustomEffectConsumerSurface(const void* surfaceOwner) = 0;
   virtual void drawImage(const RenderImageDraw& draw) = 0;
   virtual void drawGlyph(const RenderGlyphDraw& draw) = 0;
   virtual void drawSpinner(

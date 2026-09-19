@@ -7,7 +7,7 @@
 }:
 stdenv.mkDerivation {
   pname = "noctalia-material-core";
-  version = "5.0.0";
+  version = "7.0.0";
   src = lib.cleanSource ../src/material;
   nativeBuildInputs = [
     meson

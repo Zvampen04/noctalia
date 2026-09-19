@@ -25,16 +25,16 @@ namespace {
 
   // Graph cards run tighter than the default section card so the plot fills more of the card,
   // but the title gets a touch more breathing room above it.
-  constexpr float kGraphCardPadTop = Style::spaceSm;
-  constexpr float kGraphCardPadV = Style::spaceXs;
-  constexpr float kGraphCardPadH = Style::spaceMd;
+  const auto kGraphCardPadTop = []() -> float { return Style::spaceSm; };
+  const auto kGraphCardPadV = []() -> float { return Style::spaceXs; };
+  const auto kGraphCardPadH = []() -> float { return Style::spaceMd; };
 
   // Section card style with reduced padding, shared by the four graph cards.
   void applyGraphCardStyle(Flex& section, float scale, float opacity) {
     control_center::applySectionCardStyle(section, scale, opacity);
     section.setGap(Style::spaceXs * scale);
     section.setPadding(
-        kGraphCardPadTop * scale, kGraphCardPadH * scale, kGraphCardPadV * scale, kGraphCardPadH * scale
+        kGraphCardPadTop() * scale, kGraphCardPadH() * scale, kGraphCardPadV() * scale, kGraphCardPadH() * scale
     );
   }
 
@@ -525,7 +525,7 @@ void SystemTab::doLayout(Renderer& renderer, float contentWidth, float bodyHeigh
   m_root->setSize(contentWidth, bodyHeight);
   m_root->layout(renderer);
 
-  const float cardPadH = kGraphCardPadH * sc * 2.0F;
+  const float cardPadH = kGraphCardPadH() * sc * 2.0F;
 
   auto sizeGraph = [&](Graph* g, Flex* card, Flex* legend) {
     if (g == nullptr || card == nullptr || !card->visible()) {
@@ -533,7 +533,7 @@ void SystemTab::doLayout(Renderer& renderer, float contentWidth, float bodyHeigh
     }
     const float graphW = std::max(0.0F, card->width() - cardPadH);
     const float usedAbove = g->y() - card->y();
-    const float bottomPad = kGraphCardPadV * sc;
+    const float bottomPad = kGraphCardPadV() * sc;
     // Reserve room for the legend that now sits below the graph (plus the card gap above it).
     float usedBelow = bottomPad;
     if (legend != nullptr && legend->visible() && legend->height() > 0.0F) {

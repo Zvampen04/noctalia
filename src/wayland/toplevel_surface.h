@@ -30,6 +30,7 @@ public:
   bool initialize(wl_output* output, ToplevelSurfaceConfig config);
 
   void setClosedCallback(std::function<void()> callback);
+  void setCloseRequestedCallback(std::function<bool()> callback);
   void setMinSize(std::uint32_t minWidth, std::uint32_t minHeight);
   void beginMove(std::uint32_t serial);
 
@@ -50,6 +51,7 @@ private:
   xdg_surface* m_xdgSurface = nullptr;
   xdg_toplevel* m_toplevel = nullptr;
   std::function<void()> m_closedCallback;
+  std::function<bool()> m_closeRequestedCallback;
   std::uint32_t m_pendingWidth = 0;
   std::uint32_t m_pendingHeight = 0;
   std::int32_t m_lastToplevelWidth = 0;

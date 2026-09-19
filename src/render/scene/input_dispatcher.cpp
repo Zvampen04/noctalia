@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <optional>
 #include <string>
 #include <utility>
@@ -429,6 +430,50 @@ void InputDispatcher::keyEvent(
   if (m_focusedArea != nullptr) {
     m_focusedArea->dispatchKey(sym, utf32, modifiers, pressed, preedit);
   }
+}
+
+bool InputDispatcher::moveSpatialFocus(int dx, int dy) {
+  pruneDetachedAreas();
+  std::vector<InputArea*> order;
+  collectTabFocusTargets(m_sceneRoot, order);
+  if (order.empty()) return false;
+
+  auto* origin = m_focusedArea;
+  if (origin == nullptr && isTabFocusTarget(m_hoveredArea)) origin = m_hoveredArea;
+  if (origin == nullptr) {
+    setFocus(order.front());
+    return true;
+  }
+
+  float ox = 0.0F, oy = 0.0F;
+  float originLeft = 0.0F, originTop = 0.0F, originRight = 0.0F, originBottom = 0.0F;
+  Node::mapToScene(origin, origin->width() / 2.0F, origin->height() / 2.0F, ox, oy);
+  Node::mapToScene(origin, 0.0F, 0.0F, originLeft, originTop);
+  Node::mapToScene(origin, origin->width(), origin->height(), originRight, originBottom);
+
+  InputArea* best = nullptr;
+  double score = std::numeric_limits<double>::max();
+  for (auto* area : order) {
+    if (area == origin) continue;
+    float x = 0.0F, y = 0.0F;
+    Node::mapToScene(area, area->width() / 2.0F, area->height() / 2.0F, x, y);
+    const double along = (x - ox) * dx + (y - oy) * dy;
+    if (along <= 1.0) continue;
+    const double across = std::abs((x - ox) * dy - (y - oy) * dx);
+    float left = 0.0F, top = 0.0F, right = 0.0F, bottom = 0.0F;
+    Node::mapToScene(area, 0.0F, 0.0F, left, top);
+    Node::mapToScene(area, area->width(), area->height(), right, bottom);
+    const bool aligned = dx != 0 ? std::min(bottom, originBottom) > std::max(top, originTop) + 1.0F
+                                 : std::min(right, originRight) > std::max(left, originLeft) + 1.0F;
+    const double candidate = (aligned ? 0.0 : 1.0e12) + along * along + across * across * 4.0;
+    if (candidate < score) {
+      score = candidate;
+      best = area;
+    }
+  }
+  if (best == nullptr) return false;
+  setFocus(best);
+  return true;
 }
 
 bool InputDispatcher::cycleTabFocus(bool reverse) {

@@ -7,6 +7,7 @@
 #include "shell/control_center/shortcut_services.h"
 #include "shell/control_center/tab.h"
 #include "ui/signal.h"
+#include "ui/material_target_catalog.h"
 
 #include <chrono>
 #include <cstdint>
@@ -41,6 +42,7 @@ struct ShortcutPad {
   Button* button = nullptr;
   Glyph* glyph = nullptr;
   Label* label = nullptr;
+  Style::MaterialTargetRegistration materialRegistration;
 };
 
 class HomeTab : public Tab {

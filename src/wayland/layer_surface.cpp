@@ -195,6 +195,26 @@ void LayerSurface::requestSize(std::uint32_t width, std::uint32_t height) {
   wl_surface_commit(m_surface);
 }
 
+void LayerSurface::requestPlacement(std::uint32_t anchor, std::uint32_t width, std::uint32_t height,
+                                   std::int32_t top, std::int32_t right, std::int32_t bottom, std::int32_t left) {
+  width = std::max(1U, width);
+  height = std::max(1U, height);
+  if (m_config.anchor == anchor && m_config.width == width && m_config.height == height &&
+      m_config.marginTop == top && m_config.marginRight == right &&
+      m_config.marginBottom == bottom && m_config.marginLeft == left) return;
+  m_config.anchor = anchor;
+  m_config.width = m_config.defaultWidth = width;
+  m_config.height = m_config.defaultHeight = height;
+  m_config.marginTop = top; m_config.marginRight = right;
+  m_config.marginBottom = bottom; m_config.marginLeft = left;
+  if (m_layerSurface == nullptr || m_surface == nullptr) return;
+  zwlr_layer_surface_v1_set_anchor(m_layerSurface, anchor);
+  zwlr_layer_surface_v1_set_size(m_layerSurface, width, height);
+  zwlr_layer_surface_v1_set_margin(m_layerSurface, top, right, bottom, left);
+  traceLayerCommit(*this, m_config, "request-placement");
+  wl_surface_commit(m_surface);
+}
+
 void LayerSurface::setLayer(LayerShellLayer layer) {
   if (m_config.layer == layer) {
     return;

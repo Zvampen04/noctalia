@@ -5,9 +5,11 @@
 #include "render/scene/node.h"
 #include "ui/signal.h"
 #include "ui/style.h"
+#include "ui/caret_settings.h"
 #include "ui/text_input_client.h"
 
 #include <chrono>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -75,6 +77,9 @@ public:
   /// Submit invokes onSubmit only when this matcher returns true (Application wires ConfigService validate keybinds).
   static void setValidateKeyMatcher(std::function<bool(std::uint32_t sym, std::uint32_t modifiers)> matcher) noexcept;
   static void setPasswordMaskStyle(PasswordMaskStyle style) noexcept;
+  /// Shared native text-caret policy. Changes update retained inputs immediately.
+  static void setCaretSettings(CaretSettings settings);
+  [[nodiscard]] static const CaretSettings& caretSettings() noexcept;
   void clearSelection();
 
   [[nodiscard]] const std::string& value() const noexcept { return m_value; }
@@ -88,6 +93,12 @@ public:
   void textInputDeactivated(TextInputService& service) override;
 
 private:
+  friend struct InputCaretTestAccess;
+  void updateCaretGeometry(float x, float y, float height, float cellX, float cellWidth);
+  void snapCaretMotion();
+  void applyCaretStyle();
+  void queueCaretGeometryNotification();
+  [[nodiscard]] std::array<std::int32_t, 4> caretProtocolRect() const;
   enum class EditCoalesceKind : std::uint8_t {
     None = 0,
     Typing = 1,
@@ -218,6 +229,23 @@ private:
   float m_goalCaretX = -1.0F;
   bool m_cursorBlinkVisible = true;
   Timer m_cursorBlinkTimer;
+  struct CaretRect {
+    float x = 0.0F;
+    float y = 0.0F;
+    float width = 1.25F;
+    float height = 1.0F;
+  };
+  // Protocol geometry is always the immediate insertion point, never animated paint.
+  CaretRect m_caretTarget;
+  CaretRect m_caretPaintTarget;
+  bool m_caretTargetValid = false;
+  bool m_caretGeometryNotifyQueued = false;
+  bool m_caretGeometryNotified = false;
+  std::array<std::int32_t, 4> m_lastCaretProtocolRect{};
+  std::size_t m_caretTargetByte = 0;
+  float m_caretScrollX = 0.0F;
+  float m_caretScrollY = 0.0F;
+  std::uint32_t m_caretAnimId = 0;
 
   std::function<void(const std::string&)> m_onChange;
   std::function<void(const std::string&)> m_onSubmit;
@@ -256,6 +284,9 @@ private:
   std::size_t m_pointerSelectPivotStart = 0;
   std::size_t m_pointerSelectPivotEnd = 0;
   Signal<>::ScopedConnection m_paletteConn;
+  Signal<>::ScopedConnection m_materialConn;
+  Signal<>::ScopedConnection m_motionConn;
+  Signal<>::ScopedConnection m_caretSettingsConn;
   Signal<>::ScopedConnection m_inputBordersConn;
 
   // Detects synchronous self-destruction from user callbacks (onSubmit/onKeyEvent

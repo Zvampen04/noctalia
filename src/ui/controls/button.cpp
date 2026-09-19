@@ -2,12 +2,14 @@
 
 #include "core/input/keybind_matcher.h"
 #include "render/animation/animation_manager.h"
+#include "render/animation/motion_service.h"
 #include "render/core/renderer.h"
 #include "render/scene/input_area.h"
 #include "ui/controls/glyph.h"
 #include "ui/controls/label.h"
 #include "ui/palette.h"
 #include "ui/style.h"
+#include "ui/control_settings_palette.h"
 
 #include <cmath>
 #include <memory>
@@ -181,6 +183,7 @@ namespace {
 Button::ButtonPalette Button::defaultPalette(ButtonVariant variant) { return paletteForVariant(variant); }
 
 Button::Button() {
+  setMaterialIdentity("control", "button");
   setAlign(FlexAlign::Center);
   setMinHeight(Style::controlHeightSm);
   setPadding(Style::spaceSm);
@@ -246,6 +249,14 @@ Button::Button() {
   m_inputArea->setFrameSize(width(), height());
 
   applyVariant();
+  m_surfaceMaterialConn = Style::surfaceMaterialChanged().connect([this] { applyVisualState(); });
+  m_motionConn = MotionService::instance().changed().connect([this] {
+    if (MotionService::instance().enabled()) return;
+    if (m_animId && animationManager()) animationManager()->cancel(m_animId);
+    m_animId = 0;
+    applyVisualState();
+    applyColors(m_targetBg, m_targetBorder, m_targetLabel);
+  });
   m_paletteConn = paletteChanged().connect([this] {
     // Re-derive color slots from the (possibly updated) palette and push
     // them immediately if no hover/press animation is in flight. Otherwise
@@ -645,10 +656,36 @@ void Button::resolveVisualStateColors(Color& targetBg, Color& targetBorder, Colo
 }
 
 void Button::applyVisualState() {
+  const auto& controls = Style::controls();
+  const bool raised = controls.button_variant == Style::ButtonTreatment::RaisedInset;
+  const float relief = m_enabled ? ((m_pressedVisual || pressed() || m_selected)
+      ? (raised ? controls.button_pressed_relief : -1.0F)
+      : (raised ? controls.button_rest_relief : 1.0F)) : 0.35F;
+  if (raised && animationManager() && MotionService::instance().enabled() && relief != m_targetRelief) {
+    if (m_reliefAnimId) animationManager()->cancel(m_reliefAnimId);
+    m_targetRelief = relief;
+    m_reliefAnimId = animationManager()->animate(m_displayRelief, relief, controls.button_transition_ms,
+        Easing::EaseOutCubic, [this](float value) { m_displayRelief = value; setSurfaceRelief(value); },
+        [this] { m_reliefAnimId = 0; }, this);
+    markPaintDirty();
+  } else if (!raised || !animationManager() || !MotionService::instance().enabled()) {
+    if (m_reliefAnimId && animationManager()) animationManager()->cancel(m_reliefAnimId);
+    m_reliefAnimId = 0; m_targetRelief = m_displayRelief = relief;
+    setSurfaceRelief(relief);
+  }
   Color targetBg;
   Color targetBorder;
   Color targetLabel;
   resolveVisualStateColors(targetBg, targetBorder, targetLabel);
+  if (raised && !m_customPalette && (m_variant == ButtonVariant::Default || m_variant == ButtonVariant::Ghost || m_variant == ButtonVariant::Outline)) {
+    targetBg = colorForRole(controlColorRole(controls.button_face_role));
+    targetLabel = colorForRole(ColorRole::OnSurface);
+    if (!m_enabled) { targetBg.a *= 0.55F; targetLabel.a *= 0.55F; }
+  }
+  if (!m_customPalette && Style::neumorphicSurfaces() && targetBg.a < 0.5F) {
+    targetBg = resolveColorSpec(colorSpecFromRole(ColorRole::Surface));
+    targetLabel = resolveColorSpec(colorSpecFromRole(ColorRole::OnSurface));
+  }
 
   if (!m_visualStateInitialized) {
     m_targetBg = targetBg;
@@ -662,7 +699,9 @@ void Button::applyVisualState() {
     return;
   }
 
-  if (animationManager() == nullptr) {
+  if (animationManager() == nullptr || !MotionService::instance().enabled()) {
+    if (m_animId && animationManager()) animationManager()->cancel(m_animId);
+    m_animId = 0;
     applyColors(targetBg, targetBorder, targetLabel);
     m_targetBg = targetBg;
     m_targetBorder = targetBorder;
@@ -683,7 +722,7 @@ void Button::applyVisualState() {
   }
 
   m_animId = animationManager()->animate(
-      0.0F, 1.0F, Style::animFast, Easing::EaseOutCubic,
+      0.0F, 1.0F, raised ? controls.button_transition_ms : static_cast<float>(Style::animFast), Easing::EaseOutCubic,
       [this](float t) {
         applyColors(
             lerpColor(m_fromBg, m_targetBg, t), lerpColor(m_fromBorder, m_targetBorder, t),

@@ -2,6 +2,7 @@
 
 #include "core/log.h"
 #include "core/ui_phase.h"
+#include "material/shape_geometry.h"
 #include "ext-background-effect-v1-client-protocol.h"
 #include "fractional-scale-v1-client-protocol.h"
 #include "render/animation/animation_manager.h"
@@ -492,6 +493,7 @@ void Surface::setSceneRoot(Node* root) {
     return;
   }
 
+  m_sceneRoot->setMaterialBackdropLocal(!m_externalMaterialAllowed);
   const std::weak_ptr<InvalidationToken> token = m_invalidationToken;
   m_sceneRoot->setInvalidationCallback([this, token](NodeInvalidation invalidation) {
     if (token.expired()) {
@@ -515,6 +517,7 @@ void Surface::setRenderContext(RenderContext* ctx) {
     return;
   }
 
+  if (m_renderContext != nullptr) m_renderContext->removeCustomEffectConsumerSurface(m_renderTarget);
   m_renderContext = ctx;
   m_renderTarget.destroy();
 
@@ -650,6 +653,7 @@ void Surface::setInputRegion(const std::vector<InputRect>& rects) {
 }
 
 bool Surface::prepareBlurEffect() {
+  if (!m_externalMaterialAllowed) return false;
   if (m_surface == nullptr) {
     traceSurfaceEvent(*this, "blur-effect-skip-no-surface");
     return false;
@@ -725,7 +729,7 @@ void Surface::setBlurRegion(const std::vector<InputRect>& rects) {
 }
 
 std::vector<InputRect> Surface::tessellateRoundedRect(
-    int x, int y, int w, int h, float tlRadius, float trRadius, float brRadius, float blRadius, int stripPx
+    int x, int y, int w, int h, float tlRadius, float trRadius, float brRadius, float blRadius, int stripPx, float power
 ) {
   std::vector<InputRect> out;
   if (w <= 0 || h <= 0) {
@@ -738,9 +742,7 @@ std::vector<InputRect> Surface::tessellateRoundedRect(
   const float halfH = static_cast<float>(h) * 0.5F;
   const float maxRadius = std::min(halfW, halfH);
   const auto clampR = [maxRadius](float r) {
-    if (r < 0.0F)
-      return 0.0F;
-    return std::min(r, maxRadius);
+    return noctalia::material::shape::clampRadius(r, maxRadius);
   };
   const float tl = clampR(tlRadius);
   const float tr = clampR(trRadius);
@@ -752,13 +754,14 @@ std::vector<InputRect> Surface::tessellateRoundedRect(
   const int middleY = y + topBand;
   const int middleH = h - topBand - bottomBand;
 
-  const auto inset = [](float r, float distFromCornerEdge) -> float {
+  power = noctalia::material::shape::clampPower(power);
+  const auto inset = [power](float r, float distFromCornerEdge) -> float {
     if (r <= 0.0F)
       return 0.0F;
     const float dy = r - distFromCornerEdge;
     if (dy <= 0.0F)
       return 0.0F;
-    const float ry = std::sqrt(std::max(0.0F, r * r - dy * dy));
+    const float ry = noctalia::material::shape::quadrantExtent(r, dy, power);
     return r - ry;
   };
 
@@ -767,7 +770,8 @@ std::vector<InputRect> Surface::tessellateRoundedRect(
   // Top corner band: strips run from y..y+topBand, distFromTop grows downward.
   for (int row = 0; row < topBand; row += stripPx) {
     const int rowH = std::min(stripPx, topBand - row);
-    // Use the strip's bottom edge for the inset sample so the polygon stays inside the curve.
+    // Preserve the legacy bottom-edge sample. Quantization approximates the
+    // corner within one strip vertically; it is not exact subpixel coverage.
     const auto sample = static_cast<float>(row + rowH);
     const float leftInset = inset(tl, sample);
     const float rightInset = inset(tr, sample);
@@ -803,8 +807,9 @@ std::vector<InputRect> Surface::tessellateRoundedRect(
 
 std::vector<InputRect> Surface::tessellateShape(
     int x, int y, int w, int h, const CornerShapes& corners, const RectInsets& logicalInset, const Radii& radii,
-    int stripPx
+    int stripPx, float power
 ) {
+  power = noctalia::material::shape::clampPower(power);
   std::vector<InputRect> out;
   if (w <= 0 || h <= 0) {
     return out;
@@ -823,7 +828,7 @@ std::vector<InputRect> Surface::tessellateShape(
       && logicalInset.top <= 0.0F
       && logicalInset.right <= 0.0F
       && logicalInset.bottom <= 0.0F) {
-    return tessellateRoundedRect(x, y, w, h, radii.tl, radii.tr, radii.br, radii.bl, stripPx);
+    return tessellateRoundedRect(x, y, w, h, radii.tl, radii.tr, radii.br, radii.bl, stripPx, power);
   }
 
   // (x, y, w, h) is the body rect. Expand outward by logicalInset to obtain the
@@ -847,18 +852,18 @@ std::vector<InputRect> Surface::tessellateShape(
   const float bodyW = bodyMaxX - bodyMinX;
   const float bodyH = bodyMaxY - bodyMinY;
   const float maxR = std::max(0.0F, std::min(bodyW, bodyH) * 0.5F);
-  const auto clampR = [maxR](float r) { return std::clamp(r, 0.0F, maxR); };
+  const auto clampR = [maxR](float r) { return noctalia::material::shape::clampRadius(r, maxR); };
   const float rTl = clampR(radii.tl);
   const float rTr = clampR(radii.tr);
   const float rBr = clampR(radii.br);
   const float rBl = clampR(radii.bl);
 
-  const auto extent = [](float r, float dy) -> float {
-    if (r <= 0.0F) {
-      return 0.0F;
-    }
-    const float d2 = r * r - dy * dy;
-    return d2 > 0.0F ? std::sqrt(d2) : 0.0F;
+  const auto extent = [power](float r, float dy) -> float {
+    return noctalia::material::shape::quadrantExtent(r, dy, power);
+  };
+  const auto insetChord = [power, &extent](float r, float dy) {
+    // Keep the original circular arithmetic at the outside concave margin.
+    return power == 2.F ? std::sqrt(std::max(0.F, dy * (2.F * r - dy))) : extent(r, r - dy);
   };
 
   // Per-row coverage of the shape as a set of [left, right] segments (clipped to
@@ -880,24 +885,24 @@ std::vector<InputRect> Surface::tessellateShape(
     if (yf < bodyMinY) {
       const float dy = bodyMinY - yf;
       if (corners.tl == CornerShape::Concave && rTl > 0.0F && dy <= rTl) {
-        const float chord = std::sqrt(std::max(0.0F, dy * (2.0F * rTl - dy)));
-        pushSeg(bodyMinX, bodyMinX + rTl - chord);
+        const float chord = insetChord(rTl, dy);
+        pushSeg(bodyMinX - rTl, bodyMinX + rTl - chord);
       }
       if (corners.tr == CornerShape::Concave && rTr > 0.0F && dy <= rTr) {
-        const float chord = std::sqrt(std::max(0.0F, dy * (2.0F * rTr - dy)));
-        pushSeg(bodyMaxX - rTr + chord, bodyMaxX);
+        const float chord = insetChord(rTr, dy);
+        pushSeg(bodyMaxX - rTr + chord, bodyMaxX + rTr);
       }
       return segs;
     }
     if (yf > bodyMaxY) {
       const float dy = yf - bodyMaxY;
       if (corners.bl == CornerShape::Concave && rBl > 0.0F && dy <= rBl) {
-        const float chord = std::sqrt(std::max(0.0F, dy * (2.0F * rBl - dy)));
-        pushSeg(bodyMinX, bodyMinX + rBl - chord);
+        const float chord = insetChord(rBl, dy);
+        pushSeg(bodyMinX - rBl, bodyMinX + rBl - chord);
       }
       if (corners.br == CornerShape::Concave && rBr > 0.0F && dy <= rBr) {
-        const float chord = std::sqrt(std::max(0.0F, dy * (2.0F * rBr - dy)));
-        pushSeg(bodyMaxX - rBr + chord, bodyMaxX);
+        const float chord = insetChord(rBr, dy);
+        pushSeg(bodyMaxX - rBr + chord, bodyMaxX + rBr);
       }
       return segs;
     }
@@ -990,157 +995,163 @@ std::vector<InputRect> Surface::tessellateShape(
   return out;
 }
 
-std::vector<InputRect> Surface::tessellateRotatedRoundedRect(
-    float centerX, float centerY, float width, float height, float radius, float rotationRad, int stripPx
+std::vector<InputRect> Surface::tessellateSegmentContour(
+    int x, int y, int w, int h, const SegmentContour& contour, int stripPx
 ) {
-  constexpr float kRotationEpsilon = 0.001F;
-  if (std::abs(rotationRad) < kRotationEpsilon) {
+  std::vector<InputRect> out;
+  if (w <= 0 || h <= 0) return out;
+  if (contour.kind == SegmentContourKind::None) return {{x, y, w, h}};
+  stripPx = std::max(1, stripPx);
+  const int mainExtent = contour.vertical ? h : w;
+  const int crossExtent = contour.vertical ? w : h;
+  out.reserve(static_cast<std::size_t>((crossExtent + stripPx - 1) / stripPx));
+  for (int cross = 0; cross < crossExtent; cross += stripPx) {
+    const int crossSize = std::min(stripPx, crossExtent - cross);
+    const auto [nearBegin, nearEnd] = segment_contour::mainSpan(
+        static_cast<float>(mainExtent), static_cast<float>(crossExtent), static_cast<float>(cross),
+        contour.kind, contour.depth
+    );
+    const auto [farBegin, farEnd] = segment_contour::mainSpan(
+        static_cast<float>(mainExtent), static_cast<float>(crossExtent), static_cast<float>(cross + crossSize),
+        contour.kind, contour.depth
+    );
+    // Cover the union of both linear endpoints. This is exact for a straight
+    // contour over the strip and prevents an integer-slope crossing from
+    // leaving an unblurred or non-input pixel at its near edge.
+    const int mainStart = static_cast<int>(std::floor(std::min(nearBegin, farBegin)));
+    const int mainEnd = static_cast<int>(std::ceil(std::max(nearEnd, farEnd)));
+    if (mainEnd <= mainStart) continue;
+    if (contour.vertical) out.push_back({x + cross, y + mainStart, crossSize, mainEnd - mainStart});
+    else out.push_back({x + mainStart, y + cross, mainEnd - mainStart, crossSize});
+  }
+  return out;
+}
+
+std::vector<InputRect> Surface::tessellateRotatedRoundedRect(
+    float centerX, float centerY, float width, float height, float radius, float rotationRad, int stripPx, float power
+) {
+  if (!std::isfinite(centerX) || !std::isfinite(centerY) || !std::isfinite(width)
+      || !std::isfinite(height) || !std::isfinite(rotationRad) || width <= 0.F || height <= 0.F) return {};
+  power = noctalia::material::shape::clampPower(power);
+  if (rotationRad == 0.F) {
     const int ix = static_cast<int>(std::lround(centerX - width * 0.5F));
     const int iy = static_cast<int>(std::lround(centerY - height * 0.5F));
     const int iw = static_cast<int>(std::lround(width));
     const int ih = static_cast<int>(std::lround(height));
-    return tessellateRoundedRect(ix, iy, iw, ih, radius, stripPx);
+    return tessellateRoundedRect(ix, iy, iw, ih, radius, stripPx, power);
   }
 
-  const float cosA = std::cos(rotationRad);
-  const float sinA = std::sin(rotationRad);
-  const float halfW = width * 0.5F;
-  const float halfH = height * 0.5F;
-  const float r = std::clamp(radius, 0.0F, std::min(halfW, halfH));
-
-  const float aabbH = std::abs(width * sinA) + std::abs(height * cosA);
-  const int aabbIH = static_cast<int>(std::ceil(aabbH));
-  const float aabbTop = centerY - aabbH * 0.5F;
-
+  const double cosA = std::cos(static_cast<double>(rotationRad));
+  const double sinA = std::sin(static_cast<double>(rotationRad));
+  const double halfW = width * .5;
+  const double halfH = height * .5;
+  const double r = noctalia::material::shape::clampRadius(radius, static_cast<float>(std::min(halfW, halfH)));
+  const double extentX = std::abs(halfW * cosA) + std::abs(halfH * sinA);
+  const double extentY = std::abs(halfW * sinA) + std::abs(halfH * cosA);
+  const int firstY = static_cast<int>(std::floor(centerY - extentY));
+  const int lastY = static_cast<int>(std::ceil(centerY + extentY));
   stripPx = std::max(stripPx, 1);
 
-  // Corner inset in local space: how far the rounded corner narrows the rect
-  // at a given distance from the edge.
-  const auto cornerInset = [](float cr, float distFromEdge) -> float {
-    if (cr <= 0.0F || distFromEdge >= cr) {
-      return 0.0F;
-    }
-    const float dy = cr - distFromEdge;
-    return cr - std::sqrt(std::max(0.0F, cr * cr - dy * dy));
+  const auto powered = [power](double value) {
+    const double squared = value * value;
+    if (power == 2.F) return squared;
+    if (power == 4.F) return squared * squared;
+    if (power == 10.F) { const double fourth = squared * squared; return fourth * fourth * squared; }
+    return std::pow(value, static_cast<double>(power));
   };
-
-  // For a given local-space Y (origin at rect center), compute the left and
-  // right X extents of the rounded rect.
-  const auto localExtents = [&](float ly) -> std::pair<float, float> {
-    if (ly < -halfH || ly > halfH) {
-      return {0.0F, 0.0F};
+  const auto scanline = [&](double y) -> std::optional<std::pair<double, double>> {
+    const double dy = y - centerY;
+    double left = -extentX;
+    double right = extentX;
+    const auto clip = [&](double coefficient, double offset, double half) {
+      if (std::abs(coefficient) < 1e-12) return std::abs(offset) <= half;
+      double a = (-half - offset) / coefficient;
+      double b = (half - offset) / coefficient;
+      if (a > b) std::swap(a, b);
+      left = std::max(left, a);
+      right = std::min(right, b);
+      return left < right;
+    };
+    if (!clip(cosA, sinA * dy, halfW) || !clip(-sinA, cosA * dy, halfH)) return std::nullopt;
+    if (r == 0.0) return std::pair{centerX + left, centerX + right};
+    const auto field = [&](double dx) {
+      const double lx = dx * cosA + dy * sinA;
+      const double ly = -dx * sinA + dy * cosA;
+      const double qx = std::max(0.0, std::abs(lx) - (halfW - r)) / r;
+      const double qy = std::max(0.0, std::abs(ly) - (halfH - r)) / r;
+      return powered(qx) + powered(qy);
+    };
+    const bool leftInside = field(left) <= 1.0;
+    const bool rightInside = field(right) <= 1.0;
+    if (leftInside && rightInside) return std::pair{centerX + left, centerX + right};
+    // This field is convex along the line. A fixed bracket minimization avoids
+    // the old 32 local-Y samples, which missed entire rows at small rotations.
+    double low = left;
+    double high = right;
+    double inside = leftInside ? left : right;
+    if (!leftInside && !rightInside) {
+      // Minimum bracket width <= outer span * (2/3)^32. Only a tangent
+      // intersection narrower than this bracket can escape the inside seed.
+      for (int i = 0; i < 32; ++i) {
+        const double a = low + (high - low) / 3.0;
+        const double b = high - (high - low) / 3.0;
+        if (field(a) < field(b)) high = b;
+        else low = a;
+      }
+      inside = (low + high) * .5;
+      if (field(inside) > 1.0) return std::nullopt;
     }
-    float left = -halfW;
-    float right = halfW;
-    const float distFromTop = ly + halfH;
-    const float distFromBottom = halfH - ly;
-    if (distFromTop < r) {
-      const float inset = cornerInset(r, distFromTop);
-      left += inset;
-      right -= inset;
+    // Each boundary bracket contracts to <= initial span / 2^24. Return
+    // its inside endpoint; this is contour intersection, not an exact SDF.
+    if (!leftInside) {
+      low = left; high = inside;
+      for (int i = 0; i < 24; ++i) {
+        const double middle = (low + high) * .5;
+        if (field(middle) <= 1.0) high = middle;
+        else low = middle;
+      }
+      left = high;
     }
-    if (distFromBottom < r) {
-      const float inset = cornerInset(r, distFromBottom);
-      left += inset;
-      right -= inset;
+    if (!rightInside) {
+      low = inside; high = right;
+      for (int i = 0; i < 24; ++i) {
+        const double middle = (low + high) * .5;
+        if (field(middle) <= 1.0) low = middle;
+        else high = middle;
+      }
+      right = low;
     }
-    if (left >= right) {
-      return {0.0F, 0.0F};
-    }
-    return {left, right};
+    return std::pair{centerX + left, centerX + right};
   };
 
   std::vector<InputRect> out;
-  out.reserve(static_cast<std::size_t>(aabbIH / stripPx + 2));
-
-  for (int row = 0; row < aabbIH; row += stripPx) {
-    const int rowH = std::min(stripPx, aabbIH - row);
-    float globalMinX = std::numeric_limits<float>::max();
-    float globalMaxX = std::numeric_limits<float>::lowest();
-    bool anyHit = false;
-
-    // Sample the strip at its top and bottom edges for a conservative bound.
-    for (int edge = 0; edge <= 1; ++edge) {
-      const float surfaceY = aabbTop + static_cast<float>(row + edge * rowH);
-      const float dy = surfaceY - centerY;
-
-      // Scan across the local-Y axis to find what range of local rows this
-      // surface-Y touches. A horizontal surface-space line at surfaceY, when
-      // inverse-rotated, becomes a line in local space. We need the min/max
-      // surface-X of the rounded rect along that line.
-      //
-      // A point (lx, ly) in local space maps to surface-X = cx + lx*cos - ly*sin.
-      // The surface scanline surfaceY corresponds to all (lx, ly) satisfying
-      // cy + lx*sin + ly*cos = surfaceY, i.e. lx*sin + ly*cos = dy.
-      // For each local ly: lx_on_line = (dy - ly*cos) / sin  (when sin != 0).
-      // But lx must also be within the rounded rect's horizontal extent at ly.
-      // The leftmost and rightmost surface-X values across all valid (lx,ly) give
-      // the strip bounds.
-      //
-      // Sample the local-Y range that can produce this surface-Y.
-      constexpr int kSamples = 32;
-      for (int s = 0; s <= kSamples; ++s) {
-        const float t = static_cast<float>(s) / static_cast<float>(kSamples);
-        const float ly = -halfH + (2.0F * halfH) * t;
-        const auto [localLeft, localRight] = localExtents(ly);
-        if (localLeft >= localRight) {
-          continue;
-        }
-        // lx_on_line = (dy - ly*cos) / sin, but we need the intersection of
-        // the horizontal surface-Y line with the row ly in local space projected
-        // onto the surface X axis. Surface X = cx + lx*cos - ly*sin.
-        // Constraint: lx*sin + ly*cos = dy  =>  lx = (dy - ly*cos) / sin.
-        // But when sin ≈ 0, surface-Y ≈ cy + ly*cos, so only ly ≈ dy/cos is
-        // valid, and surface-X = cx + lx*cos for any lx in the local extent.
-        float sxLeft, sxRight;
-        if (std::abs(sinA) > 1e-6F) {
-          const float lxOnLine = (dy - ly * cosA) / sinA;
-          if (lxOnLine < localLeft - 0.5F || lxOnLine > localRight + 0.5F) {
-            continue;
-          }
-          const float clampedLx = std::clamp(lxOnLine, localLeft, localRight);
-          const float sx = centerX + clampedLx * cosA - ly * sinA;
-          sxLeft = sx;
-          sxRight = sx;
-        } else {
-          if (std::abs(ly * cosA - dy) > 1.0F) {
-            continue;
-          }
-          sxLeft = centerX + localLeft * cosA - ly * sinA;
-          sxRight = centerX + localRight * cosA - ly * sinA;
-          if (sxLeft > sxRight) {
-            std::swap(sxLeft, sxRight);
-          }
-        }
-        globalMinX = std::min(globalMinX, sxLeft);
-        globalMaxX = std::max(globalMaxX, sxRight);
-        anyHit = true;
-      }
-    }
-
-    if (!anyHit || globalMinX >= globalMaxX) {
-      continue;
-    }
-
-    const int rx = static_cast<int>(std::floor(globalMinX));
-    const int rRight = static_cast<int>(std::ceil(globalMaxX));
-    const int rw = rRight - rx;
-    const int ry = static_cast<int>(std::lround(aabbTop)) + row;
-    if (rw <= 0) {
-      continue;
-    }
-
-    if (!out.empty()) {
-      auto& prev = out.back();
-      if (prev.x == rx && prev.width == rw && prev.y + prev.height == ry) {
-        prev.height += rowH;
-        continue;
-      }
-    }
-    out.push_back({rx, ry, rw, rowH});
+  out.reserve(static_cast<std::size_t>((lastY - firstY) / stripPx + 1));
+  auto previous = scanline(firstY);
+  for (int y = firstY; y < lastY; y += stripPx) {
+    const int rowH = std::min(stripPx, lastY - y);
+    const auto top = previous;
+    const auto bottom = scanline(y + rowH);
+    previous = bottom; // Adjacent strips share a boundary; solve it once.
+    if (!top || !bottom) continue;
+    // A convex shape contains the intersection of its endpoint segments for
+    // the whole strip. Integer rounding contracts by less than one X pixel;
+    // strip-height approximation remains explicit and independent of power.
+    const int left = static_cast<int>(std::ceil(std::max(top->first, bottom->first)));
+    const int right = static_cast<int>(std::floor(std::min(top->second, bottom->second)));
+    if (left >= right) continue;
+    if (!out.empty() && out.back().x == left && out.back().width == right - left
+        && out.back().y + out.back().height == y) out.back().height += rowH;
+    else out.push_back({left, y, right - left, rowH});
   }
-
   return out;
+}
+
+void Surface::setExternalMaterialAllowed(bool allowed) {
+  if (m_externalMaterialAllowed == allowed) return;
+  m_externalMaterialAllowed = allowed;
+  if (m_sceneRoot) m_sceneRoot->setMaterialBackdropLocal(!allowed);
+  if (!allowed) clearBlurRegion();
+  requestRedraw();
 }
 
 void Surface::clearBlurRegion() {
@@ -1231,11 +1242,35 @@ void Surface::render() {
     return;
   }
 
+  auto materialPlan = m_materialScene.prepare(
+      m_connection.materialManager(), &m_connection.customEffectTransport(), m_surface,
+      m_externalMaterialAllowed ? m_sceneRoot : nullptr, m_width, m_height,
+      [this, token = std::weak_ptr<InvalidationToken>(m_invalidationToken)]() {
+        if (!token.expired()) requestRedraw();
+      });
+  if (materialPlan.mode == MaterialSceneSender::FrameMode::Defer) return;
   requestFrame();
+  m_renderContext->setExternallyRenderedCustomEffectGroups({});
+  if (materialPlan.mode == MaterialSceneSender::FrameMode::Omit)
+    m_renderContext->setExternallyRenderedCustomEffectGroups(materialPlan.omittedGroups);
   traceSurfaceEvent(*this, "render-begin");
-  const float renderMs = elapsedMs([this] {
-    m_renderContext->renderScene(m_renderTarget, m_sceneRoot, m_wallpaperMask ? &*m_wallpaperMask : nullptr);
+  const float renderMs = elapsedMs([this, &materialPlan] {
+    m_renderContext->renderScene(m_renderTarget, m_sceneRoot, m_wallpaperMask ? &*m_wallpaperMask : nullptr, [this, &materialPlan] {
+      // Publish the geometry actually drawn, immediately before EGL commits it.
+      // A failed beginFrame never queues scene state for a callback-only commit.
+      if (materialPlan.needsCommit()) {
+        (void)m_materialScene.commit(materialPlan);
+      } else if (!materialPlan.sceneManaged) {
+        m_materialScene.send(
+            m_connection.materialManager(), &m_connection.customEffectTransport(), m_surface,
+            m_externalMaterialAllowed ? m_sceneRoot : nullptr, m_width, m_height,
+            [this, token = std::weak_ptr<InvalidationToken>(m_invalidationToken)]() {
+              if (!token.expired()) requestRedraw();
+            });
+      }
+    });
   });
+  m_renderContext->setExternallyRenderedCustomEffectGroups({});
   traceSurfaceEvent(*this, "render-end");
   recordSurfaceProfileEvent(*this, SurfaceProfileEvent::Render, renderMs);
   logSlowSurfaceOperation(
@@ -1275,7 +1310,9 @@ void Surface::destroySurface() {
     m_frameCallback = nullptr;
   }
 
+  if (m_renderContext != nullptr) m_renderContext->removeCustomEffectConsumerSurface(m_renderTarget);
   m_renderTarget.destroy();
+  m_materialScene.reset();
 
   if (m_backgroundEffect != nullptr) {
     ext_background_effect_surface_v1_destroy(m_backgroundEffect);

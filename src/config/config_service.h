@@ -48,6 +48,10 @@ public:
   ConfigService& operator=(const ConfigService&) = delete;
 
   [[nodiscard]] const Config& config() const noexcept { return m_config; }
+  // Reconstruct the effective persisted appearance without the live preview.
+  [[nodiscard]] std::optional<Config> committedConfig() const {
+    return configForOverrides(m_persistedOverridesTable);
+  }
   [[nodiscard]] bool isLockScreenEnabled() const noexcept { return ::isLockScreenEnabled(m_config.lockscreen); }
   [[nodiscard]] bool shouldLockBeforeSuspend() const noexcept { return ::shouldLockBeforeSuspend(m_config.lockscreen); }
   // Which sections changed in the reload currently being dispatched. Valid while
@@ -81,6 +85,45 @@ public:
 
   void registerIpc(IpcService& ipc);
 
+  // A session-only appearance overlay. Named-profile persistence is coordinated
+  // by the shared desktop backend; native settings never save a draft implicitly.
+  struct ProfilePreparation {
+    bool pending = false;
+    std::string error;
+    std::vector<std::string> skipped;
+  };
+  void setProfilePrepareCallback(std::function<ProfilePreparation()> callback) {
+    m_profilePrepare = std::move(callback);
+  }
+  [[nodiscard]] ProfilePreparation profilePreparation() const {
+    return m_profilePrepare ? m_profilePrepare() : ProfilePreparation{};
+  }
+
+  // Explicit adapter recovery, separate from mutation/persistence. A retry
+  // never changes profile values or opts an application into management.
+  void setProfilePrepareRetryCallback(std::function<bool()> callback) {
+    m_profilePrepareRetry = std::move(callback);
+  }
+  [[nodiscard]] bool canRetryProfilePreparation() const {
+    const auto preparation = profilePreparation();
+    return m_profilePrepareRetry && !preparation.pending && !preparation.error.empty();
+  }
+  [[nodiscard]] bool retryProfilePreparation() {
+    return m_profilePrepareRetry && m_profilePrepareRetry();
+  }
+
+  void beginProfilePreview();
+  [[nodiscard]] bool profilePreviewActive() const noexcept { return m_profilePreview; }
+  [[nodiscard]] bool profilePreviewDirty() const;
+  [[nodiscard]] bool profilePreviewConflict() const noexcept { return m_profileConflict; }
+  bool commitProfilePreview();
+  void cancelProfilePreview();
+  [[nodiscard]] std::string profileRequest(const std::string& request);
+  void setFontResourcesChangedCallback(std::function<void()> callback) {
+    m_fontResourcesChanged = std::move(callback);
+  }
+
+
   // Persisted wallpaper paths (written to settings.toml, app-managed).
   [[nodiscard]] std::string getWallpaperPath(const std::string& connectorName) const;
   [[nodiscard]] const std::unordered_map<std::string, std::string>& monitorWallpaperPaths() const {
@@ -97,8 +140,9 @@ public:
   [[nodiscard]] const std::vector<WallpaperFavorite>& wallpaperFavorites() const noexcept;
   [[nodiscard]] bool isWallpaperFavorite(std::string_view path) const;
   [[nodiscard]] const WallpaperFavorite* wallpaperFavorite(std::string_view path) const;
-  void addWallpaperFavorite(std::string path, std::optional<WallpaperFavorite> preset = std::nullopt);
-  void removeWallpaperFavorite(std::string_view path);
+  bool addWallpaperFavorite(std::string path, std::optional<WallpaperFavorite> preset = std::nullopt);
+  bool removeWallpaperFavorite(std::string_view path);
+  bool moveWallpaperFavorite(std::string_view original, std::string_view destination);
   void setWallpaperFavoriteThemeMode(std::string_view path, ThemeMode themeMode);
   void setWallpaperFavoritePaletteSource(std::string_view path, std::optional<PaletteSource> source);
   void setWallpaperFavoritePaletteSelection(std::string_view path, std::string_view value);
@@ -230,6 +274,7 @@ private:
   void extractWallpaperFromOverrides();
   void extractWallpaperFromTable(const toml::table& table);
   void syncWallpaperFavoritesToOverridesTable();
+  bool commitWallpaperFavorites(std::vector<WallpaperFavorite> favorites);
   [[nodiscard]] bool hasConfiguredWallpaper() const;
   [[nodiscard]] std::string firstRunWallpaperPath() const;
 
@@ -250,6 +295,18 @@ private:
   std::string m_setupMarkerPath;
   toml::table m_overridesTable;
   toml::table m_persistedOverridesTable;
+  std::function<ProfilePreparation()> m_profilePrepare;
+  std::function<bool()> m_profilePrepareRetry;
+  std::function<void()> m_fontResourcesChanged;
+  bool m_profileTransactionsReady = false;
+  bool m_profileCommitting = false;
+  bool m_profileExternalDirty = false;
+  bool m_profilePreview = false;
+  bool m_profileConflict = false;
+  std::uint64_t m_profileRevision = 0;
+  std::uint64_t m_profileGeneration = 0;
+  toml::table m_profileBaseline;
+  toml::table m_profileEffectiveBaseline;
   std::unordered_set<std::string> m_configFileBarNames;
   std::unordered_map<std::string, std::unordered_set<std::string>> m_configFileMonitorOverrideNames;
   std::unordered_set<std::string> m_configFileCalendarAccountNames;

@@ -203,6 +203,15 @@ offset_x = 20                       # absolute horizontal margin from the screen
 offset_y = 8                        # absolute vertical margin from the screen edge
 # monitors = ["DP-1"]               # connector names; omit or leave empty for all monitors
 
+[osd.activity]
+presentation = "standalone"          # standalone | section | attached
+bar = ""                             # stable [bar.<name>] name; empty matches any bar
+section = ""                         # stable [[bar.<name>.section]] id
+output = "focused"                   # focused | all | output connector/selector
+placement = "auto"                   # auto | before | after | below | above | left | right
+motion = "inherit"                   # inherit | off
+material = "inherit"                 # inherit | surface | transparent
+
 [osd.kinds]
 volume = true                       # master volume OSD toggle
 volume_output = true                # output (speaker) volume; requires volume = true

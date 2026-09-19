@@ -56,6 +56,7 @@
 #include "pipewire/pipewire_spectrum_poll_source.h"
 #include "pipewire/sound_player.h"
 #include "pipewire/wireplumber_mixer.h"
+#include "shell/settings/custom_effect_asset_service.h"
 #include "render/animation/motion_service.h"
 #include "render/backend/render_backend.h"
 #include "render/core/texture_manager.h"
@@ -105,8 +106,10 @@
 #include <limits>
 #include <malloc.h>
 #include <optional>
+#include <set>
 #include <stdexcept>
 #include <string_view>
+#include <tuple>
 #include <unordered_map>
 #include <utility>
 
@@ -473,23 +476,59 @@ void Application::initStyleThemeAndWayland() {
   std::signal(SIGTERM, signal_handler);
   std::signal(SIGINT, signal_handler);
 
+  Style::setCustomEffectResolver([](const Style::ResolvedCustomEffect& effect) {
+    return custom_effect_assets::resolveImported(
+        effect.stableId, effect.sha256Digest, effect.maxSampleRadiusPx).asset;
+  });
+
   auto applyMotionConfig = [this]() {
     auto& motion = MotionService::instance();
-    motion.setSpeed(m_configService.config().shell.animation.speed);
-    motion.setEnabled(m_configService.config().shell.animation.enabled);
+    const auto& animation = m_configService.config().shell.animation;
+    motion.setSpeed(animation.speed);
+    motion.setStyle(animation.style, {animation.curveX1, animation.curveY1, animation.curveX2, animation.curveY2});
+    motion.setEnabled(animation.enabled);
   };
   auto applyStyleConfig = [this, lastCornerRadiusScale = std::numeric_limits<float>::quiet_NaN()]() mutable {
     const float corner = m_configService.config().shell.cornerRadiusScale;
     const bool cornerChanged =
         std::isfinite(lastCornerRadiusScale) && std::abs(corner - lastCornerRadiusScale) > 1.0e-4F;
+    const bool metricsChanged = Style::metrics() != m_configService.config().shell.design;
+    Style::setMetrics(m_configService.config().shell.design);
+    Style::setControls(m_configService.config().shell.controls);
+    Style::setMaterialSettings(m_configService.config().shell.material);
+    const auto& materialOverrides = m_configService.config().shell.materialOverrides;
+    std::set<std::string, std::less<>> configuredAssets;
+    const auto collectAssets = [&configuredAssets](const Style::MaterialOverrideMap& scope) {
+      for (const auto& [target, patch] : scope) {
+        (void)target;
+        if (patch.customBackground) configuredAssets.insert(*patch.customBackground);
+      }
+    };
+    collectAssets(materialOverrides.roles);
+    collectAssets(materialOverrides.families);
+    collectAssets(materialOverrides.surfaces);
+    for (const auto& stableId : m_configuredCustomEffectAssets)
+      if (!configuredAssets.contains(stableId)) custom_effect_assets::invalidate(stableId);
+    m_configuredCustomEffectAssets = std::move(configuredAssets);
+    Style::setMaterialOverrides(materialOverrides);
     Style::setCornerRadiusScale(corner);
+    Style::setSurfaceMaterial(m_configService.config().shell.surfaceMaterial);
+    const auto& shell = m_configService.config().shell;
+    auto appearance = std::tuple{
+        shell.surfaceMaterial, shell.settingsWindowTranslucent, shell.cornerRadiusScale,
+        shell.buttonBorders, shell.inputBorders, shell.popupBorders, shell.cardBorders,
+        shell.design, shell.controls, shell.material, shell.materialOverrides};
+    static std::optional<decltype(appearance)> previousAppearance;
+    if (previousAppearance && *previousAppearance != appearance)
+      m_settingsWindow.onExternalOptionsChanged();
+    previousAppearance = appearance;
     Style::setButtonBordersEnabled(m_configService.config().shell.buttonBorders);
     Style::setInputBordersEnabled(m_configService.config().shell.inputBorders);
     Style::setPopupBordersEnabled(m_configService.config().shell.popupBorders);
     Style::setPopupShadowsEnabled(m_configService.config().shell.popupShadows);
     Style::setCardBordersEnabled(m_configService.config().shell.cardBorders);
     lastCornerRadiusScale = corner;
-    if (cornerChanged) {
+    if (cornerChanged || metricsChanged) {
       m_notificationToast.requestLayout();
       m_panelManager.requestLayout();
     }
@@ -745,6 +784,7 @@ void Application::reconcileOutputSurfaces() {
   m_backdrop.onOutputChange();
   m_wallpaper.onOutputChange();
   m_bar.onOutputChange();
+  m_transientActivity.refreshPresentation();
   m_dock.onOutputChange();
   m_desktopWidgetsController.onOutputChange();
   m_lockscreenWidgetsController.onOutputChange();

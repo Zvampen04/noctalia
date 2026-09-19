@@ -835,9 +835,19 @@ namespace settings {
         break;
       }
       spec.schema.type = schemaTypeForControl(spec.control);
+      if (!field.optionsFrom.empty()) {
+        spec.schema.type = noctalia::config::schema::WidgetSettingType::String;
+      }
 
       if (field.visibleWhen.has_value()) {
-        spec.visibleWhen = WidgetSettingVisibility{field.visibleWhen->key, field.visibleWhen->values};
+        WidgetSettingVisibility visibility;
+        for (const auto& condition : field.visibleWhen->any) {
+          visibility.any.push_back({condition.key, condition.values});
+        }
+        for (const auto& condition : field.visibleWhen->all) {
+          visibility.all.push_back({condition.key, condition.values});
+        }
+        spec.visibleWhen = std::move(visibility);
       }
       specs.push_back(std::move(spec));
     }

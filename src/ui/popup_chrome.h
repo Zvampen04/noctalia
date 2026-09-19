@@ -2,14 +2,15 @@
 
 #include "config/config_types.h"
 #include "shell/surface/shadow.h"
+#include "wayland/surface.h"
 
 #include <cstdint>
+#include <vector>
 
 class Box;
 class Node;
 class PopupSurface;
 class RectNode;
-struct InputRect;
 struct PopupSurfaceConfig;
 
 namespace popup_chrome {
@@ -46,7 +47,8 @@ namespace popup_chrome {
   };
 
   [[nodiscard]] Geometry computeGeometry(
-      float contentWidth, float contentHeight, const ShellConfig::ShadowConfig& shadow, bool componentShadow = true
+      float contentWidth, float contentHeight, const ShellConfig::ShadowConfig& shadow, bool componentShadow = true,
+      std::string_view materialSurface = {}, std::string_view materialFamily = "container"
   ) noexcept;
   [[nodiscard]] std::int32_t
   adjustedOffsetX(std::int32_t baseOffset, const Geometry& geometry, HorizontalAttachment attachment) noexcept;
@@ -54,7 +56,9 @@ namespace popup_chrome {
   adjustedOffsetY(std::int32_t baseOffset, const Geometry& geometry, VerticalAttachment attachment) noexcept;
 
   void applyToConfig(PopupSurfaceConfig& config, const Geometry& geometry, Attachment attachment) noexcept;
-  void setContentInputRegion(PopupSurface& surface, const Geometry& geometry);
+  [[nodiscard]] std::vector<InputRect>
+  roundedContentRegion(const Geometry& geometry, float radius, float cornerPower = 2.0F);
+  void setContentInputRegion(PopupSurface& surface, const Geometry& geometry, float radius, float cornerPower);
   [[nodiscard]] RectNode* addShadow(
       Node& parent, const Geometry& geometry, const ShellConfig::ShadowConfig& shadow, float radius,
       float backgroundOpacity = 1.0F
