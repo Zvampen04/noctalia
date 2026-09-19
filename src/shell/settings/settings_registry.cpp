@@ -46,6 +46,12 @@ namespace settings {
 
     constexpr int kBarMarginMax = 4096;
     constexpr float kBarCornerRadiusMax = 80.0F;
+    // ConfigOverrideValue carries doubles (including when writes route to a plugin
+    // owner), while the native schema stores speed as float. Keep the public decimal
+    // boundary canonical instead of widening float 0.1F to 0.10000000149... .
+    constexpr double kAnimationSpeedPositiveMinimum = 0.1;
+    static_assert(noctalia::config::schema::kAnimationSpeedRange.min.value()
+        == static_cast<float>(kAnimationSpeedPositiveMinimum));
 
     // Launcher providers that expose a configurable prefix, keyed by the config name
     // (the lowercased provider id). Placeholders and global-search defaults mirror the
@@ -954,8 +960,7 @@ namespace settings {
         return std::vector<std::pair<std::vector<std::string>, ConfigOverrideValue>>{
             {{"shell", "animation", "enabled"}, false}};
       }
-      const double validSpeed = std::max(
-          value, static_cast<double>(noctalia::config::schema::kAnimationSpeedRange.min.value_or(0.1F)));
+      const double validSpeed = std::max(value, kAnimationSpeedPositiveMinimum);
       return std::vector<std::pair<std::vector<std::string>, ConfigOverrideValue>>{
           {{"shell", "animation", "speed"}, validSpeed},
           {{"shell", "animation", "enabled"}, true}};
