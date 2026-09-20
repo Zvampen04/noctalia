@@ -37,6 +37,12 @@ struct TransientActivityRoute {
   TransientActivityMotion motion = TransientActivityMotion::Inherit;
   TransientActivityMaterial material = TransientActivityMaterial::Inherit;
 
+  int width = 300;
+  int height = 58;
+  int progressThickness = 4;
+  int timeoutMs = 0;
+  bool showBody = true;
+
   bool operator==(const TransientActivityRoute&) const = default;
 };
 

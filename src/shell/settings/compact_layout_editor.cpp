@@ -7,6 +7,7 @@
 #include "ui/controls/button.h"
 #include "ui/controls/flex.h"
 #include "ui/controls/label.h"
+#include "ui/controls/progress_bar.h"
 
 #include <cmath>
 #include <linux/input-event-codes.h>
@@ -37,7 +38,8 @@ namespace settings {
     };
     class Canvas final : public Flex {
     public:
-      Canvas(std::shared_ptr<Model> model, float scale) : m(std::move(model)), s(scale) {
+      Canvas(std::shared_ptr<Model> model, float scale, std::function<void(std::string)> sizes)
+          : m(std::move(model)), s(scale), sizeMenu(std::move(sizes)) {
         m->onChange = [this] { markLayoutDirty(); };
         setFillWidth(true);
         setMinHeight(432 * s);
@@ -54,15 +56,38 @@ namespace settings {
           auto* ptr = box.get();
           box->setParticipatesInLayout(false);
           box->addChild(ui::label({.text = std::string(kind) + "  ↘", .fontSize = 12 * s}));
+          // Presentation-only previews: editing the layout never changes devices.
+          if (kind == "volume" || kind == "brightness" || kind == "media")
+            box->addChild(ui::progressBar({.progress = .6F, .width = 48 * s, .height = 3 * s}));
+          else if (kind == "actions" || kind == "tray") {
+            auto dots = ui::row({.gap = 4 * s});
+            for (int i = 0; i < 3; ++i)
+              dots->addChild(
+                  ui::box(
+                      {.fill = colorSpecFromRole(ColorRole::Primary), .radius = 3 * s, .width = 6 * s, .height = 6 * s}
+                  )
+              );
+            box->addChild(std::move(dots));
+          }
           auto area = std::make_unique<InputArea>();
           auto* input = area.get();
+          input->setAcceptedButtons(InputArea::buttonMask({BTN_LEFT, BTN_RIGHT}));
           input->setFocusable(true);
           input->setTabFocusKey("compact-layout-" + std::string(kind));
           input->setRetainsFocusOnPointerRelease(true);
           input->setParticipatesInLayout(false);
           input->setOnPress([this, kind = std::string(kind), ptr](const InputArea::PointerData& p) {
             const auto it = std::ranges::find(m->cells, kind, &Cell::kind);
-            if (it == m->cells.end() || p.button != BTN_LEFT)
+            if (it == m->cells.end())
+              return;
+            if (p.button == BTN_RIGHT && p.pressed) {
+              m->selected = kind;
+              m->changed();
+              if (sizeMenu)
+                sizeMenu(kind);
+              return;
+            }
+            if (p.button != BTN_LEFT)
               return;
             if (p.pressed) {
               m->selected = kind;
@@ -158,9 +183,7 @@ namespace settings {
       LayoutSize doMeasure(Renderer& renderer, const LayoutConstraints& constraints) override {
         return measureByLayout(renderer, constraints);
       }
-      void doArrange(Renderer& renderer, const LayoutRect& rect) override {
-        arrangeByLayout(renderer, rect);
-      }
+      void doArrange(Renderer& renderer, const LayoutRect& rect) override { arrangeByLayout(renderer, rect); }
       void doLayout(Renderer& renderer) override {
         Flex::doLayout(renderer);
         for (auto& item : items) {
@@ -185,6 +208,7 @@ namespace settings {
       };
       std::shared_ptr<Model> m;
       float s;
+      std::function<void(std::string)> sizeMenu;
       std::vector<Item> items;
     };
   } // namespace
@@ -192,11 +216,49 @@ namespace settings {
     auto model = std::make_shared<Model>();
     model->columns = ctx.config.controlCenter.compactColumns;
     model->cells = compact_layout::parse(ctx.config.controlCenter.compactLayout, model->columns);
+    const auto sizeMenu = [model, open = ctx.openSearchPickerPopup](std::string kind) {
+      if (!open)
+        return;
+      auto it = std::ranges::find(model->cells, kind, &Cell::kind);
+      if (it == model->cells.end())
+        return;
+      SearchPickerOpenRequest request;
+      request.title = "Control size";
+      request.placeholder = "Choose width × height";
+      request.emptyText = "No other size fits here; move neighboring controls first.";
+      std::vector<Cell> candidates;
+      for (int h : {1, 2, 3, 4})
+        for (int w = 2; w <= model->columns; ++w) {
+          Cell cell = *it;
+          cell.w = w;
+          cell.h = h;
+          if (!compact_layout::fits(model->cells, cell, model->columns))
+            continue;
+          const auto key = std::to_string(candidates.size());
+          candidates.push_back(cell);
+          request.options.push_back({.value = key, .label = std::to_string(w) + " × " + std::to_string(h)});
+          if (cell == *it)
+            request.selectedValue = key;
+        }
+      request.onSelect = [model, candidates](const std::string& value) {
+        for (std::size_t i = 0; i < candidates.size(); ++i)
+          if (value == std::to_string(i)) {
+            auto it = std::ranges::find(model->cells, candidates[i].kind, &Cell::kind);
+            if (it != model->cells.end() && compact_layout::fits(model->cells, candidates[i], model->columns)) {
+              model->checkpoint();
+              *it = candidates[i];
+            }
+            break;
+          }
+      };
+      open(std::move(request));
+    };
     auto root = ui::column({.gap = 8 * ctx.scale, .fillWidth = true});
     root->addChild(ui::label({.text = "Quick Settings layout", .fontSize = 18 * ctx.scale}));
     root->addChild(
         ui::label(
-            {.text = "Drag to move; bottom-right corner to resize. Arrows move, [ / ] change width, Page Up/Down "
+            {.text = "Drag to move; bottom-right corner to resize; right-click for sizes. Arrows move, [ / ] change "
+                     "width, Page Up/Down "
                      "change height, Delete removes. Apply saves; Undo reverses preview edits.",
              .fontSize = 12 * ctx.scale,
              .maxLines = 3}
@@ -233,8 +295,9 @@ namespace settings {
                                       return c.kind == model->selected;
                                     });
                                   }}));
+    actions->addChild(ui::button({.text = "Sizes…", .onClick = [model, sizeMenu] { sizeMenu(model->selected); }}));
     root->addChild(std::move(actions));
-    root->addChild(std::make_unique<Canvas>(model, ctx.scale));
+    root->addChild(std::make_unique<Canvas>(model, ctx.scale, sizeMenu));
     auto add = ui::row({.wrap = true, .gap = 6 * ctx.scale});
     for (auto kind : compact_layout::kinds)
       add->addChild(

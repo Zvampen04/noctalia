@@ -112,6 +112,8 @@ public:
   void unregisterPanel(const std::string& id);
 
   void openPanel(const std::string& panelId, PanelOpenRequest request = {});
+  // Change content without destroying its surface, source island or reveal state.
+  void navigatePanelContext(const std::string& panelId, std::string context);
   void closePanel(bool animateClose = true);
   void togglePanel(const std::string& panelId, PanelOpenRequest request);
   // IPC-friendly overload: asks CompositorPlatform for preferred interactive output.
@@ -188,6 +190,12 @@ public:
   void registerIpc(IpcService& ipc);
 
 private:
+  void applyPreferredPanelSize();
+  [[nodiscard]] float preferredPanelWidth() const;
+  [[nodiscard]] float preferredPanelHeight() const;
+  std::optional<std::pair<float,float>> m_resizeSize;
+  std::optional<std::pair<float,float>> m_resizeTarget;
+  std::uint32_t m_resizeAnimationId = 0;
   friend class PanelManagerLayoutTestAccess;
   struct PlacementRequest {
     std::uint32_t anchor = 0;

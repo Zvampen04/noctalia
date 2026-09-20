@@ -49,7 +49,7 @@ inline bool owns(const Path& path) {
     constexpr std::array fields{
         "shortcuts",          "sidebar",          "sidebar_section", "width",       "literal_width",
         "show_tray",          "compact_sections", "compact_height",  "hidden_tabs", "show_shortcut_labels",
-        "show_session_button", "compact_columns", "compact_layout"
+        "show_session_button", "compact_columns", "compact_layout", "compact_navigation"
     };
     return std::ranges::find(fields, path[1]) != fields.end();
   }

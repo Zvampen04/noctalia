@@ -1,3 +1,4 @@
+#include "render/scene/countdown_ring_node.h"
 #include "shell/bar/bar.h"
 
 #include "compositors/compositor_platform.h"
@@ -1508,6 +1509,13 @@ namespace {
       for (std::size_t i = 0; i < compactRequests.size(); ++i)
         compactRequests[i].size -= instance.barConfig.sectionBackgrounds
             ? 2.0F * std::max(0.0F, instance.barConfig.islandHoverGrow) * hoverProgress[i] : 0.0F;
+      // Activity changes the painted extent, never the stored closing destination.
+      for (std::size_t i = 0; i < requests.size(); ++i) {
+        const auto& section = instance.dynamicSections[i];
+        if (!section.activityRoot) continue;
+        const float target = isVertical ? section.activityHeight : section.activityWidth;
+        requests[i].size += (std::max(requests[i].size, target) - requests[i].size) * section.activityReveal;
+      }
       if (usesStableIslandMorphSurface(instance.barConfig) && instance.attachedPanelGeometry.has_value()
           && !instance.attachedPanelGeometry->source.sectionId.empty()) {
         const auto& attached = *instance.attachedPanelGeometry;
@@ -1566,9 +1574,16 @@ namespace {
             ? std::max(0.0F, instance.barConfig.islandHoverGrow) * progress : 0.0F;
         const float hoverOffset = instance.barConfig.sectionBackgrounds
             ? instance.barConfig.islandHoverOffset * progress : 0.0F;
-        const float crossStart = section.config.crossOffset
+        float crossStart = section.config.crossOffset
             + (reverseCross ? -hoverOffset - crossGrow : hoverOffset);
-        const float crossLength = slotCross + crossGrow;
+        const float activityCross = isVertical ? section.activityWidth : section.activityHeight;
+        const float crossLength = usesStableIslandMorphSurface(instance.barConfig) && section.activityRoot
+            ? std::max(slotCross + crossGrow, slotCross + (activityCross-slotCross)*section.activityReveal)
+            : slotCross + crossGrow;
+        if (reverseCross) crossStart -= std::max(0.0F, crossLength-slotCross-crossGrow);
+        section.content->setOpacity(section.activityRoot ? 1.0F-section.activityReveal : 1.0F);
+        for (auto& widget : section.widgets)
+          widget->setBarPointerSuppressed(section.activityRoot && section.activityReveal > 0.0F);
         if (isVertical) {
           section.slot->setPosition(crossStart, extents[i].start);
           section.slot->setSize(crossLength, length);
@@ -1592,7 +1607,8 @@ namespace {
         const float height = isVertical ? length : crossLength;
         section.background->setPosition(absoluteX, absoluteY);
         section.background->setSize(width, height);
-        section.background->setVisible(!panelOwnsSection && paintsOwnBackground && length > 0.0F);
+        section.background->setVisible(!panelOwnsSection && paintsOwnBackground && length > 0.0F
+            && (!section.activityRoot || section.activityInheritsMaterial));
         section.background->setRadius(std::max(0.0F, static_cast<float>(instance.barConfig.radius)));
         float opacity = section.config.backgroundOpacity.value_or(instance.barConfig.backgroundOpacity);
         const auto materialMode = section.config.materialMode == BarMaterialMode::Inherit
@@ -4536,8 +4552,31 @@ void Bar::syncTransientActivityGeometry(BarInstance& instance) {
     const float height = section.background->height();
     section.activityRoot->setPosition(section.background->x(), section.background->y());
     section.activityRoot->setSize(width, height);
-    if (section.activityBackground != nullptr) section.activityBackground->setSize(width, height);
-    if (section.activityContent != nullptr) section.activityContent->setSize(width, height);
+    if (section.activityBackground != nullptr) {
+      section.activityBackground->setSize(width, height);
+      section.activityBackground->setRadius(std::max(0.F,static_cast<float>(instance.barConfig.radius)));
+      section.activityBackground->setVisible(!section.activityInheritsMaterial);
+    }
+    if (section.activityContent != nullptr) {
+      section.activityContent->setSize(width, height);
+      section.activityContent->setOpacity(section.activityReveal);
+    }
+    if (section.activityRing) {
+      auto ring = section.widgets.size() == 1 ? section.widgets.front()->usageRingStyle() : std::nullopt;
+      section.activityRing->setVisible(ring.has_value());
+      if (ring) {
+        const float inset = ring->thickness * 2.5F;
+        ring->radius = std::max(0.F,std::min(static_cast<float>(instance.barConfig.radius),std::min(width,height)*0.5F)-inset);
+        section.activityRing->setStyle(*ring);
+        section.activityRing->setPosition(inset,inset);
+        section.activityRing->setFrameSize(std::max(0.F,width-2*inset),std::max(0.F,height-2*inset));
+        section.activityRing->setOpacity(section.activityReveal);
+      }
+    }
+    const bool panelOwns = instance.attachedPanelGeometry && instance.attachedPanelGeometry->panelOwnsSource
+        && instance.attachedPanelGeometry->source.sectionId == section.config.id;
+    section.activityRoot->setVisible(!panelOwns);
+    section.activityRoot->setHitTestVisible(!section.activityClosing && !panelOwns);
   }
 }
 
@@ -4601,6 +4640,11 @@ bool Bar::presentTransientActivity(
     const TransientActivityViewModel& activity, const TransientActivityRoute& route
 ) {
   if (!canPresentTransientActivity(route)) return false;
+  std::unordered_map<std::uint32_t,std::array<float,3>> previousReveal;
+  for (const auto& instance : m_instances) if (instance)
+    for (const auto& section : instance->dynamicSections)
+      if (section.config.id == route.section && section.activityRoot)
+        previousReveal[instance->outputName] = {section.activityReveal,section.activityWidth,section.activityHeight};
   withdrawTransientActivityImmediately(0);
   const wl_output* focused = m_platform != nullptr ? m_platform->preferredInteractiveOutput() : nullptr;
   bool mounted = false;
@@ -4664,7 +4708,8 @@ bool Bar::presentTransientActivity(
         .glyphSize = Style::fontSizeBody,
     }));
     const std::string primary = activity.title.empty() ? activity.value : activity.title;
-    row->addChild(ui::label({
+    auto text = ui::column({.justify = FlexJustify::Center, .flexGrow = 1.0F});
+    text->addChild(ui::label({
         .out = &section->activityTitle,
         .text = primary,
         .fontSize = Style::fontSizeCaption,
@@ -4673,6 +4718,9 @@ bool Bar::presentTransientActivity(
         .ellipsize = TextEllipsize::End,
         .flexGrow = 1.0F,
     }));
+    if (route.showBody && !activity.body.empty()) text->addChild(ui::label({
+        .text = activity.body, .fontSize = Style::fontSizeCaption, .maxLines = 1, .ellipsize = TextEllipsize::End}));
+    row->addChild(std::move(text));
     if (!activity.title.empty() && !activity.value.empty()) {
       row->addChild(ui::label({
           .out = &section->activityValue,
@@ -4688,33 +4736,62 @@ bool Bar::presentTransientActivity(
       slider->setStep(0.01);
       slider->setValue(std::clamp(activity.progress, 0.0F, 1.0F));
       slider->setControlHeight(Style::controlHeightSm);
+      slider->setTrackHeight(static_cast<float>(route.progressThickness));
       slider->setWheelAdjustEnabled(true);
       slider->setOnValueChanged([setProgress = activity.setProgress](double value) {
         setProgress(static_cast<float>(value));
       });
-      slider->setMinWidth(72.0F);
-      slider->setMaxWidth(72.0F);
+      slider->setMinWidth(std::clamp(route.width*.28F,24.F,72.F));
+      slider->setMaxWidth(std::clamp(route.width*.28F,24.F,72.F));
       row->addChild(std::move(slider));
     } else if (activity.showProgress) {
       row->addChild(ui::progressBar({
           .out = &section->activityProgress,
           .progress = std::clamp(activity.progress, 0.0F, 1.0F),
           .width = 48.0F,
-          .height = 4.0F,
+          .height = static_cast<float>(route.progressThickness),
       }));
     }
     root->addChild(std::move(row));
+    auto ring = std::make_unique<CountdownRingNode>();
+    ring->setHitTestVisible(false); ring->setParticipatesInLayout(false); ring->setZIndex(100);
+    section->activityRing = static_cast<CountdownRingNode*>(root->addChild(std::move(ring)));
     section->activityRoot = static_cast<InputArea*>(owned->slideRoot->addChild(std::move(root)));
     section->activitySerial = activity.serial;
+    section->activityWidth = route.width;
+    section->activityHeight = route.height;
+    section->activityClosing = false;
+    section->activityInheritsMaterial = route.material == TransientActivityMaterial::Inherit;
     section->activityMotionEnabled = route.motion == TransientActivityMotion::Inherit
         && MotionService::instance().enabled();
     syncTransientActivityGeometry(*owned);
     if (section->activityMotionEnabled) {
-      section->activityRoot->setOpacity(0.0F);
+      section->activityReveal = previousReveal.contains(owned->outputName) ? previousReveal[owned->outputName][0] : 0.F;
+      const auto id = section->config.id;
+      if (previousReveal.contains(owned->outputName)) {
+        const auto previous = previousReveal[owned->outputName];
+        if (previous[1] != route.width || previous[2] != route.height) {
+          section->activityWidth=previous[1];section->activityHeight=previous[2];
+          owned->animations.animate(0.F,1.F,Style::animNormal,Easing::EaseOutCubic,
+            [instance=owned.get(),id,previous,targetW=route.width,targetH=route.height](float progress){
+              auto it=std::ranges::find(instance->dynamicSections,id,[](const auto& s){return s.config.id;});
+              if(it!=instance->dynamicSections.end()) {
+                it->activityWidth=previous[1]+(targetW-previous[1])*progress;
+                it->activityHeight=previous[2]+(targetH-previous[2])*progress;
+              }
+              instance->surface->requestLayout();
+            },{},section->activityRoot);
+        }
+      }
       owned->animations.animate(
-          0.0F, 1.0F, Style::animFast, Easing::EaseOutCubic,
-          [node = section->activityRoot](float value) { node->setOpacity(value); }, {}, section->activityRoot
-      );
+          section->activityReveal, 1.0F, Style::animNormal, Easing::EaseOutCubic,
+          [instance = owned.get(), id](float value) {
+            auto it = std::ranges::find(instance->dynamicSections,id,[](const auto& s){return s.config.id;});
+            if (it != instance->dynamicSections.end()) it->activityReveal = value;
+            instance->surface->requestLayout();
+          }, {}, section->activityRoot);
+    } else {
+      section->activityReveal = 1.0F;
     }
     owned->surface->requestLayout();
     mounted = true;
@@ -4724,38 +4801,36 @@ bool Bar::presentTransientActivity(
 
 void Bar::withdrawTransientActivity(std::uint64_t serial) {
   for (auto& owned : m_instances) {
-    if (owned == nullptr || owned->slideRoot == nullptr) continue;
+    if (!owned || !owned->slideRoot) continue;
     for (auto& section : owned->dynamicSections) {
-      if (section.activityRoot == nullptr || (serial != 0 && section.activitySerial != serial)) continue;
-      InputArea* oldRoot = section.activityRoot;
-      const bool animate = section.activityMotionEnabled;
-      section.activityRoot = nullptr;
-      section.activityBackground = nullptr;
-      section.activityContent = nullptr;
-      section.activityGlyph = nullptr;
-      section.activityTitle = nullptr;
-      section.activityValue = nullptr;
-      section.activityProgress = nullptr;
-      section.activitySlider = nullptr;
-      section.activityMotionEnabled = false;
-      section.activitySerial = 0;
-      if (animate) {
-        const auto outputName = owned->outputName;
-        owned->animations.animate(
-            oldRoot->opacity(), 0.0F, Style::animFast, Easing::EaseOutCubic,
-            [oldRoot](float value) { oldRoot->setOpacity(value); },
-            [this, outputName, oldRoot]() {
-              DeferredCall::callLater([this, outputName, oldRoot]() {
-                const auto instance = std::ranges::find(m_instances, outputName, [](const auto& value) {
-                  return value != nullptr ? value->outputName : 0U;
-                });
-                if (instance != m_instances.end() && (*instance)->slideRoot != nullptr)
-                  (void)(*instance)->slideRoot->removeChild(oldRoot);
-              });
-            }, oldRoot);
-      } else {
-        (void)owned->slideRoot->removeChild(oldRoot);
+      if (!section.activityRoot || (serial && section.activitySerial != serial)) continue;
+      if (section.activityMotionEnabled && !section.activityClosing) {
+        section.activityClosing = true;
+        section.activityRoot->setHitTestVisible(false);
+        owned->animations.cancelForOwner(section.activityRoot);
+        const auto id = section.config.id;
+        const auto token = section.activitySerial;
+        owned->animations.animate(section.activityReveal,0.F,Style::animNormal,Easing::EaseOutCubic,
+          [instance=owned.get(),id](float value){
+            auto it=std::ranges::find(instance->dynamicSections,id,[](const auto& s){return s.config.id;});
+            if(it!=instance->dynamicSections.end())it->activityReveal=value;
+            instance->surface->requestLayout();
+          }, [this,token]{DeferredCall::callLater([this,token]{
+            // A refresh of the same serial cancels the closing state.
+            for (const auto& instance:m_instances) if(instance)
+              for(const auto& s:instance->dynamicSections)
+                if(s.activitySerial==token && !s.activityClosing)return;
+            withdrawTransientActivityImmediately(token);
+          });},section.activityRoot);
+        continue;
       }
+      if (section.activityMotionEnabled && section.activityClosing) continue;
+      auto* oldRoot=section.activityRoot;
+      section.activityRoot=nullptr; section.activityRing=nullptr; section.activityBackground=nullptr; section.activityContent=nullptr;
+      section.activityGlyph=nullptr; section.activityTitle=nullptr; section.activityValue=nullptr;
+      section.activityProgress=nullptr; section.activitySlider=nullptr;
+      section.activityReveal=0.F; section.activityClosing=false; section.activityMotionEnabled=false; section.activitySerial=0;
+      (void)owned->slideRoot->removeChild(oldRoot);
       owned->surface->requestLayout();
     }
   }

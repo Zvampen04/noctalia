@@ -886,6 +886,12 @@ struct ActivityRouteConfig {
   std::string motion = "inherit";  // inherit | off
   std::string material = "inherit"; // inherit | surface | transparent
 
+  std::int32_t width = 300;
+  std::int32_t height = 58;
+  std::int32_t progressThickness = 4;
+  std::int32_t timeoutMs = 0; // zero preserves the source timeout
+  bool showBody = true;
+
   bool operator==(const ActivityRouteConfig&) const = default;
 };
 
@@ -898,6 +904,12 @@ struct ActivityRouteOverrideConfig {
   std::string placement;
   std::string motion;
   std::string material;
+
+  std::int32_t width = 0; // zero inherits shared dimensions and timeout
+  std::int32_t height = 0;
+  std::int32_t progressThickness = 0;
+  std::int32_t timeoutMs = 0;
+  std::string body; // empty inherits, show | hide
 
   bool operator==(const ActivityRouteOverrideConfig&) const = default;
 };
@@ -913,6 +925,12 @@ struct OsdActivityConfig {
   ActivityRouteOverrideConfig volume;
   ActivityRouteOverrideConfig brightness;
   ActivityRouteOverrideConfig notification;
+
+  std::int32_t width = 300;
+  std::int32_t height = 58;
+  std::int32_t progressThickness = 4;
+  std::int32_t timeoutMs = 0; // zero preserves the source timeout
+  bool showBody = true;
 
   bool operator==(const OsdActivityConfig&) const = default;
 };
@@ -1231,6 +1249,7 @@ struct ShellConfig {
     float attachedCornerGrowth = 0.5F; // growth exponent; lower values form shoulders earlier
     float attachedContentTravel = 0.1F; // content translation relative to reveal distance
     float attachedDurationMs = 400.0F;
+    float resizeDurationMs = 180.0F;
     bool quickSettingsEnabled = false;
     PanelTransparencyMode transparencyMode = PanelTransparencyMode::Solid;
     bool borders = true;                   // outline on floating panel surfaces
@@ -1904,7 +1923,8 @@ struct ControlCenterConfig {
   ControlCenterSidebarMode sidebarSectionMode = ControlCenterSidebarMode::Compact;
   std::int32_t width = kDefaultWidth; // full-sidebar logical width; compact/none modes scale down from this
   bool showTray = true;
-  bool compactSections = false; // source-specific panels without shared navigation chrome
+  bool compactSections = false;
+  bool compactNavigation = true; // source-specific panels without shared navigation chrome
   std::int32_t compactHeight = 444;
   std::int32_t compactColumns = 6;
   std::vector<std::string> compactLayout; // kind:x:y:width:height; empty preserves automatic layout

@@ -290,10 +290,7 @@ void CalendarTab::rebuildWeekStrip() {
           m_eventsDirty = true;
           m_forceMonthView = true;
           m_monthOpenIntent.request({.year = m_selectedYear, .month = m_selectedMonth, .day = m_selectedDay});
-          PanelManager::instance().close();
-          DeferredCall::callLater([] {
-            PanelManager::instance().openPanel("control-center", {.context = "calendar-month"});
-          });
+          PanelManager::instance().navigatePanelContext("control-center", "calendar-month");
         }, .configure = [role, scale, selected](Button& button) {
           Button::ButtonPalette colors;
           colors.normal = {clearColorSpec(), clearColorSpec(), colorSpecFromRole(role)};

@@ -607,6 +607,7 @@ location = "https://example.invalid/bad"
     c.battery.warningThreshold = 15;
     c.battery.deviceThresholds = {{"BAT0", 10}, {"hidpp:1", 25}};
     c.controlCenter.compactSections = true;
+    c.controlCenter.compactNavigation = false;
     c.controlCenter.compactColumns = 8;
     c.controlCenter.compactLayout = {"volume:0:0:8:1", "actions:0:1:8:1"};
     c.controlCenter.compactHeight = 430;
@@ -704,6 +705,10 @@ location = "https://example.invalid/bad"
     c.shell.panel.launcherPlacement = PanelPlacement::Floating;
     c.shell.launcher.compact = true;
     c.shell.launcher.fitResults = true;
+    c.shell.panel.resizeDurationMs = 120.F;
+    c.osd.activity.width = 340; c.osd.activity.height = 62; c.osd.activity.showBody = false;
+    c.osd.activity.volume.width = 260; c.osd.activity.volume.progressThickness = 6;
+    c.osd.activity.notification.body = "show";
     c.shell.panel.sourceSections = {"launcher=custom-center"};
     c.shell.launcher.sortByUsage = false;
     DmenuEntryConfig notifyDmenu;

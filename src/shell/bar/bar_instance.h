@@ -18,6 +18,7 @@
 #include <unordered_map>
 #include <vector>
 
+class CountdownRingNode;
 class Box;
 class Flex;
 class Glyph;
@@ -61,6 +62,7 @@ struct DynamicBarSection {
   AttachedPanelSource compactSource;
   AttachedPanelSource hoverSource;
   InputArea* activityRoot = nullptr;
+  CountdownRingNode* activityRing = nullptr;
   Box* activityBackground = nullptr;
   Node* activityContent = nullptr;
   Glyph* activityGlyph = nullptr;
@@ -68,6 +70,11 @@ struct DynamicBarSection {
   Label* activityValue = nullptr;
   ProgressBar* activityProgress = nullptr;
   Slider* activitySlider = nullptr;
+  float activityReveal = 0.0F;
+  float activityWidth = 300.0F;
+  float activityHeight = 58.0F;
+  bool activityClosing = false;
+  bool activityInheritsMaterial = true;
   bool activityMotionEnabled = false;
   std::uint64_t activitySerial = 0;
 };

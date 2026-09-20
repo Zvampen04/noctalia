@@ -66,6 +66,8 @@ namespace {
         .placement = config.placement,
         .motion = config.motion,
         .material = config.material,
+        .width = config.width, .height = config.height, .progressThickness = config.progressThickness,
+        .timeoutMs = config.timeoutMs, .showBody = config.showBody,
     };
   }
 
@@ -79,6 +81,11 @@ namespace {
     if (!over.placement.empty()) route.placement = over.placement;
     if (!over.motion.empty()) route.motion = over.motion;
     if (!over.material.empty()) route.material = over.material;
+    if (over.width > 0) route.width = std::max(120,over.width);
+    if (over.height > 0) route.height = std::max(24,over.height);
+    if (over.progressThickness > 0) route.progressThickness = over.progressThickness;
+    if (over.timeoutMs > 0) route.timeoutMs = over.timeoutMs;
+    if (!over.body.empty()) route.showBody = over.body == "show";
     return route;
   }
 
@@ -103,6 +110,7 @@ namespace {
       return std::string(path) + ".placement";
     if (!route.motion.empty() && !parseValue(route.motion, kMotions))
       return std::string(path) + ".motion";
+    if (!route.body.empty() && route.body != "show" && route.body != "hide") return std::string(path) + ".body";
     if (!route.material.empty() && !parseValue(route.material, kMaterials))
       return std::string(path) + ".material";
     return std::nullopt;
@@ -120,6 +128,8 @@ TransientActivityRoute resolveTransientActivityRoute(const OsdActivityConfig& co
       .placement = parseValue(route.placement, kPlacements).value_or(TransientActivityPlacement::Auto),
       .motion = parseValue(route.motion, kMotions).value_or(TransientActivityMotion::Inherit),
       .material = parseValue(route.material, kMaterials).value_or(TransientActivityMaterial::Inherit),
+      .width = route.width, .height = route.height, .progressThickness = route.progressThickness,
+      .timeoutMs = route.timeoutMs, .showBody = route.showBody,
   };
 }
 
@@ -155,6 +165,7 @@ bool TransientActivityService::publish(
   const std::uint64_t generation = ++m_generation;
   if (route.presentation == TransientActivityPresentation::Standalone || !routeAvailable(route)) return false;
 
+  if (route.timeoutMs > 0) model.timeout = std::chrono::milliseconds(route.timeoutMs);
   model.serial = m_nextSerial++;
   model.progress = std::clamp(model.progress, 0.0F, 1.5F);
   model.expiresAt = model.timeout.count() > 0 ? now + model.timeout : Clock::time_point::max();

@@ -947,8 +947,9 @@ void NotificationToast::flushPendingAdds() {
 bool NotificationToast::tryPublishActivity(const Notification& notification) {
   if (m_activityService == nullptr || m_config == nullptr) return false;
   const bool hasDefaultAction = hasNotificationAction(notification.actions, "default");
-  const auto timeout = notification.timeout == 0
-      ? std::chrono::milliseconds{0}
+  const auto route = resolveTransientActivityRoute(m_config->config().osd.activity, TransientActivityKind::Notification);
+  const auto timeout = route.timeoutMs > 0 ? std::chrono::milliseconds{route.timeoutMs}
+      : notification.timeout == 0 ? std::chrono::milliseconds{0}
       : std::chrono::milliseconds{std::max(1, notification.timeout)};
   struct HoverExpiryState {
     std::chrono::steady_clock::time_point expiresAt;
@@ -993,10 +994,11 @@ bool NotificationToast::tryPublishActivity(const Notification& notification) {
             }} : std::function<void(bool)>{},
       .timeout = timeout,
   };
-  const bool accepted = m_activityService->publish(
-      std::move(model), resolveTransientActivityRoute(m_config->config().osd.activity, TransientActivityKind::Notification)
-  );
-  if (accepted) m_embeddedNotificationIds.insert(notification.id);
+  const bool accepted = m_activityService->publish(std::move(model), route);
+  if (accepted) {
+    m_embeddedNotificationIds.insert(notification.id);
+    if (route.timeoutMs > 0 && m_notifications) m_notifications->resumeExpiry(notification.id,route.timeoutMs);
+  }
   return accepted;
 }
 

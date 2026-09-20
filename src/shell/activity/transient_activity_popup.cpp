@@ -18,8 +18,6 @@
 #include <linux/input-event-codes.h>
 
 namespace {
-  constexpr std::uint32_t kWidth = 300;
-  constexpr std::uint32_t kHeight = 58;
 
   TransientActivityPlacement resolvedPlacement(
       TransientActivityPlacement placement, const std::string& barPosition) {
@@ -45,8 +43,8 @@ namespace {
         .anchorY = static_cast<std::int32_t>(std::lround(source.y)),
         .anchorWidth = std::max(1, static_cast<std::int32_t>(std::lround(source.width))),
         .anchorHeight = std::max(1, static_cast<std::int32_t>(std::lround(source.height))),
-        .width = kWidth,
-        .height = kHeight,
+        .width = static_cast<std::uint32_t>(route.width),
+        .height = static_cast<std::uint32_t>(route.height),
         .constraintAdjustment = XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_SLIDE_X
             | XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_SLIDE_Y,
         .grab = false,
@@ -132,8 +130,8 @@ std::unique_ptr<TransientActivityPopup::Instance> TransientActivityPopup::create
   UiPhaseScope layoutPhase(UiPhase::Layout);
   auto root = ui::inputArea({
       .acceptedButtons = InputArea::buttonMask({BTN_LEFT, BTN_RIGHT}),
-      .width = static_cast<float>(kWidth),
-      .height = static_cast<float>(kHeight),
+      .width = static_cast<float>(route.width),
+      .height = static_cast<float>(route.height),
       .onEnter = activity.hoverChanged
           ? std::function<void(const InputArea::PointerData&)>{[hover = activity.hoverChanged](const auto&) {
               hover(true);
@@ -146,8 +144,8 @@ std::unique_ptr<TransientActivityPopup::Instance> TransientActivityPopup::create
       },
   });
   auto background = ui::box({
-      .width = static_cast<float>(kWidth),
-      .height = static_cast<float>(kHeight),
+      .width = static_cast<float>(route.width),
+      .height = static_cast<float>(route.height),
       .configure = [material = route.material, inherited = anchor.inheritedStyle](Box& box) {
         box.setMaterialIdentity("surface", "activity", "attached");
         if (material == TransientActivityMaterial::Transparent) box.setFill(clearColorSpec());
@@ -160,33 +158,39 @@ std::unique_ptr<TransientActivityPopup::Instance> TransientActivityPopup::create
       .align = FlexAlign::Center,
       .gap = Style::spaceSm,
       .paddingH = Style::spaceMd,
-      .width = static_cast<float>(kWidth),
-      .height = static_cast<float>(kHeight),
+      .width = static_cast<float>(route.width),
+      .height = static_cast<float>(route.height),
   });
   row->addChild(ui::glyph({.glyph = activity.icon.empty() ? "bell" : activity.icon}));
-  row->addChild(ui::label({
+  auto text = ui::column({.justify = FlexJustify::Center, .flexGrow = 1.0F});
+  text->addChild(ui::label({
       .text = activity.title.empty() ? activity.value : activity.title,
       .maxLines = 1,
       .ellipsize = TextEllipsize::End,
       .flexGrow = 1.0F,
   }));
+  if (route.showBody && !activity.body.empty()) text->addChild(ui::label({
+      .text = activity.body, .fontSize = Style::fontSizeCaption, .maxLines = 1, .ellipsize = TextEllipsize::End}));
+  row->addChild(std::move(text));
+  if (!activity.title.empty() && !activity.value.empty()) row->addChild(ui::label({.text=activity.value,.maxLines=1}));
   if (activity.showProgress && activity.setProgress) {
     auto slider = std::make_unique<Slider>();
     slider->setRange(0.0, 1.0);
     slider->setStep(0.01);
+    slider->setTrackHeight(static_cast<float>(route.progressThickness));
     slider->setValue(std::clamp(activity.progress, 0.0F, 1.0F));
     slider->setWheelAdjustEnabled(true);
     slider->setOnValueChanged([setProgress = activity.setProgress](double value) {
       setProgress(static_cast<float>(value));
     });
-      slider->setMinWidth(96.0F);
-      slider->setMaxWidth(96.0F);
+      slider->setMinWidth(std::clamp(route.width*.28F,24.F,96.F));
+      slider->setMaxWidth(std::clamp(route.width*.28F,24.F,96.F));
     row->addChild(std::move(slider));
   } else if (activity.showProgress) {
     row->addChild(ui::progressBar({
         .progress = std::clamp(activity.progress, 0.0F, 1.0F),
         .width = 96.0F,
-        .height = 4.0F,
+        .height = static_cast<float>(route.progressThickness),
     }));
   }
   root->addChild(std::move(row));
@@ -196,7 +200,7 @@ std::unique_ptr<TransientActivityPopup::Instance> TransientActivityPopup::create
   instance->inputDispatcher.setSceneRoot(instance->sceneRoot.get());
   instance->surface->setSceneRoot(instance->sceneRoot.get());
   instance->surface->setAnimationManager(&instance->animations);
-  instance->surface->setInputRegion({{0, 0, static_cast<int>(kWidth), static_cast<int>(kHeight)}});
+  instance->surface->setInputRegion({{0, 0, static_cast<int>(route.width), static_cast<int>(route.height)}});
   instance->surface->setConfigureCallback([surface = instance->surface.get()](std::uint32_t, std::uint32_t) {
     surface->requestLayout();
   });

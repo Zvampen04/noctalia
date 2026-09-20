@@ -1,6 +1,7 @@
 #pragma once
 
 #include "render/animation/animation_manager.h"
+#include "config/config_types.h"
 #include "shell/control_center/control_center_services.h"
 #include "shell/control_center/tab.h"
 #include "shell/control_center/tabs/audio_tab.h"
@@ -94,6 +95,7 @@ public:
   [[nodiscard]] bool showsSidebar() const noexcept { return m_showSidebar; }
 
 private:
+  std::optional<ControlCenterConfig> m_presentationSnapshot;
   void onPanelCardOpacityChanged(float opacity) override;
   void doLayout(Renderer& renderer, float width, float height) override;
   void doUpdate(Renderer& renderer) override;

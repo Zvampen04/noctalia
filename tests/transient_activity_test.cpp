@@ -28,6 +28,16 @@ int main() {
   assert(terminal.presentation == TransientActivityPresentation::Attached);
   assert(terminal.bar == "terminal" && terminal.placement == TransientActivityPlacement::Below);
   assert(terminal.motion == TransientActivityMotion::Off);
+  config.width = 340; config.height = 64; config.progressThickness = 5; config.showBody = true;
+  config.volume.width = 260; config.volume.height = 38; config.volume.progressThickness = 6;
+  config.volume.body = "hide"; config.volume.timeoutMs = 1500;
+  const auto sized = resolveTransientActivityRoute(config, TransientActivityKind::VolumeOutput);
+  const auto notification = resolveTransientActivityRoute(config, TransientActivityKind::Notification);
+  assert(sized.width == 260 && sized.height == 38 && sized.progressThickness == 6 && !sized.showBody && sized.timeoutMs == 1500);
+  assert(notification.width == 340 && notification.height == 64 && notification.showBody);
+  config.volume.body = "invalid";
+  assert(validateTransientActivityConfig(config) == "osd.activity.volume.body");
+  config.volume.body = "hide";
   config.brightness.presentation = "invalid";
   assert(validateTransientActivityConfig(config) == "osd.activity.brightness.presentation");
   config.brightness.presentation.clear();

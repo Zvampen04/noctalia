@@ -109,10 +109,18 @@ PanelPlacement ControlCenterPanel::panelPlacement() const noexcept {
 
 bool ControlCenterPanel::dismissTransientUi() {
   const std::size_t activeIdx = tabIndex(m_activeTab);
-  return m_tabs[activeIdx] != nullptr && m_tabs[activeIdx]->dismissTransientUi();
+  if (m_tabs[activeIdx] != nullptr && m_tabs[activeIdx]->dismissTransientUi()) return true;
+  const auto context = pendingOpenContext();
+  if (m_config && m_config->config().controlCenter.compactSections && m_config->config().controlCenter.compactNavigation
+      && !context.empty() && context != "home" && context != "calendar" && context != "calendar-strip" && context != "media") {
+    PanelManager::instance().navigatePanelContext("control-center",context == "calendar-month" ? "calendar-strip" : "home");
+    return true;
+  }
+  return false;
 }
 
 void ControlCenterPanel::create() {
+  if(m_config)m_presentationSnapshot=m_config->config().controlCenter;
   const bool compactHome = m_config && m_config->config().controlCenter.compactSections;
   if (compactHome != m_usingCompactHome) {
     m_tabs[tabIndex(TabId::Home)].swap(m_alternateHome);
@@ -270,6 +278,17 @@ void ControlCenterPanel::create() {
       .gap = Style::spaceSm * scale,
   });
 
+  const auto context = pendingOpenContext();
+  const bool compactNavigation = m_config && m_config->config().controlCenter.compactSections
+      && m_config->config().controlCenter.compactNavigation;
+  const bool compactDetail = compactNavigation && !context.empty() && context != "home"
+      && context != "calendar" && context != "calendar-strip" && context != "media";
+  if (compactDetail) {
+    const std::string backContext = context == "calendar-month" ? "calendar-strip" : "home";
+    header->addChild(ui::button({.glyph = "arrow-left", .tooltip = "Back", .onClick = [backContext] {
+      PanelManager::instance().navigatePanelContext("control-center", backContext);
+    }, .configure = [scale](Button& button) { panel_button_style::configureHeaderIconButton(button, scale); }}));
+  }
   header->addChild(
       ui::label({
           .out = &m_contentTitle,
@@ -306,7 +325,8 @@ void ControlCenterPanel::create() {
   );
   header->addChild(std::move(headerActions));
 
-  if (m_config && m_config->config().controlCenter.compactSections && pendingOpenContext() != "calendar-month") {
+  if (m_config && m_config->config().controlCenter.compactSections && !compactDetail
+      && pendingOpenContext() != "calendar-month") {
     header->setVisible(false);
     header->setParticipatesInLayout(false);
     content->setGap(0.0F);
@@ -416,6 +436,13 @@ void ControlCenterPanel::doLayout(Renderer& renderer, float width, float height)
 }
 
 void ControlCenterPanel::doUpdate(Renderer& renderer) {
+  if(m_config && m_presentationSnapshot && *m_presentationSnapshot != m_config->config().controlCenter
+      && !deferExternalRefresh()) {
+    m_presentationSnapshot=m_config->config().controlCenter;
+    PanelManager::instance().navigatePanelContext("control-center",std::string(pendingOpenContext()));
+    return;
+  }
+
   if (!isTabFeatureAvailable(m_activeTab) || (!m_activeTabForced && !isTabVisible(m_activeTab))) {
     selectTab(firstVisibleTab());
   } else {

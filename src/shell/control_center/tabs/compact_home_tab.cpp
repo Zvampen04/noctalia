@@ -25,7 +25,7 @@
 
 namespace {
 void openSection(const char* context) {
-  DeferredCall::callLater([context] { PanelManager::instance().openPanel("control-center", {.context = context}); });
+  PanelManager::instance().navigatePanelContext("control-center", context);
 }
 
 bool hasEnabledBarMedia(const Config& config, const WaylandOutput* output) {

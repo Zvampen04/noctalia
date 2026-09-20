@@ -612,8 +612,8 @@ void PanelManager::openPanel(const std::string& panelId, PanelOpenRequest reques
   m_pendingOpenContext = std::string(request.context);
   m_activePanel->setPendingOpenContext(request.context);
 
-  auto panelWidth = static_cast<std::uint32_t>(m_activePanel->preferredWidth());
-  auto panelHeight = static_cast<std::uint32_t>(m_activePanel->preferredHeight());
+  auto panelWidth = static_cast<std::uint32_t>(preferredPanelWidth());
+  auto panelHeight = static_cast<std::uint32_t>(preferredPanelHeight());
   m_sourceBarName = barConfig.name;
   m_attachedSource = request.source;
   if (m_attachedSource.section == AttachedPanelSourceSection::Unknown
@@ -1407,6 +1407,8 @@ void PanelManager::deactivateOutsideClickHandlers() {
 }
 
 void PanelManager::closePanel(bool animateClose) {
+  if(m_resizeAnimationId)m_animations.cancel(m_resizeAnimationId);
+  m_resizeAnimationId=0;m_resizeSize.reset();m_resizeTarget.reset();
   if (!isOpen() || m_inTransition || m_closing) {
     return;
   }
@@ -1467,6 +1469,7 @@ void PanelManager::destroyPanel() {
   // reached directly when openPanel preempts an open panel.
   deactivateOutsideClickHandlers();
   m_animations.cancelAll();
+  m_resizeAnimationId=0;m_resizeSize.reset();m_resizeTarget.reset();
   m_closing = false;
   m_pointerInside = false;
   m_attachedPopupCount = 0;
@@ -1535,6 +1538,34 @@ void PanelManager::destroyPanel() {
   if (m_panelClosedCallback) {
     m_panelClosedCallback();
   }
+}
+
+void PanelManager::navigatePanelContext(const std::string& panelId, std::string context) {
+  const auto generation = m_destroyGeneration;
+  DeferredCall::callLater([this, panelId, context = std::move(context), generation] {
+    if (generation != m_destroyGeneration) return;
+    if (!isOpenPanel(panelId) || m_closing || !m_contentNode) {
+      openPanel(panelId, {.context = context});
+      return;
+    }
+    // Retire input before freeing the old page; keep the retained panel geometry.
+    m_inputDispatcher.setSceneRoot(nullptr);
+    TooltipManager::instance().forceDestroy();
+    if (m_activePopup) { m_activePopup->close(); m_activePopup = nullptr; }
+    m_selectPopup.reset();
+    m_activePanel->onClose();
+    while (!m_contentNode->children().empty())
+      (void)m_contentNode->removeChild(m_contentNode->children().back().get());
+    m_activePanel->setPendingOpenContext(context);
+    m_activePanel->create();
+    m_activePanel->onOpen(context);
+    if (m_activePanel->root()) m_contentNode->addChild(m_activePanel->releaseRoot());
+    m_inputDispatcher.setSceneRoot(m_sceneRoot.get());
+    if (auto* focus = m_activePanel->initialFocusArea()) m_inputDispatcher.setFocus(focus);
+    relayoutActivePanelPreferredSize();
+    m_surface->requestUpdate();
+    m_surface->requestLayout();
+  });
 }
 
 void PanelManager::togglePanel(const std::string& panelId, PanelOpenRequest request) {
@@ -1751,7 +1782,40 @@ void PanelManager::refresh() {
   m_surface->requestUpdate();
 }
 
+float PanelManager::preferredPanelWidth() const {
+  return m_resizeSize ? m_resizeSize->first : m_activePanel->preferredWidth();
+}
+float PanelManager::preferredPanelHeight() const {
+  return m_resizeSize ? m_resizeSize->second : m_activePanel->preferredHeight();
+}
 void PanelManager::relayoutActivePanelPreferredSize() {
+  if (!isOpen() || m_closing) return;
+  const std::pair<float,float> target{m_activePanel->preferredWidth(),m_activePanel->preferredHeight()};
+  if (m_resizeTarget == target) return;
+  const std::pair<float,float> from=m_resizeSize.value_or(std::pair<float,float>{m_panelVisualWidth,m_panelVisualHeight});
+  if (m_resizeAnimationId) m_animations.cancel(m_resizeAnimationId);
+  m_resizeAnimationId=0;m_resizeTarget.reset();m_resizeSize.reset();
+  const float duration=m_config ? m_config->config().shell.panel.resizeDurationMs : 180.F;
+  if (!m_sceneRoot || !MotionService::instance().enabled() || duration<=0 || from.first<=0 || from.second<=0
+      || m_attachedRevealProgress<.999F || m_detachedRevealProgress<.999F
+      || (std::abs(from.first-target.first)<1.F && std::abs(from.second-target.second)<1.F)) {
+    applyPreferredPanelSize();return;
+  }
+  m_resizeSize=from;m_resizeTarget=target;
+  const auto generation=m_destroyGeneration;
+  m_resizeAnimationId=m_animations.animate(0.F,1.F,duration,Easing::EaseOutCubic,
+    [this,from,target,generation](float progress){
+      if(generation!=m_destroyGeneration || !isOpen() || m_closing)return;
+      m_resizeSize=std::pair{std::lerp(from.first,target.first,progress),std::lerp(from.second,target.second,progress)};
+      applyPreferredPanelSize();
+    },[this,generation]{
+      if(generation!=m_destroyGeneration || !isOpen() || m_closing)return;
+      m_resizeAnimationId=0;m_resizeSize.reset();m_resizeTarget.reset();applyPreferredPanelSize();
+    },m_sceneRoot.get());
+  requestFrameTick();
+}
+
+void PanelManager::applyPreferredPanelSize() {
   if (!isOpen() || m_activePanel == nullptr || m_surface == nullptr || m_layerSurface == nullptr) {
     return;
   }
@@ -1770,8 +1834,8 @@ void PanelManager::relayoutActivePanelPreferredSize() {
   const std::int32_t outputWidth = wlOutput != nullptr ? wlOutput->effectiveLogicalWidth() : 0;
   const std::int32_t outputHeight = wlOutput != nullptr ? wlOutput->effectiveLogicalHeight() : 0;
 
-  auto panelWidth = static_cast<std::uint32_t>(std::max(1.0F, std::round(m_activePanel->preferredWidth())));
-  auto panelHeight = static_cast<std::uint32_t>(std::max(1.0F, std::round(m_activePanel->preferredHeight())));
+  auto panelWidth = static_cast<std::uint32_t>(std::max(1.0F, std::round(preferredPanelWidth())));
+  auto panelHeight = static_cast<std::uint32_t>(std::max(1.0F, std::round(preferredPanelHeight())));
   if (outputWidth > 0) {
     panelWidth = std::min(panelWidth, static_cast<std::uint32_t>(std::max(1, outputWidth - screenPadding * 2)));
   }
@@ -2693,8 +2757,8 @@ void PanelManager::refreshPanelPlacement() {
     const bool centered = position == "center" || (!available && (wantsAttachment || position == "auto"));
     const bool automatic = !centered && position == "auto";
     const int pad = std::max(0, static_cast<int>(Style::spaceSm));
-    const int bodyW = std::clamp(static_cast<int>(std::lround(m_activePanel->preferredWidth())),1,std::max(1,outputWidth-2*pad));
-    const int bodyH = std::clamp(static_cast<int>(std::lround(m_activePanel->preferredHeight())),1,std::max(1,outputHeight-2*pad));
+    const int bodyW = std::clamp(static_cast<int>(std::lround(preferredPanelWidth())),1,std::max(1,outputWidth-2*pad));
+    const int bodyH = std::clamp(static_cast<int>(std::lround(preferredPanelHeight())),1,std::max(1,outputHeight-2*pad));
     int x=(outputWidth-bodyW)/2, y=(outputHeight-bodyH)/2;
     bool right=false, bottom=false;
     if (automatic) {
@@ -2766,8 +2830,8 @@ void PanelManager::refreshPanelPlacement() {
   m_attachedHasAnchor = m_attachedAnchorAvailable && openNearClickEnabled(m_activePanel, m_activePanelId, m_config);
   auto body = attached_panel::fitBody(direction,
       {rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top}, outputWidth, outputHeight,
-      static_cast<int>(std::lround(m_activePanel->preferredWidth())),
-      static_cast<int>(std::lround(m_activePanel->preferredHeight())), static_cast<int>(Style::spaceSm),
+      static_cast<int>(std::lround(preferredPanelWidth())),
+      static_cast<int>(std::lround(preferredPanelHeight())), static_cast<int>(Style::spaceSm),
       bar.panelOverlap, static_cast<int>(std::ceil(startRadius + radius)),
       static_cast<int>(std::ceil(endRadius + radius)),
       m_attachedHasAnchor ? std::optional<float>(vertical ? m_attachedAnchorY : m_attachedAnchorX) : std::nullopt);
@@ -2788,8 +2852,8 @@ void PanelManager::refreshPanelPlacement() {
   if (islandMorph) {
     body = bar.islandOutward ? attached_panel::fitOutwardIsland(direction,
         {rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top}, m_attachedSource,
-        outputWidth, outputHeight, static_cast<int>(std::lround(m_activePanel->preferredWidth())),
-        static_cast<int>(std::lround(m_activePanel->preferredHeight())), static_cast<int>(Style::spaceSm), bar.islandPanelOffset)
+        outputWidth, outputHeight, static_cast<int>(std::lround(preferredPanelWidth())),
+        static_cast<int>(std::lround(preferredPanelHeight())), static_cast<int>(Style::spaceSm), bar.islandPanelOffset)
         : attached_panel::includeIslandSource(body, m_attachedSource, outputWidth, outputHeight);
   }
   const int cross = static_cast<int>(std::ceil(radius)) + 2 +

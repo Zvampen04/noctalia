@@ -1539,6 +1539,12 @@ namespace settings {
         {"shell", "panel", "attached_duration_ms"}, SliderSetting{cfg.shell.panel.attachedDurationMs, 0, 2000, 10, true}, "morph duration timing"
     ));
     entries.push_back(makeEntry(
+        SettingsSection::Panels, "motion", "Panel resize duration",
+        "Animate content-driven size changes, such as launcher results and calendar pages; zero is immediate.",
+        {"shell", "panel", "resize_duration_ms"}, SliderSetting{cfg.shell.panel.resizeDurationMs,0,2000,10,true},
+        "content resize animation duration", true
+    ));
+    entries.push_back(makeEntry(
         SettingsSection::Panels, "general", "Quick settings",
         "Enable the compact GNOME-derived connection, sound, brightness and session panel. Glass enables it by default.",
         {"shell", "panel", "quick_settings_enabled"}, ToggleSetting{cfg.shell.panel.quickSettingsEnabled},
@@ -1858,6 +1864,11 @@ namespace settings {
     entries.push_back(makeEntry(
         SettingsSection::ControlCenter, "layout", "Quick controls height", "Logical panel height.",
         {"control_center", "compact_height"}, SliderSetting{cfg.controlCenter.compactHeight, 64, 1600, 1, true}, "height"
+    ));
+    entries.push_back(makeEntry(
+        SettingsSection::ControlCenter, "layout", "Compact page navigation",
+        "Show Back on detail pages; Escape returns to Quick Settings or the calendar strip.",
+        {"control_center", "compact_navigation"}, ToggleSetting{cfg.controlCenter.compactNavigation}, "back compact subpage"
     ));
     entries.push_back(makeEntry(
         SettingsSection::ControlCenter, "layout", "Quick Settings grid columns",
@@ -2744,6 +2755,23 @@ namespace settings {
           "activity material surface transparent inherit", true
       ));
 
+      const auto& activity = cfg.osd.activity;
+      entries.push_back(makeEntry(SettingsSection::Osd,"activity","Activity width",
+          "Preferred width of integrated feedback, constrained by available bar space.",
+          {"osd","activity","width"},SliderSetting{static_cast<double>(activity.width),120,1200,1,true},"island width",true));
+      entries.push_back(makeEntry(SettingsSection::Osd,"activity","Activity height",
+          "Height of attached feedback and expanding floating sections.",
+          {"osd","activity","height"},SliderSetting{static_cast<double>(activity.height),24,300,1,true},"island height",true));
+      entries.push_back(makeEntry(SettingsSection::Osd,"activity","Activity level thickness",
+          "Thickness of integrated volume and brightness tracks.",
+          {"osd","activity","progress_thickness"},SliderSetting{static_cast<double>(activity.progressThickness),1,24,1,true},"level bar thickness",true));
+      entries.push_back(makeEntry(SettingsSection::Osd,"activity","Activity timeout",
+          "Milliseconds on screen; zero preserves each source's timeout. Hover can pause notifications.",
+          {"osd","activity","timeout_ms"},SliderSetting{static_cast<double>(activity.timeoutMs),0,60000,100,true},"timeout duration",true));
+      entries.push_back(makeEntry(SettingsSection::Osd,"activity","Show activity body",
+          "Include notification body text below its title.",
+          {"osd","activity","show_body"},ToggleSetting{activity.showBody},"notification body text"));
+
       const auto addOverride = [&](std::string kind, const ActivityRouteOverrideConfig& route) {
         const std::string label = kind == "volume" ? "Volume" : kind == "brightness" ? "Brightness" : "Notification";
         const std::vector<std::string> root{"osd", "activity", kind};
@@ -2784,6 +2812,20 @@ namespace settings {
             "Override the base material; empty inherits it.", path("material"),
             materialSelect(route.material, true), "activity override material " + kind, true
         ));
+        const auto addDimension = [&](const char* key, const char* name, int value, int maximum) {
+          entries.push_back(makeEntry(SettingsSection::Osd,"activity-"+kind,label+" "+name,
+              "Zero inherits the shared activity setting.",path(key),
+              SliderSetting{static_cast<double>(value),0,static_cast<double>(maximum),1,true},"activity size timeout "+kind,true));
+        };
+        addDimension("width","width",route.width,1200);
+        addDimension("height","height",route.height,300);
+        addDimension("progress_thickness","level thickness",route.progressThickness,24);
+        addDimension("timeout_ms","timeout",route.timeoutMs,60000);
+        SelectSetting body;
+        body.options={{.value="",.label="Inherit"},{.value="show",.label="Show body"},{.value="hide",.label="Hide body"}};
+        body.selectedValue=route.body;body.clearOnEmpty=true;
+        entries.push_back(makeEntry(SettingsSection::Osd,"activity-"+kind,label+" body text",
+            "Override body visibility for this activity kind.",path("body"),std::move(body),"notification body text",true));
       };
       addOverride("volume", cfg.osd.activity.volume);
       addOverride("brightness", cfg.osd.activity.brightness);
