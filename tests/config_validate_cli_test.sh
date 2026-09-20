@@ -9,6 +9,13 @@ fail() {
   exit 1
 }
 
+schema_output=$("$noctalia_bin" config export settings-schema) \
+  || fail "settings-schema export used by the theme picker should be accepted"
+case "$schema_output" in
+  *'"profile_managed"'*'"section"'*) ;;
+  *) fail "settings-schema export should return profile ownership and sections" ;;
+esac
+
 if valid_output=$("$noctalia_bin" config validate tests/config_validate/generated-config 2>&1); then
   :
 else

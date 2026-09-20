@@ -65,7 +65,7 @@ PluginPanel::PluginPanel(scripting::PluginRuntimeContext context, PluginPanelOpt
       m_clipboard(context.clipboard),
       m_preferredWidth(options.width > 0.0 ? static_cast<float>(options.width) : kDefaultPanelWidth),
       m_preferredHeight(options.height > 0.0 ? static_cast<float>(options.height) : kDefaultPanelHeight),
-      m_widthFill(options.widthFill), m_heightFill(options.heightFill),
+      m_widthFill(options.widthFill), m_heightFill(options.heightFill), m_decorated(options.decorated),
       m_dismissOnOutsideClick(options.dismissOnOutsideClick),
       m_keyboardMode(keyboardModeFromManifest(options.keyboardFocus)),
       m_layer(layerShellLayerFromConfig(options.shellConfig.layer)), m_persistent(options.persistent),

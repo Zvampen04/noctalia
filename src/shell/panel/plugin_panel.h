@@ -37,6 +37,7 @@ struct PluginPanelOptions {
   // only the fallback if the compositor never assigns one.
   bool widthFill = false;
   bool heightFill = false;
+  bool decorated = true;
   bool dismissOnOutsideClick = true;
   // One of scripting::kPanelKeyboardFocusModes.
   std::string keyboardFocus = "on_demand";
@@ -66,6 +67,7 @@ public:
   [[nodiscard]] float preferredHeight() const override { return scaled(m_preferredHeight); }
   [[nodiscard]] bool fillsWidth() const noexcept override { return m_widthFill; }
   [[nodiscard]] bool fillsHeight() const noexcept override { return m_heightFill; }
+  [[nodiscard]] bool hasDecoration() const override { return m_decorated; }
   [[nodiscard]] bool dismissOnOutsideClick() const override { return m_dismissOnOutsideClick; }
   [[nodiscard]] LayerShellKeyboard keyboardMode() const override { return m_keyboardMode; }
   [[nodiscard]] LayerShellLayer layer() const override { return m_layer; }
@@ -145,6 +147,7 @@ private:
   float m_preferredHeight;
   bool m_widthFill = false;
   bool m_heightFill = false;
+  bool m_decorated = true;
   bool m_dismissOnOutsideClick = true;
   LayerShellKeyboard m_keyboardMode = LayerShellKeyboard::OnDemand;
   LayerShellLayer m_layer = LayerShellLayer::Top;

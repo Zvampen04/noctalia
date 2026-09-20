@@ -27,7 +27,7 @@ namespace noctalia::cli {
       false,
   };
 
-  inline constexpr std::array<std::string_view, 2> kConfigExportModeChoices{"merged", "full"};
+  inline constexpr std::array<std::string_view, 3> kConfigExportModeChoices{"merged", "full", "settings-schema"};
   inline constexpr std::array kConfigExportPositionals{
       Positional{"mode", "Export mode (default: merged)", kConfigExportModeChoices, false, false, false},
   };
