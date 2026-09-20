@@ -155,6 +155,12 @@ namespace settings {
       ~Canvas() override { m->onChange = {}; }
 
     protected:
+      LayoutSize doMeasure(Renderer& renderer, const LayoutConstraints& constraints) override {
+        return measureByLayout(renderer, constraints);
+      }
+      void doArrange(Renderer& renderer, const LayoutRect& rect) override {
+        arrangeByLayout(renderer, rect);
+      }
       void doLayout(Renderer& renderer) override {
         Flex::doLayout(renderer);
         for (auto& item : items) {
