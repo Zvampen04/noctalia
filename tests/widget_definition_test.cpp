@@ -121,6 +121,30 @@ namespace {
 
 int main() {
   const BatteryConfig batteryConfig;
+  {
+    WidgetConfig config;
+    config.settings["ring_source"] = std::string("cpu");
+    config.settings["ring_low_color"] = std::string("primary");
+    config.settings["ring_warning_color"] = std::string("tertiary");
+    config.settings["ring_critical_color"] = std::string("error");
+    auto colors = resolveCommonWidgetOptions(BarConfig{}, &config, "clock", 1.F).ringUsageColors;
+    if (!colors.enabled || colors.colorForPercent(49.9F).role != ColorRole::Primary
+        || colors.colorForPercent(50.F).role != ColorRole::Tertiary
+        || colors.colorForPercent(80.F).role != ColorRole::Tertiary
+        || colors.colorForPercent(80.1F).role != ColorRole::Error)
+      fail("common-ring", "theme colour roles or threshold boundaries are incorrect");
+    config.settings["ring_warning_percent"] = 30.0;
+    config.settings["ring_critical_percent"] = 70.0;
+    config.settings["ring_usage_colors"] = false;
+    colors = resolveCommonWidgetOptions(BarConfig{}, &config, "media", 1.F).ringUsageColors;
+    if (colors.enabled || colors.warningPercent != 30.F || colors.criticalPercent != 70.F)
+      fail("common-ring", "custom usage thresholds did not resolve");
+    config.settings["ring_critical_percent"] = 20.0;
+    colors = resolveCommonWidgetOptions(BarConfig{}, &config, "media", 1.F).ringUsageColors;
+    if (colors.criticalPercent != colors.warningPercent)
+      fail("common-ring", "inverted thresholds were not normalized");
+  }
+
 
   checkDefinition("active_window", activeWindowWidgetDefinition);
   checkDefinition("audio_visualizer", audioVisualizerWidgetDefinition);

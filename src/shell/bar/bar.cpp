@@ -3365,7 +3365,7 @@ void Bar::populateWidgets(BarInstance& instance) {
     if (widget == nullptr) {
       return;
     }
-    widget->configureRing(options.ring, options.ringSource, m_sysmon, m_upower, m_fileWatcher);
+    widget->configureRing(options.ring, options.ringSource, options.ringUsageColors, m_sysmon, m_upower, m_fileWatcher);
     widget->setConfigName(name);
     widget->applyCommonOptions(options, labelFontWeight, barFontFamily, std::format("widget.{}", name));
     widget->setActionContext(
@@ -4429,7 +4429,7 @@ void Bar::buildScene(BarInstance& instance, std::uint32_t width, std::uint32_t h
   instance.paletteConn = paletteChanged().connect([inst = &instance] {
     applyBackgroundPalette(*inst);
     if (inst->surface != nullptr) {
-      inst->surface->requestRedraw();
+      inst->surface->requestUpdate();
     }
   });
   if (instance.contentClip != nullptr) {

@@ -479,6 +479,19 @@ struct WidgetBarCapsuleSpec {
   bool operator==(const WidgetBarCapsuleSpec&) const = default;
 };
 
+struct WidgetRingUsageColors {
+  bool enabled = true;
+  float warningPercent = 50.0F;
+  float criticalPercent = 80.0F;
+  ColorSpec low = fixedColorSpec(rgba(102.F / 255.F, 187.F / 255.F, 106.F / 255.F, 1.F));
+  ColorSpec warning = fixedColorSpec(rgba(1.F, 202.F / 255.F, 40.F / 255.F, 1.F));
+  ColorSpec critical = fixedColorSpec(rgba(239.F / 255.F, 83.F / 255.F, 83.F / 255.F, 1.F));
+
+  [[nodiscard]] const ColorSpec& colorForPercent(float percent) const noexcept {
+    return percent > criticalPercent ? critical : percent >= warningPercent ? warning : low;
+  }
+};
+
 struct CommonWidgetOptions {
   bool enabled = true;
   bool anchor = false;
@@ -494,6 +507,7 @@ struct CommonWidgetOptions {
   bool enableScroll = true;
   bool ring = false;
   std::string ringSource = "battery";
+  WidgetRingUsageColors ringUsageColors;
 };
 
 struct WidgetConfig {

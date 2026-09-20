@@ -4691,6 +4691,30 @@
         "workspace-label-placement": {
           "description": "Corner, centered on the edge, or inside the pill",
           "label": "Workspace Label Placement"
+        },
+        "ring-usage-colors": {
+          "label": "Usage colours",
+          "description": "Colour CPU, GPU and RAM outlines by usage. Turn off to use the theme accent."
+        },
+        "ring-warning-percent": {
+          "label": "Warning starts at (%)",
+          "description": "Use the warning colour at or above this usage percentage."
+        },
+        "ring-critical-percent": {
+          "label": "Critical above (%)",
+          "description": "Use the critical colour above this percentage. Values below the warning threshold are raised to it."
+        },
+        "ring-low-color": {
+          "label": "Low usage colour",
+          "description": "Outline colour below the warning threshold. Choose a theme colour role or a fixed colour."
+        },
+        "ring-warning-color": {
+          "label": "Warning usage colour",
+          "description": "Outline colour from the warning threshold through the critical threshold. Choose a theme colour role or a fixed colour."
+        },
+        "ring-critical-color": {
+          "label": "Critical usage colour",
+          "description": "Outline colour above the critical threshold. Choose a theme colour role or a fixed colour."
         }
       },
       "types": {

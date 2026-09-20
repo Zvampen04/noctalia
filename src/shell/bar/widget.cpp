@@ -29,6 +29,7 @@ struct Widget::RingState {
   UPowerService* battery = nullptr;
   FileWatcher* watcher = nullptr;
   std::vector<std::uint64_t> watches;
+  WidgetRingUsageColors colors;
   float progress = 0.0F;
   bool externalFrame = false;
   bool frameVisible = true;
@@ -86,13 +87,14 @@ struct Widget::RingState {
 Widget::Widget() = default;
 
 void Widget::configureRing(
-    bool enabled, std::string source, SystemMonitorService* monitor, UPowerService* battery, FileWatcher* watcher
+    bool enabled, std::string source, const WidgetRingUsageColors& colors, SystemMonitorService* monitor, UPowerService* battery, FileWatcher* watcher
 ) {
   if (!enabled)
     return;
   m_ringState = std::make_unique<RingState>();
   auto& state = *m_ringState;
   state.source = std::move(source);
+  state.colors = colors;
   state.monitor = monitor;
   state.battery = battery;
   state.watcher = watcher;
@@ -138,7 +140,10 @@ void Widget::updateRing() {
   }
   state.node->setProgress(std::isfinite(progress) ? std::clamp(progress, 0.0F, 1.0F) : 0.0F);
   state.node->setThickness(1.2F * m_contentScale);
-  state.node->setColor(colorForRole(critical ? ColorRole::Error : ColorRole::Primary));
+  const bool usage = state.source == "cpu" || state.source == "ram" || state.source == "gpu";
+  state.node->setColor(usage && state.colors.enabled
+      ? resolveColorSpec(state.colors.colorForPercent(state.node->style().progress * 100.F))
+      : colorForRole(critical ? ColorRole::Error : ColorRole::Primary));
 }
 
 namespace {

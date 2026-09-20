@@ -46,7 +46,7 @@ public:
 
   Widget();
   virtual ~Widget();
-  void configureRing(bool enabled, std::string source, SystemMonitorService*, UPowerService*, FileWatcher*);
+  void configureRing(bool enabled, std::string source, const WidgetRingUsageColors&, SystemMonitorService*, UPowerService*, FileWatcher*);
   [[nodiscard]] std::optional<CountdownRingStyle> usageRingStyle() const;
   void setUsageRingFrame(float x, float y, float width, float height, float radius, bool visible);
 

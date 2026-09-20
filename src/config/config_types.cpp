@@ -596,6 +596,17 @@ CommonWidgetOptions resolveCommonWidgetOptions(
 
   options.ring = widget->getBool("ring", false);
   options.ringSource = widget->getString("ring_source", "battery");
+  auto& ringColors = options.ringUsageColors;
+  ringColors.enabled = widget->getBool("ring_usage_colors", true);
+  const auto percent = [&](const char* key, float fallback) {
+    const double value = widget->getDouble(key, fallback);
+    return std::isfinite(value) ? static_cast<float>(std::clamp(value, 0.0, 100.0)) : fallback;
+  };
+  ringColors.warningPercent = percent("ring_warning_percent", 50.F);
+  ringColors.criticalPercent = std::max(ringColors.warningPercent, percent("ring_critical_percent", 80.F));
+  ringColors.low = widget->getColorSpec("ring_low_color", ringColors.low, "widget.ring_low_color");
+  ringColors.warning = widget->getColorSpec("ring_warning_color", ringColors.warning, "widget.ring_warning_color");
+  ringColors.critical = widget->getColorSpec("ring_critical_color", ringColors.critical, "widget.ring_critical_color");
   options.enabled = widget->getBool("enabled", true);
   options.anchor = widget->getBool("anchor", false);
   options.interactive = widget->getBool("interactive", options.interactive);

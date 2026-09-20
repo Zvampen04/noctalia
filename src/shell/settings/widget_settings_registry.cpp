@@ -652,6 +652,16 @@ namespace settings {
     );
     ringSource.literalLabels = true;
     ringSource.visibleWhen = WidgetSettingVisibility{"ring", {"true"}};
+    const WidgetSettingVisibility usageSource{"ring_source", {"cpu", "ram", "gpu"}};
+    auto ringUsageColors = withGroup(boolSpec("ring_usage_colors", true), "presentation");
+    auto ringWarningPercent = withGroup(doubleSpec("ring_warning_percent", 50, 0, 100, 1), "presentation");
+    auto ringCriticalPercent = withGroup(doubleSpec("ring_critical_percent", 80, 0, 100, 1), "presentation");
+    auto ringLowColor = withGroup(colorSpec("ring_low_color", "#66BB6A"), "presentation");
+    auto ringWarningColor = withGroup(colorSpec("ring_warning_color", "#FFCA28"), "presentation");
+    auto ringCriticalColor = withGroup(colorSpec("ring_critical_color", "#EF5350"), "presentation");
+    for (auto* spec : {&ringUsageColors, &ringWarningPercent, &ringCriticalPercent,
+                       &ringLowColor, &ringWarningColor, &ringCriticalColor})
+      spec->visibleWhen = usageSource;
     auto anchor = withGroup(boolSpec("anchor", false, true), "presentation");
     auto interactive = withGroup(boolSpec("interactive", true), "presentation");
     auto scale = withGroup(doubleSpec("scale", 1.0, 0.2, 2.5, 0.05), "presentation");
@@ -719,6 +729,12 @@ namespace settings {
     return {
         std::move(ring),
         std::move(ringSource),
+        std::move(ringUsageColors),
+        std::move(ringWarningPercent),
+        std::move(ringCriticalPercent),
+        std::move(ringLowColor),
+        std::move(ringWarningColor),
+        std::move(ringCriticalColor),
         std::move(enabled),
         std::move(anchor),
         std::move(interactive),
