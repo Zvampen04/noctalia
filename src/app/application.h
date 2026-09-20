@@ -312,6 +312,9 @@ private:
 
   GlSharedContext m_glShared;
   SharedTextureCache m_sharedTextureCache;
+  // Declared before every UI owner that receives its address so those controls
+  // release subscriptions and texture references before the cache is destroyed.
+  AsyncTextureCache m_asyncTextureCache;
   RenderContext m_renderContext;
   // Config membership owns only asset-cache diagnostics. Renderer lifetime is
   // reconciled independently from actual per-surface scene consumers.
@@ -354,7 +357,6 @@ private:
   ColorPickerDialogPopup m_colorPickerDialogPopup;
   GlyphPickerDialogPopup m_glyphPickerDialogPopup;
   FileDialogPopup m_fileDialogPopup;
-  AsyncTextureCache m_asyncTextureCache;
 
   // Poll sources (must outlive MainLoop)
   std::unique_ptr<SessionBusPollSource> m_busPollSource;

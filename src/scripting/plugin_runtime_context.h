@@ -12,6 +12,7 @@ class FileWatcher;
 class HttpClient;
 class MprisService;
 class PipeWireSpectrum;
+class AsyncTextureCache;
 
 namespace scripting {
 
@@ -29,6 +30,7 @@ namespace scripting {
     CompositorPlatform* platform = nullptr;
     PipeWireSpectrum* audioSpectrum = nullptr;
     MprisService* mpris = nullptr;
+    AsyncTextureCache* textureCache = nullptr;
   };
 
 } // namespace scripting

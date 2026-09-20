@@ -119,6 +119,7 @@ void Application::reloadPluginPanels() {
                 .fileWatcher = &m_fileWatcher,
                 .httpClient = &m_httpClient,
                 .clipboard = &m_clipboardService,
+                .textureCache = &m_asyncTextureCache,
             },
             PluginPanelOptions{
                 .width = resolved.entry->panelWidth,
