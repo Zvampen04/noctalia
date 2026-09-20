@@ -760,7 +760,8 @@ void HomeTab::doLayout(Renderer& renderer, float contentWidth, float bodyHeight)
     // the media/clock column.
     const float userCardReserve = homeAvatarSize(scale) + 2.0F * (Style::spaceSm + Style::spaceXs) * scale;
     const float rootGap = m_rootLayout->gap();
-    const float availForGrid = std::max(1.0F, bodyHeight - userCardReserve - rootGap);
+    const float trayReserve = m_tray ? 36.0F * scale + rootGap : 0.0F;
+    const float availForGrid = std::max(1.0F, bodyHeight - userCardReserve - rootGap - trayReserve);
     const float maxCellSide =
         std::max(1.0F, (availForGrid - static_cast<float>(rows - 1) * rowGap - padV) / static_cast<float>(rows));
     const float maxGridWidth = static_cast<float>(cols) * (maxCellSide / kHomeShortcutSquareTrim)
