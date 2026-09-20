@@ -10,6 +10,7 @@
 
 class Bar;
 class ConfigService;
+enum class ConfigMutationOrigin;
 class Dock;
 class DesktopWidgetsController;
 class IpcService;
@@ -62,7 +63,7 @@ public:
 
 private:
   void loadSnapshotFromConfig();
-  void saveSnapshotToConfig();
+  void saveSnapshotToConfig(ConfigMutationOrigin origin);
   void applyVisibility();
   void handleConfigReload();
   void normalizeSnapshot();

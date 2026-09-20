@@ -1276,7 +1276,9 @@ bool ConfigService::setDesktopWidgetsState(const DesktopWidgetsConfig& desktopWi
   return true;
 }
 
-bool ConfigService::setLockscreenWidgetsState(const LockscreenWidgetsConfig& lockscreenWidgets) {
+bool ConfigService::setLockscreenWidgetsState(
+    const LockscreenWidgetsConfig& lockscreenWidgets, ConfigMutationOrigin origin
+) {
   if (m_overridesPath.empty()) {
     return false;
   }
@@ -1291,21 +1293,7 @@ bool ConfigService::setLockscreenWidgetsState(const LockscreenWidgetsConfig& loc
   sectionTbl->insert_or_assign("schema_version", static_cast<std::int64_t>(lockscreenWidgets.schemaVersion));
   writeWidgetsPlacementToTable(*sectionTbl, lockscreenWidgets.grid, lockscreenWidgets.widgets);
 
-  if (!validateOverrideMutation(next)) {
-    return false;
-  }
-  toml::table previous = std::move(m_overridesTable);
-  m_overridesTable = std::move(next);
-
-  if (!writeOverridesToFile()) {
-    m_overridesTable = std::move(previous);
-    kLog.warn("failed to write {}", m_overridesPath);
-    return false;
-  }
-
-  loadAll();
-  fireReloadCallbacks();
-  return true;
+  return commitOverrideTable(std::move(next), nullptr, origin);
 }
 
 bool ConfigService::markSetupWizardCompleted() {
@@ -2018,7 +2006,7 @@ bool ConfigService::mutateOverrides(
   return commitOverrideTable(std::move(next), changed);
 }
 
-bool ConfigService::commitOverrideTable(toml::table next, bool* changed) {
+bool ConfigService::commitOverrideTable(toml::table next, bool* changed, ConfigMutationOrigin origin) {
   if (next == m_overridesTable) {
     m_lastMutationError.clear();
     return true;
@@ -2028,9 +2016,15 @@ bool ConfigService::commitOverrideTable(toml::table next, bool* changed) {
     return false;
   }
 
+  if (origin == ConfigMutationOrigin::SystemNormalization && m_profilePreview
+      && noctalia::profile::subset(next) != noctalia::profile::subset(m_overridesTable)) {
+    m_lastMutationError = "Appearance normalization deferred while a user preview is active";
+    return false;
+  }
+
   toml::table previous = std::move(m_overridesTable);
   m_overridesTable = std::move(next);
-  if (!writeOverridesToFile()) {
+  if (!writeOverridesToFile(origin)) {
     m_overridesTable = std::move(previous);
     kLog.warn("failed to write {}", m_overridesPath);
     return false;
@@ -2748,13 +2742,13 @@ void ConfigService::applyWallpaperSelection(
   }
 }
 
-bool ConfigService::writeOverridesToFile() {
+bool ConfigService::writeOverridesToFile(ConfigMutationOrigin origin) {
   if (m_overridesPath.empty()) {
     m_lastMutationError = "No settings file is available";
     return false;
   }
   if (!validateOverrideMutation(m_overridesTable, &m_persistedOverridesTable)) return false;
-  if (m_profileTransactionsReady && !m_profilePreview && !m_profileCommitting
+  if (origin == ConfigMutationOrigin::UserEdit && m_profileTransactionsReady && !m_profilePreview && !m_profileCommitting
       && noctalia::profile::subset(m_overridesTable) != noctalia::profile::subset(m_persistedOverridesTable))
     beginProfilePreview();
   toml::table latestPersisted = m_persistedOverridesTable;

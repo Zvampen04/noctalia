@@ -22,8 +22,16 @@
 class IpcService;
 class NotificationManager;
 
+enum class ConfigMutationOrigin {
+  UserEdit,
+  // Derived mandatory state may become the clean persisted baseline, but it
+  // must never join, commit, or replace an active user appearance preview.
+  SystemNormalization,
+};
+
 class ConfigService {
 public:
+
   using ReloadCallback = std::function<void()>;
   using ChangeCallback = std::function<void()>;
 
@@ -173,7 +181,10 @@ public:
   void setDockEnabled(bool enabled);
   // Persist desktop widget layout/editor state to settings.toml and trigger the reload pipeline.
   bool setDesktopWidgetsState(const DesktopWidgetsConfig& desktopWidgets);
-  bool setLockscreenWidgetsState(const LockscreenWidgetsConfig& lockscreenWidgets);
+  bool setLockscreenWidgetsState(
+      const LockscreenWidgetsConfig& lockscreenWidgets,
+      ConfigMutationOrigin origin = ConfigMutationOrigin::UserEdit
+  );
   // Persist app-owned UI/runtime state to state.toml. This does not affect Config reloads.
   bool setStateBool(std::string_view owner, std::string_view key, bool value);
   bool setStateString(std::string_view owner, std::string_view key, std::string_view value);
@@ -244,7 +255,9 @@ private:
   // arrays in `candidate` so every referenced group resolves again.
   void reconcileCapsuleGroupOverrides(toml::table& candidate) const;
   // Validates `next`, persists it, and reloads. `changed` reports whether anything moved.
-  bool commitOverrideTable(toml::table next, bool* changed);
+  bool commitOverrideTable(
+      toml::table next, bool* changed, ConfigMutationOrigin origin = ConfigMutationOrigin::UserEdit
+  );
   void setupWatch();
   // Reconciles inotify watches for [include]d files: watches the parent dir of
   // every loaded file plus every directory named in an [include].files list, and
@@ -270,7 +283,7 @@ private:
   void setConfigParseError(ConfigProblem problem);
   void updateLegacyConfigIssues(noctalia::config::LegacyConfigIssues issues);
   void notifyLegacyConfigIssues();
-  bool writeOverridesToFile();
+  bool writeOverridesToFile(ConfigMutationOrigin origin = ConfigMutationOrigin::UserEdit);
   void extractWallpaperFromOverrides();
   void extractWallpaperFromTable(const toml::table& table);
   void syncWallpaperFavoritesToOverridesTable();

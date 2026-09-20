@@ -1,5 +1,6 @@
 #include "shell/lockscreen/lockscreen_widgets_controller.h"
 
+#include "config/config_service.h"
 #include "ipc/ipc_service.h"
 #include "shell/bar/bar.h"
 #include "shell/desktop/desktop_widget_layout.h"
@@ -149,7 +150,7 @@ void LockscreenWidgetsController::onOutputChange() {
   normalizeSnapshot();
   placementChanged |= m_placementMapper.remapForOutputChange(*m_wayland, m_snapshot.widgets);
   if (placementChanged) {
-    saveSnapshotToConfig();
+    saveSnapshotToConfig(ConfigMutationOrigin::SystemNormalization);
   }
   if (isEditing()) {
     m_editor->onOutputChange();
@@ -238,7 +239,7 @@ void LockscreenWidgetsController::exitEdit() {
   m_placementMapper.rebaseForCurrentOutputs(*m_wayland, m_snapshot.widgets);
   applyVisibility();
   (void)m_editor->close();
-  saveSnapshotToConfig();
+  saveSnapshotToConfig(ConfigMutationOrigin::UserEdit);
   if (m_desktopWidgets != nullptr) {
     m_desktopWidgets->unsuppressDisplay();
   }
@@ -313,15 +314,15 @@ void LockscreenWidgetsController::loadSnapshotFromConfig() {
   normalizeSnapshot();
   placementChanged |= m_placementMapper.remapForOutputChange(*m_wayland, m_snapshot.widgets);
   if (placementChanged || m_snapshot.widgets.size() > widgetCountBefore) {
-    saveSnapshotToConfig();
+    saveSnapshotToConfig(ConfigMutationOrigin::SystemNormalization);
   }
 }
 
-void LockscreenWidgetsController::saveSnapshotToConfig() {
+void LockscreenWidgetsController::saveSnapshotToConfig(ConfigMutationOrigin origin) {
   if (m_config == nullptr) {
     return;
   }
-  m_config->setLockscreenWidgetsState(m_snapshot);
+  m_config->setLockscreenWidgetsState(m_snapshot, origin);
 }
 
 void LockscreenWidgetsController::applyVisibility() {
@@ -332,7 +333,7 @@ void LockscreenWidgetsController::applyVisibility() {
   if (!m_config->isLockScreenEnabled()) {
     if (isEditing() && m_editor != nullptr) {
       m_snapshot = fromDesktopWidgetsEditorSnapshot(m_editor->close());
-      saveSnapshotToConfig();
+      saveSnapshotToConfig(ConfigMutationOrigin::UserEdit);
     }
     m_host->hide();
     return;
@@ -342,7 +343,7 @@ void LockscreenWidgetsController::applyVisibility() {
   if (!enabled) {
     if (isEditing() && m_editor != nullptr) {
       m_snapshot = fromDesktopWidgetsEditorSnapshot(m_editor->close());
-      saveSnapshotToConfig();
+      saveSnapshotToConfig(ConfigMutationOrigin::UserEdit);
     }
     m_host->hide();
     return;

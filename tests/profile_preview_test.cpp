@@ -277,6 +277,7 @@ void lockWidgetAppearanceOwnershipAndTransport() {
       "Profile subset did not isolate lock presentation ownership");
 }
 
+
 void writeFile(const fs::path& path, std::string_view content) {
   fs::create_directories(path.parent_path());
   std::ofstream out(path, std::ios::trunc);
@@ -874,6 +875,119 @@ max = 4.0
   check(!settings::pluginSettingRoute(service.config(), nativePath), "Disabled integration still redirected native settings");
   window.reset();
   drain();
+}
+
+void lockscreenSystemNormalizationOwnership() {
+  Fixture fixture;
+  ConfigService service;
+
+  auto normalized = service.config().lockscreenWidgets;
+  auto login = lockClock("lockscreen-login-box@DP-1", 960.0F);
+  login.type = "login_box";
+  normalized.widgets.push_back(login);
+
+  int reloads = 0;
+  bool probeReloadNormalization = true;
+  service.addReloadCallback([&] {
+    ++reloads;
+    if (!probeReloadNormalization) return;
+    probeReloadNormalization = false;
+    // The controller reload path normalizes the same snapshot again. An
+    // identical system result must settle without another reload cycle.
+    check(service.setLockscreenWidgetsState(
+              normalized, ConfigMutationOrigin::SystemNormalization),
+        service.lastMutationError());
+  }, "lockscreen-normalization-test");
+  check(service.setLockscreenWidgetsState(
+            normalized, ConfigMutationOrigin::SystemNormalization),
+      service.lastMutationError());
+  check(reloads == 1, "System normalization entered a config reload loop");
+  check(!service.profilePreviewActive() && !service.profilePreviewDirty(),
+      "Mandatory lockscreen normalization opened a user preview");
+  check(service.committedConfig()->lockscreenWidgets.widgets == normalized.widgets,
+      "Mandatory lockscreen widgets were not committed as the clean baseline");
+  {
+    ConfigService restarted;
+    check(restarted.config().lockscreenWidgets.widgets == normalized.widgets
+            && !restarted.profilePreviewActive(),
+        "Mandatory lockscreen normalization did not survive restart as clean state");
+  }
+
+  auto userEdit = normalized;
+  userEdit.widgets.front().cx = 880.0F;
+  check(service.setLockscreenWidgetsState(userEdit), service.lastMutationError());
+  check(service.profilePreviewActive() && service.profilePreviewDirty(),
+      "An editor-originated lockscreen change did not open a user preview");
+  const auto draftBefore = snapshot(service);
+  const auto committedBefore = snapshot(service, "committed");
+  const auto statusBefore = status(service);
+
+  auto laterNormalization = userEdit;
+  laterNormalization.widgets.push_back(lockClock("clock@HDMI-A-1", 420.0F));
+  check(!service.setLockscreenWidgetsState(
+            laterNormalization, ConfigMutationOrigin::SystemNormalization),
+      "System normalization joined an active user draft");
+  check(snapshot(service) == draftBefore && snapshot(service, "committed") == committedBefore,
+      "Rejected system normalization changed live or committed appearance");
+  const auto statusAfter = status(service);
+  check(statusAfter.at("session") == statusBefore.at("session")
+          && statusAfter.at("generation") == statusBefore.at("generation")
+          && statusAfter.at("revision") == statusBefore.at("revision"),
+      "Rejected system normalization changed profile identity or revision");
+
+  bool retryPending = true;
+  int retryAttempts = 0;
+  service.addReloadCallback([&] {
+    if (!retryPending || service.profilePreviewActive()) return;
+    retryPending = false;
+    ++retryAttempts;
+    check(service.setLockscreenWidgetsState(
+              laterNormalization, ConfigMutationOrigin::SystemNormalization),
+        service.lastMutationError());
+  }, "lockscreen-normalization-retry-test");
+  service.cancelProfilePreview();
+  check(retryAttempts == 1 && !retryPending,
+      "Profile completion did not provide one retry point for deferred normalization");
+  check(!service.profilePreviewActive() && !service.profilePreviewDirty()
+          && service.committedConfig()->lockscreenWidgets.widgets == laterNormalization.widgets,
+      "Deferred normalization did not become the clean committed baseline");
+
+  auto laterUserEdit = laterNormalization;
+  laterUserEdit.widgets.front().cy = 300.0F;
+  check(service.setLockscreenWidgetsState(laterUserEdit), service.lastMutationError());
+  check(service.profilePreviewActive() && service.profilePreviewDirty(),
+      "A later editor change bypassed the user preview after normalization");
+
+  auto commitNormalization = laterUserEdit;
+  commitNormalization.widgets.push_back(lockClock("clock@DP-2", 640.0F));
+  check(!service.setLockscreenWidgetsState(
+            commitNormalization, ConfigMutationOrigin::SystemNormalization),
+      "System normalization joined the user draft before Save");
+  const auto committedDraft = snapshot(service);
+  const auto commitGuard = status(service);
+  bool commitRetryPending = true;
+  int commitRetryAttempts = 0;
+  service.addReloadCallback([&] {
+    if (!commitRetryPending || service.profilePreviewActive()) return;
+    commitRetryPending = false;
+    ++commitRetryAttempts;
+    check(snapshot(service, "committed")["lockscreen_widgets"]
+            == committedDraft["lockscreen_widgets"],
+        "System normalization ran before the user draft became committed");
+    check(service.setLockscreenWidgetsState(
+              commitNormalization, ConfigMutationOrigin::SystemNormalization),
+        service.lastMutationError());
+  }, "lockscreen-normalization-commit-retry-test");
+  check(service.commitProfilePreview(), service.lastMutationError());
+  check(commitRetryAttempts == 1 && !commitRetryPending,
+      "Successful Save did not provide one retry point for deferred normalization");
+  const auto afterCommitRetry = status(service);
+  check(!service.profilePreviewActive() && !service.profilePreviewDirty()
+          && service.committedConfig()->lockscreenWidgets.widgets == commitNormalization.widgets,
+      "Post-Save normalization did not become a separate clean baseline write");
+  check(afterCommitRetry.at("last_commit").at("session") == commitGuard.at("session")
+          && afterCommitRetry.at("last_commit").at("generation") == commitGuard.at("generation"),
+      "Post-Save normalization replaced or fabricated the user commit receipt");
 }
 
 void emptyDesktopWidgetProfileRoundtrip() {
@@ -1571,6 +1685,7 @@ int main(int argc, char** argv) {
            {"deferred settings mutation lifetime", deferredSettingsMutationLifetime},
            {"exact material plane and appearance registry", exactMaterialPlaneAndSnapshotTransport},
            {"lock widget appearance ownership/transport", lockWidgetAppearanceOwnershipAndTransport},
+           {"lockscreen system normalization ownership", lockscreenSystemNormalizationOwnership},
            {"durable commit receipt", durableCommitReceipt},
            {"detached popup scope inheritance", detachedPopupMaterialScope},
            {"control presentation preview/persistence", controlPresentationPreviewPersistence},
