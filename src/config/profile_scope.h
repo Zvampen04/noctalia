@@ -43,13 +43,13 @@ inline bool owns(const Path& path) {
       return path.size() == 3 && std::ranges::find(fields, path[2]) != fields.end();
     }
     if (path[1] == "media") {
-      constexpr std::array fields{"layout", "artwork_size", "backdrop_opacity", "visualizer", "equalizer_access", "width", "height"};
+      constexpr std::array fields{"layout", "artwork_size", "backdrop_opacity", "visualizer", "equalizer_access", "home_visibility", "width", "height"};
       return path.size() == 3 && std::ranges::find(fields, path[2]) != fields.end();
     }
     constexpr std::array fields{
         "shortcuts",          "sidebar",          "sidebar_section", "width",       "literal_width",
         "show_tray",          "compact_sections", "compact_height",  "hidden_tabs", "show_shortcut_labels",
-        "show_session_button"
+        "show_session_button", "compact_columns", "compact_layout"
     };
     return std::ranges::find(fields, path[1]) != fields.end();
   }

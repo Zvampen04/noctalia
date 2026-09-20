@@ -844,6 +844,12 @@ location = "https://example.invalid/bad"
   }
 
   void checkControlCenterLiteralWidth() {
+    for (const auto* key : {"compact_columns", "compact_layout"})
+      if (!noctalia::profile::owns({"control_center", key}))
+        fail("compact layout must belong to reusable theme profiles");
+    if (!noctalia::profile::owns({"shell", "panel", "source_sections"})
+        || !noctalia::profile::owns({"shell", "launcher", "fit_results"}))
+      fail("launcher routing and sizing must belong to reusable theme profiles");
     if (!noctalia::profile::owns({"control_center", "literal_width"}))
       fail("literal Control Center width is outside appearance transaction ownership");
     ControlCenterConfig defaults;
