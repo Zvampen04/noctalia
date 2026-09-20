@@ -1251,6 +1251,7 @@ struct ShellConfig {
     std::string wallpaperPosition = "auto";
     std::string sessionPosition = "auto";
     std::string polkitPosition = "center";
+    std::vector<std::string> sourceSections; // panel-id=section-id for keyboard/IPC opens
     std::int32_t floatingOffset = 8; // logical px gap between a floating/detached panel and the bar edge
     bool openNearClickControlCenter = false;
     bool openNearClickLauncher = false;
@@ -1268,6 +1269,7 @@ struct ShellConfig {
     std::int32_t width = 560;
     std::int32_t height = 500;
     std::int32_t gridColumns = 5;
+    bool fitResults = false; // shrink to matching rows, bounded by height/visibleRows
     std::int32_t visibleRows = 0; // zero uses the configured height; other rows remain scrollable
     bool categories = true;
     bool showIcons = true;
@@ -1904,6 +1906,8 @@ struct ControlCenterConfig {
   bool showTray = true;
   bool compactSections = false; // source-specific panels without shared navigation chrome
   std::int32_t compactHeight = 444;
+  std::int32_t compactColumns = 6;
+  std::vector<std::string> compactLayout; // kind:x:y:width:height; empty preserves automatic layout
   bool literalWidth = false; // treat width as the final panel width instead of a full-sidebar basis
   bool showShortcutLabels = true;
   bool showSessionButton = true;

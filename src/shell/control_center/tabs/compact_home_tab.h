@@ -5,7 +5,10 @@
 #include "shell/control_center/tabs/notifications_tab.h"
 #include "ui/material_target_catalog.h"
 #include <vector>
+#include "shell/control_center/compact_layout.h"
 
+class Node;
+class ScrollView;
 class TrayWidget;
 class Slider;
 class Glyph;
@@ -47,6 +50,11 @@ private:
   Slider* m_volume = nullptr;
   Glyph* m_brightnessGlyph = nullptr;
   Glyph* m_volumeGlyph = nullptr;
+  struct LayoutBlock { compact_layout::Cell cell; Node* node = nullptr; };
+  std::vector<LayoutBlock> m_layoutBlocks;
+  ScrollView* m_layoutScroll = nullptr;
+  bool m_customLayout = false;
+  int m_layoutColumns = 6;
   bool m_syncing = false;
   bool m_showMedia = true;
 };

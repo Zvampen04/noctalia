@@ -1,4 +1,5 @@
 #include "shell/settings/settings_content.h"
+#include "shell/settings/compact_layout_editor.h"
 #include "shell/control_center/shortcut_identity.h"
 #include "util/string_utils.h"
 
@@ -1499,7 +1500,9 @@ namespace settings {
           activeKeybindRowCount = 0;
         }
         if (const auto* list = std::get_if<ListSetting>(&entry.control)) {
-          if (isFirstBarWidgetListPath(entry.path)) {
+          if (entry.path == std::vector<std::string>{"control_center","compact_layout"}) {
+            activeGroupBody->addChild(makeCompactLayoutEditor(ctx));
+          } else if (isFirstBarWidgetListPath(entry.path)) {
             addBarWidgetLaneEditor(*activeGroupBody, entry, barWidgetEditorCtx);
           } else if (!isBarWidgetListPath(entry.path)) {
             makeListBlock(*activeGroupBody, entry, *list);

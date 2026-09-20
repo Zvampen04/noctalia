@@ -616,6 +616,19 @@ void PanelManager::openPanel(const std::string& panelId, PanelOpenRequest reques
   auto panelHeight = static_cast<std::uint32_t>(m_activePanel->preferredHeight());
   m_sourceBarName = barConfig.name;
   m_attachedSource = request.source;
+  if (m_attachedSource.section == AttachedPanelSourceSection::Unknown
+      && m_attachedSource.sectionId.empty()
+      && m_config) {
+    const auto prefix = panelId + "=";
+    for (const auto& route : m_config->config().shell.panel.sourceSections) {
+      if (!route.starts_with(prefix))
+        continue;
+      const auto id = route.substr(prefix.size());
+      if (std::ranges::any_of(barConfig.sections, [&](const auto& section) { return section.id == id; }))
+        m_attachedSource.sectionId = id;
+      break;
+    }
+  }
   if (barConfig.sectionBackgrounds && barConfig.islandMorph && m_attachedSourceGeometryProvider) {
     if (auto source = m_attachedSourceGeometryProvider(request.output, m_sourceBarName, m_attachedSource);
         source && source->valid())

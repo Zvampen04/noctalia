@@ -1267,7 +1267,7 @@ void LauncherPanel::syncLauncherViewLayout(Renderer* renderer) {
   }
 
   if (useGrid) {
-    m_grid->setColumns(kAppGridColumns);
+    m_grid->setColumns(m_config ? m_config->config().shell.launcher.gridColumns : kAppGridColumns);
     m_grid->setSquareCells(false);
     m_grid->setColumnGap(Style::spaceSm * scale);
     m_grid->setRowGap(Style::spaceSm * scale);
@@ -1920,6 +1920,29 @@ void LauncherPanel::applyActiveCategory() {
   refreshResults();
 }
 
+float LauncherPanel::preferredWidth() const { return scaled(m_config ? m_config->config().shell.launcher.width : 560); }
+
+float LauncherPanel::preferredHeight() const {
+  if (!m_config)
+    return scaled(500);
+  const auto& cfg = m_config->config().shell.launcher;
+  if (!cfg.fitResults && cfg.visibleRows == 0)
+    return scaled(cfg.height);
+  if (shouldUseDetailPresentation())
+    return scaled(cfg.height);
+  const int columns = shouldUseAppGrid() ? std::max(1, cfg.gridColumns) : 1;
+  int rows = std::max(1, static_cast<int>((m_results.size() + columns - 1) / columns));
+  if (!cfg.fitResults)
+    rows = std::max(1, cfg.visibleRows);
+  else if (cfg.visibleRows > 0)
+    rows = std::min(rows, cfg.visibleRows);
+  const auto style = launcherListStyleFrom(m_config, contentScale(), panelCardOpacity());
+  const float rowHeight =
+      shouldUseAppGrid() ? launcherAppGridCellHeightEstimate(style) : launcherRowHeightEstimate(style);
+  const float chrome = scaled(cfg.categories ? 132.F : 88.F);
+  return std::min(scaled(cfg.height), chrome + rows * (rowHeight + Style::spaceXs * contentScale()));
+}
+
 void LauncherPanel::refreshResults() {
   uiAssertNotRendering("LauncherPanel::refreshResults");
   if (m_grid == nullptr || m_emptyLabel == nullptr) {
@@ -1936,6 +1959,8 @@ void LauncherPanel::refreshResults() {
   }
   bindDetailResult();
   applyEmptyState();
+  if(PanelManager::instance().isOpenPanel("launcher"))
+    PanelManager::instance().relayoutActivePanelPreferredSize();
 }
 
 void LauncherPanel::applyEmptyState() {

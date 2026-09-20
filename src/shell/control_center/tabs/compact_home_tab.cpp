@@ -71,6 +71,12 @@ CompactHomeTab::~CompactHomeTab() = default;
 std::unique_ptr<Flex> CompactHomeTab::create() {
   const float s = contentScale();
   m_materialRegistrations.clear();
+  m_layoutBlocks.clear();
+  m_layoutScroll = nullptr;
+  m_mediaRoot = nullptr;
+  m_customLayout = m_services.config && !m_services.config->config().controlCenter.compactLayout.empty();
+  m_layoutColumns = m_services.config ? m_services.config->config().controlCenter.compactColumns : 6;
+  std::unordered_map<std::string, Node*> blocks;
   if (m_services.config != nullptr) {
     const auto& config = m_services.config->config();
     switch (config.controlCenter.media.homeVisibility) {
@@ -121,6 +127,7 @@ std::unique_ptr<Flex> CompactHomeTab::create() {
     labels->addChild(ui::label({.out = detail, .fontSize = 10.0F * s,
         .color = colorSpecFromRole(ColorRole::OnSurfaceVariant), .maxLines = 1}));
     row->addChild(std::move(labels));
+    blocks[std::string(context) == "network" ? "wifi" : "bluetooth"] = row.get();
     return row;
   };
   connections->addChild(tile("Wi-Fi", "wifi", "network", "control-center.home.compact.wifi", &m_wifi, &m_wifiDetail, [this] {
@@ -134,6 +141,7 @@ std::unique_ptr<Flex> CompactHomeTab::create() {
   if (m_showMedia) {
     auto media = m_media.create();
     m_mediaRoot = media.get();
+    blocks["media"] = media.get();
     media->setFlexGrow(1.0F);
     top->addChild(std::move(media));
   }
@@ -158,6 +166,7 @@ std::unique_ptr<Flex> CompactHomeTab::create() {
     (*slider)->addChild(ui::glyph({.out = std::string(context) == "monitor" ? &m_brightnessGlyph : &m_volumeGlyph, .glyph = std::string(context) == "monitor" ? "sun" : "volume",
         .glyphSize = 14.F * s, .color = colorSpecFromRole(ColorRole::OnPrimary),
         .configure = [s](Glyph& icon) { icon.setParticipatesInLayout(false); icon.setHitTestVisible(false); icon.setPosition(10.F * s, 5.F * s); }}));
+    blocks[std::string(context) == "monitor" ? "brightness" : "volume"] = card.get();
     return card;
   };
   auto brightnessCard = sliderCard("Display", "monitor", "control-center.home.compact.brightness", &m_brightness, [this](double v) {
@@ -173,6 +182,7 @@ std::unique_ptr<Flex> CompactHomeTab::create() {
   notifications->addChild(ui::button({.text = "Notifications", .fontSize = 13.0F * s,
       .controlHeight = 22.0F * s, .contentAlign = ButtonContentAlign::Start, .variant = ButtonVariant::Ghost,
       .padding = 0.0F, .onClick = [] { openSection("notifications"); }}));
+  blocks["notifications"] = notifications.get();
   auto list = m_notifications.create(); m_notificationRoot = list.get(); list->setFlexGrow(1.0F);
   notifications->addChild(std::move(list)); root->addChild(std::move(notifications));
 
@@ -190,6 +200,7 @@ std::unique_ptr<Flex> CompactHomeTab::create() {
     m_tray->setContentScale(s);
     m_tray->create();
     viewport->content()->addChild(m_tray->releaseRoot());
+    blocks["tray"] = viewport.get();
     root->addChild(std::move(viewport));
   }
 
@@ -245,16 +256,95 @@ std::unique_ptr<Flex> CompactHomeTab::create() {
                          .materialRegistration = std::move(registration)});
     actions->addChild(std::move(button));
   }
-  if (!m_actions.empty()) root->addChild(std::move(actionsViewport));
+  if (!m_actions.empty()) {
+    blocks["actions"] = actionsViewport.get();
+    root->addChild(std::move(actionsViewport));
+  }
+  if (m_customLayout) {
+    // Move the existing service-backed controls to the same configurable grid.
+    // Keep unused controls alive but hidden so service callbacks stay valid.
+    const auto cells = compact_layout::parse(m_services.config->config().controlCenter.compactLayout, m_layoutColumns);
+    auto viewport = std::make_unique<ScrollView>();
+    m_layoutScroll = viewport.get();
+    viewport->setContentScale(s);
+    viewport->setViewportPaddingH(0);
+    viewport->setViewportPaddingV(0);
+    viewport->setFlexGrow(1);
+    for (auto& [kind, node] : blocks) {
+      auto owned = node->parent()->removeChild(node);
+      node->setParticipatesInLayout(false);
+      node->setClipChildren(true);
+      node->setVisible(false);
+      viewport->content()->addChild(std::move(owned));
+      const auto it = std::ranges::find(cells, kind, &compact_layout::Cell::kind);
+      if (it != cells.end()) {
+        node->setVisible(true);
+        m_layoutBlocks.push_back({*it, node});
+      }
+    }
+    m_top->setVisible(false);
+    m_top->setParticipatesInLayout(false);
+    root->addChild(std::move(viewport));
+  }
   return root;
 }
 
 void CompactHomeTab::doLayout(Renderer& renderer, float width, float height) {
-  if (!m_root) return;
+  if (!m_root)
+    return;
   m_root->setSize(width, height);
-  const float leftWidth = m_showMedia
-      ? std::max(1.0F, (width - 12.0F * contentScale()) * .425F)
-      : std::max(1.0F, width);
+  if (m_customLayout) {
+    const float gap = 8.F * contentScale();
+    std::array<bool, 12> occupied{};
+    for (const auto& block : m_layoutBlocks) {
+      if (block.cell.kind == "brightness" && !block.node->visible())
+        continue;
+      for (int y = block.cell.y; y < block.cell.y + block.cell.h; ++y)
+        occupied[y] = true;
+    }
+    int total = 0;
+    for (bool row : occupied)
+      total += row;
+    // Preserve usable control heights; overflow scrolls instead of squeezing buttons.
+    const float rowHeight = std::max(68.F * contentScale(), (height + gap) / static_cast<float>(std::max(1, total)));
+    m_layoutScroll->content()->setMinHeight(std::max(0.F, rowHeight * total - gap));
+    m_layoutScroll->setFrameSize(width, height);
+    m_layoutScroll->layout(renderer);
+    const float unit = (m_layoutScroll->content()->width() + gap) / static_cast<float>(m_layoutColumns);
+    for (auto& block : m_layoutBlocks) {
+      if (block.cell.kind == "brightness" && !block.node->visible())
+        continue;
+      int before = 0;
+      for (int y = 0; y < block.cell.y; ++y)
+        before += occupied[y];
+      const float w = std::max(1.F, unit * block.cell.w - gap), h = std::max(1.F, rowHeight * block.cell.h - gap);
+      if (auto* flex = dynamic_cast<Flex*>(block.node)) {
+        flex->setMinWidth(0);
+        flex->setMaxWidth(w);
+        flex->setMinHeight(0);
+        flex->setMaxHeight(h);
+        flex->setFrameSize(w, h);
+      } else
+        block.node->setSize(w, h);
+      block.node->setPosition(unit * block.cell.x, rowHeight * before);
+      if (block.cell.kind == "wifi")
+        m_wifiDetail->setMaxWidth(std::max(1.F, w - 68.F * contentScale()));
+      if (block.cell.kind == "bluetooth")
+        m_bluetoothDetail->setMaxWidth(std::max(1.F, w - 68.F * contentScale()));
+      block.node->layout(renderer);
+      if (block.cell.kind == "tray" && m_tray)
+        m_tray->layout(renderer, w, h);
+    }
+    for (auto* icon : {m_brightnessGlyph, m_volumeGlyph})
+      if (icon)
+        icon->layout(renderer);
+    if (m_mediaRoot)
+      m_media.layout(renderer, m_mediaRoot->width(), m_mediaRoot->height());
+    m_notifications.layout(renderer, m_notificationRoot->width(), m_notificationRoot->height());
+    return;
+  }
+  const float leftWidth =
+      m_showMedia ? std::max(1.0F, (width - 12.0F * contentScale()) * .425F) : std::max(1.0F, width);
   m_connections->setMinWidth(leftWidth); m_connections->setMaxWidth(leftWidth);
   for (auto* label : {m_wifiDetail, m_bluetoothDetail}) label->setMaxWidth(std::max(1.0F, (m_showMedia ? leftWidth : (leftWidth - 12.0F * contentScale()) * 0.5F) - 68.0F * contentScale()));
   if (m_tray)
@@ -287,8 +377,10 @@ void CompactHomeTab::doUpdate(Renderer& renderer) {
       ? &m_services.brightness->displays().front() : nullptr;
   const bool hasBrightness = display != nullptr && display->controllable;
   if (m_brightnessCard != nullptr) {
-    m_brightnessCard->setVisible(hasBrightness);
-    m_brightnessCard->setParticipatesInLayout(hasBrightness);
+    const bool included = !m_customLayout
+        || std::ranges::any_of(m_layoutBlocks, [](const auto& b) { return b.cell.kind == "brightness"; });
+    m_brightnessCard->setVisible(hasBrightness && included);
+    m_brightnessCard->setParticipatesInLayout(hasBrightness && !m_customLayout);
   }
   m_brightness->setEnabled(display && display->controllable);
   if (display && !m_brightness->dragging()) m_brightness->setValue(display->brightness * 100.0);
@@ -321,6 +413,8 @@ void CompactHomeTab::onClose() {
   for (auto& action : m_actions) if (action.shortcut) action.shortcut->onPanelClose();
   m_actions.clear();
   m_materialRegistrations.clear();
+  m_layoutBlocks.clear();
+  m_layoutScroll = nullptr;
   m_root = m_top = m_connections = m_mediaRoot = m_notificationRoot = m_brightnessCard = nullptr;
   m_wifiDetail = m_bluetoothDetail = nullptr; m_wifi = m_bluetooth = nullptr; m_brightness = m_volume = nullptr;
 }

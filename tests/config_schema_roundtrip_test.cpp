@@ -607,6 +607,8 @@ location = "https://example.invalid/bad"
     c.battery.warningThreshold = 15;
     c.battery.deviceThresholds = {{"BAT0", 10}, {"hidpp:1", 25}};
     c.controlCenter.compactSections = true;
+    c.controlCenter.compactColumns = 8;
+    c.controlCenter.compactLayout = {"volume:0:0:8:1", "actions:0:1:8:1"};
     c.controlCenter.compactHeight = 430;
     c.controlCenter.media.layout = MediaLayout::Compact;
     c.controlCenter.media.backdropOpacity = .62F;
@@ -701,6 +703,8 @@ location = "https://example.invalid/bad"
     c.shell.panel.floatingLayer = "top";
     c.shell.panel.launcherPlacement = PanelPlacement::Floating;
     c.shell.launcher.compact = true;
+    c.shell.launcher.fitResults = true;
+    c.shell.panel.sourceSections = {"launcher=custom-center"};
     c.shell.launcher.sortByUsage = false;
     DmenuEntryConfig notifyDmenu;
     notifyDmenu.id = "notify";

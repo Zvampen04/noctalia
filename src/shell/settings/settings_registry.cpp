@@ -1703,6 +1703,16 @@ namespace settings {
         ToggleSetting{cfg.shell.launcher.showAppActions}, "launcher app actions show"
     ));
     entries.push_back(makeEntry(
+        SettingsSection::Launcher, "launcher", "Fit launcher to results",
+        "Resize the launcher to matching rows within its maximum height. Attached panels keep their source section.",
+        {"shell","launcher","fit_results"},ToggleSetting{cfg.shell.launcher.fitResults},"island launcher adaptive height"
+    ));
+    entries.push_back(makeEntry(
+        SettingsSection::Panels, "panels", "Panel source sections",
+        "Keyboard/IPC opening anchors, written as panel-id=bar-section-id. Clicking a module retains that module as its source.",
+        {"shell","panel","source_sections"},ListSetting{cfg.shell.panel.sourceSections,{}},"island anchor section routing"
+    ));
+    entries.push_back(makeEntry(
         SettingsSection::Launcher, "launcher", tr("settings.schema.panels.launcher-compact.label"),
         tr("settings.schema.panels.launcher-compact.description"), {"shell", "launcher", "compact"},
         ToggleSetting{cfg.shell.launcher.compact}, "launcher compact rows dense"
@@ -1848,6 +1858,16 @@ namespace settings {
     entries.push_back(makeEntry(
         SettingsSection::ControlCenter, "layout", "Quick controls height", "Logical panel height.",
         {"control_center", "compact_height"}, SliderSetting{cfg.controlCenter.compactHeight, 64, 1600, 1, true}, "height"
+    ));
+    entries.push_back(makeEntry(
+        SettingsSection::ControlCenter, "layout", "Quick Settings grid columns",
+        "Columns in a custom compact layout. Apply or reset the layout after changing its grid.",
+        {"control_center", "compact_columns"}, SliderSetting{cfg.controlCenter.compactColumns,4,12,1,true}, "layout grid"
+    ));
+    entries.push_back(makeEntry(
+        SettingsSection::ControlCenter, "layout", "Visual Quick Settings layout",
+        "Drag controls to move; drag their bottom-right corner to resize. Apply saves the layout for any theme.",
+        {"control_center", "compact_layout"}, ListSetting{cfg.controlCenter.compactLayout,{}}, "layout drag resize grid undo tidy"
     ));
     entries.push_back(makeEntry(
         SettingsSection::ControlCenter, "calendar", "Center today in week strip", "Compact calendar presentation.",
