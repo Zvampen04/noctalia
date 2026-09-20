@@ -460,8 +460,8 @@ namespace {
   public:
     std::string_view id() const override { return "storeit"; }
     std::string defaultLabel() const override { return i18n::tr("control-center.shortcuts.storeit"); }
-    std::string_view iconOn() const override { return "store"; }
-    std::string_view iconOff() const override { return "store"; }
+    std::string_view iconOn() const override { return "building-store"; }
+    std::string_view iconOff() const override { return "building-store"; }
     bool enabled() const override { return process::commandExists("storeit"); }
     void onClick() override {
       if (enabled())
