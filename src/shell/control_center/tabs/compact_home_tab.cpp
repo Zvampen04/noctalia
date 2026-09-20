@@ -96,13 +96,15 @@ std::unique_ptr<Flex> CompactHomeTab::create() {
   m_notifications.setPanelCardOpacity(panelCardOpacity());
   auto root = ui::column({.out = &m_root, .align = FlexAlign::Stretch, .gap = 12.0F * s});
   auto top = ui::row({.out = &m_top, .align = FlexAlign::Stretch, .gap = 12.0F * s,
-      .minHeight = 132.0F * s, .maxHeight = 132.0F * s});
+      .minHeight = (m_showMedia ? 132.0F : 60.0F) * s, .maxHeight = (m_showMedia ? 132.0F : 60.0F) * s});
   auto connections = ui::column({.out = &m_connections, .align = FlexAlign::Stretch, .gap = 12.0F * s});
+  if (!m_showMedia) connections->setDirection(FlexDirection::Horizontal);
   auto tile = [&](const char* title, const char* icon, const char* context, std::string targetId, Button** toggle,
       Label** detail, std::function<void()> action) {
     auto row = ui::row({.align = FlexAlign::Center, .gap = 8.0F * s, .padding = 9.0F * s,
         .fill = colorSpecFromRole(ColorRole::SurfaceVariant, panelCardOpacity()), .radius = 30.0F * s,
         .minHeight = 60.0F * s, .maxHeight = 60.0F * s});
+    if (!m_showMedia) row->setFlexGrow(1.0F);
     const auto path = std::vector<std::string>{"panel", "control-center", "control-center.home",
         "control-center.home.compact", "control-center.home.compact.tile", targetId};
     row->setMaterialIdentityPath("surface", "card", path);
@@ -254,7 +256,7 @@ void CompactHomeTab::doLayout(Renderer& renderer, float width, float height) {
       ? std::max(1.0F, (width - 12.0F * contentScale()) * .425F)
       : std::max(1.0F, width);
   m_connections->setMinWidth(leftWidth); m_connections->setMaxWidth(leftWidth);
-  for (auto* label : {m_wifiDetail, m_bluetoothDetail}) label->setMaxWidth(std::max(1.0F, leftWidth - 68.0F * contentScale()));
+  for (auto* label : {m_wifiDetail, m_bluetoothDetail}) label->setMaxWidth(std::max(1.0F, (m_showMedia ? leftWidth : (leftWidth - 12.0F * contentScale()) * 0.5F) - 68.0F * contentScale()));
   if (m_tray)
     m_tray->layout(renderer, width, 36.0F * contentScale());
   m_root->layout(renderer);

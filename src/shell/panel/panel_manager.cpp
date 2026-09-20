@@ -531,6 +531,20 @@ void PanelManager::openPanel(const std::string& panelId, PanelOpenRequest reques
     return;
   }
 
+  // A panel changing its own page retains its opener. Calendar week ->
+  // month and Quick Settings subpages must not fall back to an edge-attached
+  // panel with concave corners and an unrelated closing destination.
+  std::string retainedSourceBar;
+  if (isOpenPanel(panelId) && request.sourceBarName.empty() && !request.source.valid()) {
+    retainedSourceBar = m_sourceBarName;
+    request.sourceBarName = retainedSourceBar;
+    request.source = m_attachedSource;
+    request.output = request.output ? request.output : m_output;
+    request.anchorX = m_attachedAnchorX;
+    request.anchorY = m_attachedAnchorY;
+    request.hasAnchorPosition = m_attachedAnchorAvailable;
+  }
+
   if (request.output == nullptr && m_platform != nullptr) {
     request.output = m_platform->focusedInteractiveOutput(std::chrono::milliseconds(1200));
     if (request.output == nullptr) {

@@ -1502,6 +1502,12 @@ namespace {
             : section.config.layoutRole == BarSectionLayoutRole::Center ? DynamicRole::Center
             : section.config.layoutRole == BarSectionLayoutRole::End ? DynamicRole::End : DynamicRole::Free);
       }
+      // Keep the collapsed layout independent of the panel's animated extent.
+      // It is the destination of the closing animation, never its current frame.
+      auto compactRequests = requests;
+      for (std::size_t i = 0; i < compactRequests.size(); ++i)
+        compactRequests[i].size -= instance.barConfig.sectionBackgrounds
+            ? 2.0F * std::max(0.0F, instance.barConfig.islandHoverGrow) * hoverProgress[i] : 0.0F;
       if (usesStableIslandMorphSurface(instance.barConfig) && instance.attachedPanelGeometry.has_value()
           && !instance.attachedPanelGeometry->source.sectionId.empty()) {
         const auto& attached = *instance.attachedPanelGeometry;
@@ -1532,6 +1538,15 @@ namespace {
               : instance.barConfig.centerAlignment == BarCenterAlignment::End ? 1.0F : 0.5F,
           edgePolicy == BarEdgeClusterPolicy::FollowCenter ? DynamicPolicy::FollowCenter
               : edgePolicy == BarEdgeClusterPolicy::Equidistant ? DynamicPolicy::Equidistant : DynamicPolicy::Edge);
+      noctalia::bar::dynamic_sections::applyLanePolicy(
+          compactRequests, layoutRoles, contentMainStart, contentMainEnd,
+          static_cast<float>(instance.barConfig.widgetSpacing),
+          instance.barConfig.centerAlignment == BarCenterAlignment::Start ? 0.0F
+              : instance.barConfig.centerAlignment == BarCenterAlignment::End ? 1.0F : 0.5F,
+          edgePolicy == BarEdgeClusterPolicy::FollowCenter ? DynamicPolicy::FollowCenter
+              : edgePolicy == BarEdgeClusterPolicy::Equidistant ? DynamicPolicy::Equidistant : DynamicPolicy::Edge);
+      const auto compactExtents = noctalia::bar::dynamic_sections::resolve(
+          compactRequests, contentMainStart, contentMainEnd, static_cast<float>(instance.barConfig.widgetSpacing));
       const auto extents = noctalia::bar::dynamic_sections::resolve(
           requests, contentMainStart, contentMainEnd, static_cast<float>(instance.barConfig.widgetSpacing));
       const bool reverseCross = instance.barConfig.position == "bottom" || instance.barConfig.position == "right";
@@ -1609,11 +1624,16 @@ namespace {
         section.compactSource = {
             .section = AttachedPanelSourceSection::Unknown,
             .sectionId = section.config.id,
-            .x = absoluteX, .y = absoluteY, .width = width, .height = height,
+            // Source geometry is local to contentClip; the public provider
+            // adds that node's origin exactly once.
+            .x = isVertical ? section.config.crossOffset : compactExtents[i].start,
+            .y = isVertical ? compactExtents[i].start : section.config.crossOffset,
+            .width = isVertical ? slotCross : compactExtents[i].end - compactExtents[i].start,
+            .height = isVertical ? compactExtents[i].end - compactExtents[i].start : slotCross,
             .radii = section.background->style().radius,
             .contentOffset = AttachedPanelSource::ContentOffset{
-                instance.contentClip->x() + section.slot->x() + section.content->x() - absoluteX,
-                instance.contentClip->y() + section.slot->y() + section.content->y() - absoluteY}};
+                ((isVertical ? slotCross : compactExtents[i].end - compactExtents[i].start) - section.content->width()) * 0.5F,
+                ((isVertical ? compactExtents[i].end - compactExtents[i].start : slotCross) - section.content->height()) * 0.5F}};
         section.hoverSource = section.compactSource;
       }
       return;
