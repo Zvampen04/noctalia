@@ -453,7 +453,11 @@ namespace {
     std::string defaultLabel() const override { return i18n::tr("control-center.shortcuts.themes"); }
     std::string_view iconOn() const override { return "palette"; }
     std::string_view iconOff() const override { return "palette"; }
-    void onClick() override { PanelManager::instance().openSettingsWindow("appearance"); }
+    bool enabled() const override { return !scripting::PluginRegistry::instance().themePickerPanelId().empty(); }
+    void onClick() override {
+      const auto panel = scripting::PluginRegistry::instance().themePickerPanelId();
+      if (!panel.empty()) PanelManager::instance().togglePanel(panel);
+    }
   };
 
   class StoreItShortcut final : public Shortcut {

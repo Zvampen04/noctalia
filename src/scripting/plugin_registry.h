@@ -55,6 +55,9 @@ namespace scripting {
     // Whether `id` names a registered entry ("author/plugin:entry").
     [[nodiscard]] bool hasEntry(std::string_view fullEntryId) const;
 
+    // Shared Themes destination: an enabled preset provider's theme-picker panel.
+    [[nodiscard]] std::string themePickerPanelId() const;
+
     // All entries of one kind (e.g. every [[widget]]) across active plugins.
     [[nodiscard]] std::vector<ResolvedPluginEntry> entriesOfKind(PluginEntryKind kind) const;
 

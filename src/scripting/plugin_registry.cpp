@@ -178,4 +178,14 @@ namespace scripting {
     return resolved.has_value() && resolved->entry->kind == kind;
   }
 
+  std::string PluginRegistry::themePickerPanelId() const {
+    std::string selected;
+    for (const auto& resolved : entriesOfKind(PluginEntryKind::Panel)) {
+      if (resolved.entry->id != "theme-picker" || resolved.manifest->presetCommand.empty()) continue;
+      const auto id = resolved.fullId();
+      if (selected.empty() || id < selected) selected = id;
+    }
+    return selected;
+  }
+
 } // namespace scripting

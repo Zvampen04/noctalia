@@ -865,7 +865,6 @@ std::vector<settings::GestureActionOption> SettingsWindow::gestureActionCatalog(
            {"panel-toggle control-center home", "Quick Settings", "Open the configured home controls and shortcuts."},
            {"panel-toggle session", "Power menu", "Open lock, logout, suspend and shutdown choices."},
            {"panel-toggle wallpaper", "Wallpaper picker", "Browse and change wallpapers."},
-           {"settings-open appearance", "Themes and appearance", "Open theme and appearance settings."},
            {"settings-open", "Settings", "Open all shell settings."},
            {"exec storeit", "StoreIt", "Open the app and system update store."},
            {"exec storeit-open-updates --quick-settings", "System updates",
@@ -879,6 +878,10 @@ std::vector<settings::GestureActionOption> SettingsWindow::gestureActionCatalog(
            {"panel-toggle launcher", "Launcher", "Search apps and available launcher providers."}
        }) {
     options.push_back({.option = {.value = command, .label = label, .description = description}, .argsSpec = {}});
+  }
+  if (const auto panel = scripting::PluginRegistry::instance().themePickerPanelId(); !panel.empty()) {
+    options.push_back({.option = {.value = "panel-toggle " + panel, .label = "Themes",
+                                  .description = "Open the theme picker overlay."}, .argsSpec = {}});
   }
   for (const auto& handler : m_ipcService->handlers()) {
     // `exec` and `none` are grammar keywords, not commands, and are offered as their own rows.
