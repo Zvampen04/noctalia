@@ -13,6 +13,7 @@
 #include "ui/controls/glyph.h"
 #include "ui/controls/graph.h"
 #include "ui/controls/image.h"
+#include "ui/controls/image_carousel.h"
 #include "ui/controls/input.h"
 #include "ui/controls/label.h"
 #include "ui/controls/markdown_view.h"
@@ -473,6 +474,10 @@ namespace ui {
       static const std::unordered_set<std::string> kImage = {"width",   "height",      "flexGrow", "opacity",
                                                              "visible", "path",        "radius",   "fit",
                                                              "border",  "borderWidth", "onClick",  "onHover"};
+      static const std::unordered_set<std::string> kCarousel = {
+          "width", "height", "flexGrow", "visible", "opacity", "paths", "selected", "enabled",
+          "expandedWidth", "expandedHeight", "sliceWidth", "sliceHeight", "spacing", "skew", "duration",
+          "onSelect", "onActivate"};
       static const std::unordered_set<std::string> kSeparator = {"width",   "height",  "flexGrow",
                                                                  "opacity", "visible", "thickness",
                                                                  "color",   "spacing", "orientation"};
@@ -534,6 +539,9 @@ namespace ui {
       }
       if (type == "image") {
         return kImage;
+      }
+      if (type == "image_carousel") {
+        return kCarousel;
       }
       if (type == "separator") {
         return kSeparator;
@@ -703,6 +711,9 @@ namespace ui {
         return wrapClickable(std::make_unique<Image>(), callbackProp(desired, "onClick") != nullptr);
       }
       return std::make_unique<Image>();
+    }
+    if (desired.type == "image_carousel") {
+      return std::make_unique<ImageCarousel>();
     }
     if (desired.type == "separator") {
       return std::make_unique<Separator>();
@@ -1370,6 +1381,38 @@ namespace ui {
         }
       }
       syncWrapperCallbacks(slot, desired, node);
+      return;
+    }
+
+    if (desired.type == "image_carousel") {
+      auto* carousel = static_cast<ImageCarousel*>(node);
+      carousel->setTextureCache(m_textureCache);
+      if (const auto* paths = strArrayProp(desired, "paths")) {
+        std::vector<std::string> resolved;
+        for (const auto& path : *paths) {
+          if (resolved.size() == 256) break;
+          resolved.push_back(m_resolver ? m_resolver(path) : path);
+        }
+        carousel->setPaths(resolved);
+      }
+      const auto value = [&](const char* key, double fallback) {
+        const auto* prop = numProp(desired, key);
+        return prop != nullptr && std::isfinite(*prop) ? std::clamp(*prop, -4096.0, 4096.0) : fallback;
+      };
+      carousel->setGeometry(scaled(value("expandedWidth", 768)), scaled(value("expandedHeight", 475)),
+          scaled(value("sliceWidth", 108)), scaled(value("sliceHeight", 432)), scaled(value("spacing", -30)),
+          scaled(value("skew", 28)), static_cast<float>(value("duration", 220)));
+      carousel->setSelected(static_cast<int>(std::clamp(value("selected", 0), 0.0, 255.0)));
+      const auto* enabled = boolProp(desired, "enabled");
+      carousel->setEnabled(enabled == nullptr || *enabled);
+      const auto* select = callbackProp(desired, "onSelect");
+      carousel->setOnSelect(select ? std::function<void(int)>([this, name = *select](int index) {
+        if (m_sink) m_sink(ControlCallback{name, std::to_string(index), {}});
+      }) : std::function<void(int)>{});
+      const auto* activate = callbackProp(desired, "onActivate");
+      carousel->setOnActivate(activate ? std::function<void(int)>([this, name = *activate](int index) {
+        if (m_sink) m_sink(ControlCallback{name, std::to_string(index), {}});
+      }) : std::function<void(int)>{});
       return;
     }
 

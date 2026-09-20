@@ -65,6 +65,7 @@ uniform int u_alpha_mask;
 uniform float u_opacity;
 uniform vec2 u_size;
 uniform float u_radius;
+uniform float u_slice_skew;
 uniform vec4 u_border_color;
 uniform float u_border_width;
 uniform int u_scrim_enabled;
@@ -106,6 +107,15 @@ void main() {
     float radius = min(u_radius, min(u_size.x, u_size.y) * 0.5);
     vec2 centered = v_local - u_size * 0.5;
     float outer_distance = rounded_rect_distance(centered, u_size * 0.5, radius);
+    if (abs(u_slice_skew) > 0.001) {
+        float amount = min(abs(u_slice_skew), max(0.0, u_size.x - 1.0));
+        float slope = amount / max(u_size.y, 1.0);
+        float y = clamp(v_local.y / max(u_size.y, 1.0), 0.0, 1.0);
+        float left = amount * (u_slice_skew >= 0.0 ? 1.0-y : y);
+        float right = u_size.x - amount * (u_slice_skew >= 0.0 ? y : 1.0-y);
+        float sides = max(left-v_local.x, v_local.x-right) / sqrt(1.0+slope*slope);
+        outer_distance = max(sides, max(-v_local.y, v_local.y-u_size.y));
+    }
     float outer_coverage = 1.0 - smoothstep(-aa, aa, outer_distance);
     if (outer_coverage <= 0.0) {
         discard;
@@ -139,6 +149,7 @@ void main() {
     float inner_radius = max(radius - u_border_width, 0.0);
     vec2 inner_half = max(u_size * 0.5 - vec2(u_border_width), vec2(0.0));
     float inner_distance = rounded_rect_distance(centered, inner_half, inner_radius);
+    if (abs(u_slice_skew) > 0.001) inner_distance = outer_distance + u_border_width;
     float inner_coverage = 1.0 - smoothstep(-aa, aa, inner_distance);
 
     // Match the rect shader: the border is a stroke ring, not a full-area
@@ -172,6 +183,7 @@ void ImageProgram::ensureInitialized() {
   m_alphaMaskLocation = glGetUniformLocation(m_program.id(), "u_alpha_mask");
   m_opacityLocation = glGetUniformLocation(m_program.id(), "u_opacity");
   m_radiusLocation = glGetUniformLocation(m_program.id(), "u_radius");
+  m_sliceSkewLocation = glGetUniformLocation(m_program.id(), "u_slice_skew");
   m_borderColorLocation = glGetUniformLocation(m_program.id(), "u_border_color");
   m_borderWidthLocation = glGetUniformLocation(m_program.id(), "u_border_width");
   m_texSizeLocation = glGetUniformLocation(m_program.id(), "u_tex_size");
@@ -195,6 +207,7 @@ void ImageProgram::ensureInitialized() {
       || m_alphaMaskLocation < 0
       || m_opacityLocation < 0
       || m_radiusLocation < 0
+      || m_sliceSkewLocation < 0
       || m_borderColorLocation < 0
       || m_borderWidthLocation < 0
       || m_texSizeLocation < 0
@@ -223,6 +236,7 @@ void ImageProgram::destroy() {
   m_alphaMaskLocation = -1;
   m_opacityLocation = -1;
   m_radiusLocation = -1;
+  m_sliceSkewLocation = -1;
   m_borderColorLocation = -1;
   m_borderWidthLocation = -1;
   m_texSizeLocation = -1;
@@ -243,7 +257,8 @@ void ImageProgram::abandon() noexcept { m_program.abandon(); }
 void ImageProgram::draw(
     TextureId texture, float surfaceWidth, float surfaceHeight, float width, float height, const Color& tint,
     bool monochromeTint, bool alphaMaskTint, float opacity, float radius, const Color& borderColor, float borderWidth,
-    int fitMode, float textureWidth, float textureHeight, const Mat3& transform, const ImageScrim& scrim
+    int fitMode, float textureWidth, float textureHeight, const Mat3& transform, const ImageScrim& scrim,
+    float sliceSkew
 ) const {
   if (!m_program.isValid() || texture == 0 || width <= 0.0F || height <= 0.0F) {
     return;
@@ -265,6 +280,7 @@ void ImageProgram::draw(
   glUniform1i(m_alphaMaskLocation, alphaMaskTint ? 1 : 0);
   glUniform1f(m_opacityLocation, opacity);
   glUniform1f(m_radiusLocation, std::max(0.0F, radius));
+  glUniform1f(m_sliceSkewLocation, sliceSkew);
   glUniform4f(m_borderColorLocation, borderColor.r, borderColor.g, borderColor.b, borderColor.a);
   glUniform1f(m_borderWidthLocation, std::max(0.0F, borderWidth));
   glUniform2f(m_texSizeLocation, textureWidth, textureHeight);

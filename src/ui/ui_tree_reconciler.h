@@ -12,6 +12,7 @@ class Flex;
 class InputArea;
 class Node;
 class Renderer;
+class AsyncTextureCache;
 class DragDropController;
 enum class FontWeight : int;
 
@@ -74,6 +75,7 @@ namespace ui {
 
     void setCallbackSink(CallbackSink sink) { m_sink = std::move(sink); }
     void setPathResolver(PathResolver resolver) { m_resolver = std::move(resolver); }
+    void setTextureCache(AsyncTextureCache* cache) { m_textureCache = cache; }
     void setFocusRequestSink(FocusRequestSink sink) { m_focusSink = std::move(sink); }
     // Content scale multiplied into size-like props (gaps, sizes, radii).
     void setScale(float scale);
@@ -135,6 +137,7 @@ namespace ui {
 
     CallbackSink m_sink;
     PathResolver m_resolver;
+    AsyncTextureCache* m_textureCache = nullptr;
     FocusRequestSink m_focusSink;
     float m_scale = 1.0F;
     float m_fontScale = 1.0F;

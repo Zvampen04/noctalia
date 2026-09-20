@@ -70,6 +70,7 @@ PluginPanel::PluginPanel(scripting::PluginRuntimeContext context, PluginPanelOpt
       m_keyboardMode(keyboardModeFromManifest(options.keyboardFocus)),
       m_layer(layerShellLayerFromConfig(options.shellConfig.layer)), m_persistent(options.persistent),
       m_shellConfig(options.shellConfig) {
+  m_reconciler.setTextureCache(context.textureCache);
   // The manifest parser already validated every spec, so a parse failure here means the two
   // drifted apart. Skip the entry rather than capture a chord nobody can describe.
   m_captureKeys.reserve(options.captureKeys.size());

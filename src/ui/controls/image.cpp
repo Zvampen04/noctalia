@@ -117,6 +117,10 @@ Image::~Image() {
 // the surface's stable renderer before the transient view dies.
 void Image::bindRenderer(Renderer& renderer) { m_renderer = &renderer; }
 
+void Image::setSliceSkew(float skew) {
+  if (m_image != nullptr) m_image->setSliceSkew(skew);
+}
+
 void Image::setRadius(float radius) {
   if (m_radius == radius) {
     return;

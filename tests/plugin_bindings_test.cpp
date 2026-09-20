@@ -120,6 +120,21 @@ order = ["a", "b"]
   ok = checkConfigSetting("shell.nope", "assert(v == nil)", "getSetting should return nil for missing paths") && ok;
   ok = expect(runLuau(state, "=ui-prelude", scripting::kUiPrelude), "failed to execute production UI prelude") && ok;
   ok = expect(
+           runLuau(state, "=image-carousel", "panel.render(ui.imageCarousel({ paths = {'a.png', 'b.png'}, selected = 1 }))"),
+           "failed to render the production image carousel constructor"
+       )
+      && ok;
+  ok = expect(context.patch.uiTree.has_value() && context.patch.uiTree->type == "image_carousel",
+              "imageCarousel should produce an image_carousel UI node") && ok;
+  if (context.patch.uiTree.has_value()) {
+    const auto it = context.patch.uiTree->props.find("paths");
+    const auto* paths = it == context.patch.uiTree->props.end()
+        ? nullptr : std::get_if<std::vector<std::string>>(&it->second);
+    ok = expect(paths != nullptr && *paths == std::vector<std::string>{"a.png", "b.png"},
+                "imageCarousel paths should survive deserialization") && ok;
+  }
+  context.patch = {};
+  ok = expect(
            runLuau(state, "=empty-accepts", "panel.render(ui.dropZone({ accepts = {} }))"),
            "failed to render DropZone with an empty accepts list"
        )

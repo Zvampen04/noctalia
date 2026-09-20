@@ -30,6 +30,7 @@ public:
   ~Image() override;
 
   void setRadius(float radius);
+  void setSliceSkew(float skew);
   // Darkens the image's texels with a linear gradient inside the image draw, so a scrimmed image
   // keeps a single antialiased edge instead of needing a rounded rect stacked on top.
   void setScrim(const ImageScrim& scrim);

@@ -475,6 +475,7 @@ void RenderContext::renderNode(
               .textureHeight = static_cast<float>(img->textureHeight()),
               .transform = worldTransform,
               .scrim = img->scrim(),
+              .sliceSkew = img->sliceSkew(),
           }
       );
     }

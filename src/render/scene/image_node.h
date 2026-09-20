@@ -69,6 +69,13 @@ public:
     markPaintDirty();
   }
 
+  [[nodiscard]] float sliceSkew() const noexcept { return m_sliceSkew; }
+  void setSliceSkew(float value) {
+    if (m_sliceSkew == value) return;
+    m_sliceSkew = value;
+    markPaintDirty();
+  }
+
   void setScrim(const ImageScrim& scrim) {
     if (m_scrim == scrim) {
       return;
@@ -109,6 +116,7 @@ private:
   bool m_monochromeTint = false;
   bool m_alphaMaskTint = false;
   float m_radius = 0.0F;
+  float m_sliceSkew = 0.0F;
   Color m_borderColor = {0.0F, 0.0F, 0.0F, 0.0F};
   float m_borderWidth = 0.0F;
   ImageFitMode m_fitMode = ImageFitMode::Stretch;
