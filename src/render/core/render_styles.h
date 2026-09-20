@@ -196,6 +196,9 @@ struct CountdownRingStyle {
   Color color{};
   float thickness = 6.0F;
   float progress = 1.0F;
+  float radius = -1.0F; // negative uses the largest capsule radius
+  bool symmetric = false;
+  bool operator==(const CountdownRingStyle&) const = default;
 };
 
 enum class ScreenCornerPosition : std::uint8_t {

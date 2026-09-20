@@ -38,26 +38,47 @@ uniform vec2 u_rect_size;
 uniform vec4 u_color;
 uniform float u_thickness;
 uniform float u_progress;
+uniform float u_radius;
+uniform float u_symmetric;
 varying vec2 v_pixel;
 
 const float PI = 3.14159265359;
 
 void main() {
     vec2 center = u_rect_size * 0.5;
-    float radius = min(u_rect_size.x, u_rect_size.y) * 0.5 - u_thickness * 0.5;
+    vec2 halfSize = max(center - vec2(u_thickness * 0.5), vec2(0.0));
+    float radius = u_radius < 0.0 ? min(halfSize.x, halfSize.y)
+        : clamp(u_radius - u_thickness * 0.5, 0.0, min(halfSize.x, halfSize.y));
     vec2 p = v_pixel - center;
-    vec2 straight = max(center - vec2(min(center.x, center.y)), vec2(0.0));
-    float dist = length(p - clamp(p, -straight, straight));
-
-    float ring = abs(dist - radius) - u_thickness * 0.5;
-    float aa = max(1.0, u_thickness * 0.18);
+    vec2 straight = halfSize - vec2(radius);
+    vec2 q = abs(p) - straight;
+    float distanceToEdge = length(max(q, vec2(0.0))) + min(max(q.x, q.y), 0.0) - radius;
+    float ring = abs(distanceToEdge) - u_thickness * 0.5;
+    float aa = max(0.5, u_thickness * 0.18);
     float ringMask = 1.0 - smoothstep(-aa, aa, ring);
 
-    float theta = atan(p.y / max(center.y, 1.0), p.x / max(center.x, 1.0));
-    float start = -PI * 0.5;
-    float rel = mod(theta - start + 2.0 * PI, 2.0 * PI);
-    float arcLen = 2.0 * PI * clamp(u_progress, 0.0, 1.0);
-    float arcMask = u_progress >= 1.0 ? 1.0 : 1.0 - smoothstep(arcLen - 0.06, arcLen + 0.06, rel);
+    // Distance along either half of the actual rounded-rectangle perimeter,
+    // measured from top centre. This keeps pills symmetric without stretching
+    // a circular angular mask over their straight edges.
+    float x = abs(p.x);
+    float along;
+    if (p.y < -straight.y) {
+        along = x <= straight.x ? x : straight.x
+            + radius * (atan(p.y + straight.y, x - straight.x) + PI * 0.5);
+    } else if (p.y > straight.y) {
+        along = x <= straight.x
+            ? straight.x + PI * radius + 2.0 * straight.y + straight.x - x
+            : straight.x + PI * radius * 0.5 + 2.0 * straight.y
+                + radius * atan(p.y - straight.y, x - straight.x);
+    } else {
+        along = straight.x + PI * radius * 0.5 + p.y + straight.y;
+    }
+    float halfPerimeter = max(0.001, 2.0 * straight.x + 2.0 * straight.y + PI * radius);
+    float fraction = u_symmetric > 0.5 ? along / halfPerimeter
+        : (p.x >= 0.0 ? along : 2.0 * halfPerimeter - along) / (2.0 * halfPerimeter);
+    float feather = aa / (u_symmetric > 0.5 ? halfPerimeter : 2.0 * halfPerimeter);
+    float arcMask = u_progress >= 1.0 ? 1.0
+        : 1.0 - smoothstep(u_progress - feather, u_progress + feather, fraction);
 
     float alpha = ringMask * arcMask * u_color.a * step(0.00001, u_progress);
     if (alpha <= 0.0) {
@@ -84,6 +105,8 @@ void CountdownRingProgram::ensureInitialized() {
   m_colorLocation = glGetUniformLocation(m_program.id(), "u_color");
   m_thicknessLocation = glGetUniformLocation(m_program.id(), "u_thickness");
   m_progressLocation = glGetUniformLocation(m_program.id(), "u_progress");
+  m_radiusLocation = glGetUniformLocation(m_program.id(), "u_radius");
+  m_symmetricLocation = glGetUniformLocation(m_program.id(), "u_symmetric");
   m_transformLocation = glGetUniformLocation(m_program.id(), "u_transform");
 
   if (m_positionLocation < 0
@@ -93,6 +116,7 @@ void CountdownRingProgram::ensureInitialized() {
       || m_rectSizeLocation < 0
       || m_colorLocation < 0
       || m_thicknessLocation < 0
+      || m_radiusLocation < 0 || m_symmetricLocation < 0
       || m_progressLocation < 0
       || m_transformLocation < 0) {
     throw std::runtime_error("failed to query countdown ring shader locations");
@@ -109,6 +133,7 @@ void CountdownRingProgram::destroy() {
   m_colorLocation = -1;
   m_thicknessLocation = -1;
   m_progressLocation = -1;
+  m_radiusLocation = m_symmetricLocation = -1;
   m_transformLocation = -1;
 }
 
@@ -139,6 +164,8 @@ void CountdownRingProgram::draw(
   glUniform4f(m_colorLocation, style.color.r, style.color.g, style.color.b, style.color.a);
   glUniform1f(m_thicknessLocation, style.thickness);
   glUniform1f(m_progressLocation, style.progress);
+  glUniform1f(m_radiusLocation, style.radius);
+  glUniform1f(m_symmetricLocation, style.symmetric ? 1.0F : 0.0F);
   glUniformMatrix3fv(m_transformLocation, 1, GL_FALSE, quadTransform.m.data());
   const auto posAttr = static_cast<GLuint>(m_positionLocation);
   glVertexAttribPointer(posAttr, 2, GL_FLOAT, GL_FALSE, 0, vertices.data());

@@ -40,6 +40,7 @@ struct AttachedPanelSource {
   // Original section origin relative to the compact painted island, before
   // clipping/reflow. A clipped end lane can legitimately have a negative offset.
   std::optional<ContentOffset> contentOffset;
+  std::optional<CountdownRingStyle> usageRing;
 
   [[nodiscard]] bool valid() const noexcept {
     return (section != AttachedPanelSourceSection::Unknown || !sectionId.empty()) && std::isfinite(x) && std::isfinite(y)

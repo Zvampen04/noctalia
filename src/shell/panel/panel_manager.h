@@ -30,6 +30,7 @@ class FocusGrab;
 class LayerSurface;
 class Node;
 class RenderProxyNode;
+class CountdownRingNode;
 class Panel;
 class RenderContext;
 class Renderer;
@@ -285,6 +286,7 @@ private:
   Node* m_attachedRevealContentNode = nullptr;
   Node* m_attachedContentClipNode = nullptr;
   RenderProxyNode* m_islandOpenerProxy = nullptr;
+  CountdownRingNode* m_islandUsageRing = nullptr;
   std::function<std::optional<AttachedPanelSource>(wl_output*, std::string_view, const AttachedPanelSource&)> m_attachedSourceGeometryProvider;
   std::function<const Node*(wl_output*,std::string_view,const AttachedPanelSource&)> m_attachedSourceContentProvider;
   Box* m_panelShadowNode = nullptr;

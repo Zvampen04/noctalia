@@ -33,6 +33,22 @@ public:
     markPaintDirty();
   }
 
+  void setRadius(float radius) {
+    if (m_style.radius == radius) return;
+    m_style.radius = radius;
+    markPaintDirty();
+  }
+  void setSymmetric(bool symmetric) {
+    if (m_style.symmetric == symmetric) return;
+    m_style.symmetric = symmetric;
+    markPaintDirty();
+  }
+  void setStyle(const CountdownRingStyle& style) {
+    if (m_style == style) return;
+    m_style = style;
+    markPaintDirty();
+  }
+
   [[nodiscard]] const CountdownRingStyle& style() const noexcept { return m_style; }
 
 private:

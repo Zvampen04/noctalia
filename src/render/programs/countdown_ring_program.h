@@ -34,5 +34,7 @@ private:
   GLint m_colorLocation = -1;
   GLint m_thicknessLocation = -1;
   GLint m_progressLocation = -1;
+  GLint m_radiusLocation = -1;
+  GLint m_symmetricLocation = -1;
   GLint m_transformLocation = -1;
 };

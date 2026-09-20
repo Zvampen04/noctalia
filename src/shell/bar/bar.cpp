@@ -2696,6 +2696,36 @@ void Bar::syncBarSurfaceChrome(BarInstance& instance) {
   syncBarExclusiveZone(instance);
   if (instance.barConfig.sectionBackgrounds) syncBarAutoHideInputRegion(instance);
   applyBarCompositorBlur(instance);
+  const auto syncRing = [&](const std::vector<std::unique_ptr<Widget>>& widgets, Box* background,
+                            bool panelOwns) {
+    if (!background) return;
+    Widget* only = nullptr;
+    for (const auto& widget : widgets) {
+      if (!widget->outerNode() || !widget->outerNode()->visible() || !widget->outerNode()->participatesInLayout()) continue;
+      if (only) return; // grouped modules retain their individual widget rings
+      only = widget.get();
+    }
+    if (!only || !only->usageRingStyle()) return;
+    float bx = 0, by = 0, wx = 0, wy = 0;
+    Node::absolutePosition(background, bx, by);
+    Node::absolutePosition(only->outerNode(), wx, wy);
+    only->setUsageRingFrame(bx - wx, by - wy, background->width(), background->height(),
+        background->style().radius.tl, background->visible() && !panelOwns);
+  };
+  for (auto& section : instance.dynamicSections) {
+    const bool owned = instance.attachedPanelGeometry && instance.attachedPanelGeometry->panelOwnsSource
+        && instance.attachedPanelGeometry->source.sectionId == section.config.id;
+    syncRing(section.widgets, section.background, owned);
+  }
+  if (instance.barConfig.sectionBackgrounds && instance.dynamicSections.empty()) {
+    const std::array<const std::vector<std::unique_ptr<Widget>>*, 3> groups{
+        &instance.startWidgets, &instance.centerWidgets, &instance.endWidgets};
+    for (std::size_t i = 0; i < groups.size(); ++i) {
+      const bool owned = instance.attachedPanelGeometry && instance.attachedPanelGeometry->panelOwnsSource
+          && sourceSectionIndex(instance.attachedPanelGeometry->source.section) == i;
+      syncRing(*groups[i], instance.sectionBackgrounds[i], owned);
+    }
+  }
 }
 
 std::optional<LayerPopupParentContext> Bar::popupParentContextForSurface(wl_surface* surface) const noexcept {
@@ -2884,15 +2914,30 @@ std::optional<AttachedPanelSource> Bar::attachedSourceGeometry(
   if (instance == nullptr || instance->contentClip == nullptr || info == nullptr
       || !info->hasUsableGeometry() || !instance->barConfig.sectionBackgrounds) return std::nullopt;
   AttachedPanelSource source;
+  const auto ringFor = [](const std::vector<std::unique_ptr<Widget>>& widgets) -> std::optional<CountdownRingStyle> {
+    const Widget* only = nullptr;
+    for (const auto& widget : widgets) {
+      if (!widget->outerNode() || !widget->outerNode()->visible() || !widget->outerNode()->participatesInLayout()) continue;
+      if (only) return std::nullopt;
+      only = widget.get();
+    }
+    auto style = only ? only->usageRingStyle() : std::nullopt;
+    if (style) style->radius = -1.0F; // The receiving contour supplies its own radius.
+    return style;
+  };
   if (!requested.sectionId.empty()) {
     const auto it = std::ranges::find(instance->dynamicSections, requested.sectionId,
                                       [](const DynamicBarSection& candidate) { return candidate.config.id; });
     if (it == instance->dynamicSections.end()) return std::nullopt;
     source = it->compactSource;
+    source.usageRing = ringFor(it->widgets);
   } else {
     const auto index = sourceSectionIndex(requested.section);
     if (!index) return std::nullopt;
     source = instance->compactPanelSources[*index];
+    const std::array<const std::vector<std::unique_ptr<Widget>>*, 3> groups{
+        &instance->startWidgets, &instance->centerWidgets, &instance->endWidgets};
+    source.usageRing = ringFor(*groups[*index]);
   }
   if (!source.valid()) return std::nullopt;
   float clipX = 0.0F, clipY = 0.0F;
@@ -2941,6 +2986,7 @@ void Bar::setAttachedPanelGeometry(
     }
   }
   instance->attachedPanelGeometry = geometry;
+  syncBarSurfaceChrome(*instance);
   if (instance->surface != nullptr && instance->surface->width() > 0 && instance->surface->height() > 0) {
     applyBarShadowStyle(
         *instance, m_config->config().shell.shadow, static_cast<float>(instance->surface->width()),
@@ -4731,7 +4777,8 @@ void Bar::notifyAttachedSourceGeometryChanged(const BarInstance& instance) {
   const auto current = attachedSourceGeometry(instance.output, instance.barConfig.name, previous);
   if (!current || (current->x == previous.x && current->y == previous.y
       && current->width == previous.width && current->height == previous.height
-      && current->radii == previous.radii && current->contentOffset == previous.contentOffset)) return;
+      && current->radii == previous.radii && current->contentOffset == previous.contentOffset
+      && current->usageRing == previous.usageRing)) return;
   m_attachedSourceGeometryChangedCallback(instance.output, instance.barConfig.name);
 }
 

@@ -940,6 +940,19 @@ void Application::initBarDockAndLayout() {
   m_panelManager.setAttachedPanelAvailabilityCallback([this](wl_output* output, std::string_view barName) {
     return m_bar.canAttachPanelToBar(output, barName);
   });
+  m_panelManager.setAttachedSourceGeometryProvider(
+      [this](wl_output* output, std::string_view barName, const AttachedPanelSource& source) {
+        return m_bar.attachedSourceGeometry(output, barName, source);
+      });
+  m_panelManager.setAttachedSourceContentProvider(
+      [this](wl_output* output, std::string_view barName, const AttachedPanelSource& source) {
+        return m_bar.attachedPanelSourceContent(output, barName, source);
+      });
+  m_bar.setAttachedSourceGeometryChangedCallback([this](wl_output* output, std::string_view barName) {
+    if (m_panelManager.isAttachedOpen() && m_panelManager.attachedPanelOutput() == output
+        && m_panelManager.attachedSourceBarName() == barName)
+      m_panelManager.relayoutActivePanelPreferredSize();
+  });
   m_panelManager.setAttachedPanelLayerProvider([this](wl_output* output, std::string_view barName) {
     return m_bar.layerForBar(output, barName);
   });

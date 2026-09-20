@@ -1,4 +1,5 @@
 #include "shell/panel/panel_manager.h"
+#include "render/scene/countdown_ring_node.h"
 #include "shell/panel/attached_panel_layout.h"
 #include "core/input/key_symbols.h"
 #include "ui/controls/slider.h"
@@ -615,6 +616,11 @@ void PanelManager::openPanel(const std::string& panelId, PanelOpenRequest reques
   auto panelHeight = static_cast<std::uint32_t>(m_activePanel->preferredHeight());
   m_sourceBarName = barConfig.name;
   m_attachedSource = request.source;
+  if (barConfig.sectionBackgrounds && barConfig.islandMorph && m_attachedSourceGeometryProvider) {
+    if (auto source = m_attachedSourceGeometryProvider(request.output, m_sourceBarName, m_attachedSource);
+        source && source->valid())
+      m_attachedSource = *source;
+  }
   m_islandMorph = barConfig.sectionBackgrounds && barConfig.islandMorph && m_attachedSource.valid();
   m_openingSourceBarName = std::string(request.sourceBarName);
   m_attachedAnchorAvailable = request.hasAnchorPosition;
@@ -1471,6 +1477,7 @@ void PanelManager::destroyPanel() {
   m_attachedRevealContentNode = nullptr;
   m_attachedContentClipNode = nullptr;
   m_islandOpenerProxy = nullptr;
+  m_islandUsageRing = nullptr;
   m_panelShadowNode = nullptr;
   m_panelContactShadowNode = nullptr;
   m_selectPopup.reset();
@@ -2165,6 +2172,25 @@ void PanelManager::applyAttachedMorph(float progress) {
       m_islandOpenerProxy->setOpacity(1.F-std::clamp(progress,0.F,1.F));
     }
   }
+  if (m_islandMorph && m_attachedSource.usageRing && !m_islandUsageRing) {
+    auto ring = std::make_unique<CountdownRingNode>();
+    ring->setHitTestVisible(false);
+    ring->setParticipatesInLayout(false);
+    ring->setZIndex(100);
+    m_islandUsageRing = static_cast<CountdownRingNode*>(m_attachedRevealContentNode->addChild(std::move(ring)));
+  }
+  if (m_islandUsageRing) {
+    m_islandUsageRing->setVisible(m_islandMorph && m_attachedSource.usageRing.has_value());
+    if (m_attachedSource.usageRing) {
+      auto style = *m_attachedSource.usageRing;
+      const float inset = style.thickness * 2.5F;
+      style.radius = std::max(0.0F, geometry.radius - inset);
+      m_islandUsageRing->setStyle(style);
+      m_islandUsageRing->setPosition(bounds.x + inset, bounds.y + inset);
+      m_islandUsageRing->setFrameSize(std::max(0.0F, bounds.width - 2.0F * inset),
+                                    std::max(0.0F, bounds.height - 2.0F * inset));
+    }
+  }
   applyAttachedDecorationStyle();
   if (m_bgNode) {
     auto* background=static_cast<Box*>(m_bgNode);
@@ -2234,6 +2260,7 @@ void PanelManager::applyAttachedReveal(float progress) {
     return;
   }
   if (m_islandOpenerProxy) m_islandOpenerProxy->setVisible(false);
+  if (m_islandUsageRing) m_islandUsageRing->setVisible(false);
   if (m_contentNode) m_contentNode->setOpacity(1.F);
   if (m_attachedContentClipNode) {
     m_attachedContentClipNode->setPosition(0,0);
@@ -2818,6 +2845,7 @@ void PanelManager::queuePanelPlacement(RetainedPlacement placement, std::uint32_
 void PanelManager::applyAttachmentMode(bool attached) {
   if (!attached) m_islandMorph=false;
   if (!attached && m_islandOpenerProxy) m_islandOpenerProxy->setVisible(false);
+  if (!attached && m_islandUsageRing) m_islandUsageRing->setVisible(false);
   if (m_attachedToBar == attached) return;
   Node* revealClip=m_attachedToBar?m_attachedRevealClipNode:m_detachedRevealClipNode;
   Node* revealContent=m_attachedToBar?m_attachedRevealContentNode:m_detachedRevealContentNode;

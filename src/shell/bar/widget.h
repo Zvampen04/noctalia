@@ -4,6 +4,7 @@
 #include "core/ui_phase.h"
 #include "ipc/ipc_invocation_context.h"
 #include "render/core/renderer.h"
+#include "render/core/render_styles.h"
 #include "render/scene/node.h"
 #include "shell/bar/widget_action.h"
 #include "shell/bar/widget_gesture.h"
@@ -46,6 +47,8 @@ public:
   Widget();
   virtual ~Widget();
   void configureRing(bool enabled, std::string source, SystemMonitorService*, UPowerService*, FileWatcher*);
+  [[nodiscard]] std::optional<CountdownRingStyle> usageRingStyle() const;
+  void setUsageRingFrame(float x, float y, float width, float height, float radius, bool visible);
 
   virtual void create() = 0;
   void layout(Renderer& renderer, float containerWidth, float containerHeight) {

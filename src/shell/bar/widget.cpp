@@ -30,6 +30,8 @@ struct Widget::RingState {
   FileWatcher* watcher = nullptr;
   std::vector<std::uint64_t> watches;
   float progress = 0.0F;
+  bool externalFrame = false;
+  bool frameVisible = true;
   bool failed = false;
   ~RingState() {
     if (monitor && source == "gpu")
@@ -258,6 +260,7 @@ void Widget::setRoot(std::unique_ptr<Node> root) {
   if (m_ringState) {
     auto ring = std::make_unique<CountdownRingNode>();
     m_ringState->node = ring.get();
+    ring->setSymmetric(true);
     ring->setHitTestVisible(false);
     ring->setParticipatesInLayout(false);
     gestureArea->addChild(std::move(ring));
@@ -279,11 +282,29 @@ void Widget::syncOuterFromRoot() noexcept {
   m_innerRoot->setPosition(inset, inset);
   outer->setSize(m_innerRoot->width() + 2.0F * inset, m_innerRoot->height() + 2.0F * inset);
   if (m_ringState && m_ringState->node) {
-    m_ringState->node->setSize(outer->width(), outer->height());
-    m_ringState->node->setVisible(m_innerRoot->width() > 0 && m_innerRoot->height() > 0);
+    if (!m_ringState->externalFrame)
+      m_ringState->node->setSize(outer->width(), outer->height());
+    m_ringState->node->setVisible(m_ringState->frameVisible && m_innerRoot->width() > 0 && m_innerRoot->height() > 0);
   }
   outer->setVisible(m_innerRoot->visible());
   outer->setParticipatesInLayout(m_innerRoot->participatesInLayout());
+}
+
+std::optional<CountdownRingStyle> Widget::usageRingStyle() const {
+  return m_ringState && m_ringState->node
+      ? std::optional{m_ringState->node->style()} : std::nullopt;
+}
+
+void Widget::setUsageRingFrame(float x, float y, float width, float height, float radius, bool visible) {
+  if (!m_ringState || !m_ringState->node) return;
+  m_ringState->externalFrame = true;
+  m_ringState->frameVisible = visible;
+  auto* ring = m_ringState->node;
+  const float inset = 3.0F * m_contentScale;
+  ring->setPosition(x + inset, y + inset);
+  ring->setSize(std::max(0.0F, width - 2.0F * inset), std::max(0.0F, height - 2.0F * inset));
+  ring->setRadius(std::max(0.0F, std::min({radius, width * 0.5F, height * 0.5F}) - inset));
+  ring->setVisible(visible && width > 2.0F * inset && height > 2.0F * inset);
 }
 
 void Widget::setAnimationManager(AnimationManager* mgr) noexcept { m_animations = mgr; }

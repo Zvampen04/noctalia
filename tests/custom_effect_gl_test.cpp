@@ -1,4 +1,6 @@
 #include "render/custom_effect/custom_effect_program.h"
+#include "render/programs/countdown_ring_program.h"
+#include <cmath>
 
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
@@ -134,6 +136,47 @@ void expectGreen(const std::array<std::uint8_t, 4>& pixel) {
 
 int main() {
   HeadlessGles2 gl;
+  // Exercise the production contour shader for circle, pill and expanded panel.
+  {
+    CountdownRingProgram ring;
+    ring.ensureInitialized();
+    for (const auto shape : {std::array<float, 3>{32, 32, 16},
+                             std::array<float, 3>{56, 24, 12},
+                             std::array<float, 3>{56, 48, 8}}) {
+      for (const float progress : {0.F, .25F, .5F, .75F, 1.F}) {
+        clear();
+        CountdownRingStyle style;
+        style.color = {1, 1, 1, 1};
+        style.thickness = 2;
+        style.radius = shape[2];
+        style.progress = progress;
+        style.symmetric = true;
+        ring.draw(64, 64, shape[0], shape[1], style,
+                  Mat3::translation(32 - shape[0] / 2, 32 - shape[1] / 2));
+        std::array<unsigned char, 64 * 64 * 4> pixels{};
+        glReadPixels(0, 0, 64, 64, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+        assert(glGetError() == GL_NO_ERROR);
+        unsigned total = 0;
+        for (int y = 0; y < 64; ++y) {
+          for (int x = 0; x < 64; ++x) {
+            const int alpha = pixels[(y * 64 + x) * 4 + 3];
+            const int mirror = pixels[(y * 64 + 63 - x) * 4 + 3];
+            assert(std::abs(alpha - mirror) <= 2);
+            total += alpha;
+          }
+        }
+        assert(progress == 0 ? total == 0 : total > 0);
+        if (progress == .5F) {
+          // glReadPixels has its origin at the bottom, unlike the scene.
+          const int top = static_cast<int>(32 + shape[1] / 2) - 1;
+          const int bottom = static_cast<int>(32 - shape[1] / 2);
+          assert(pixels[(top * 64 + 32) * 4 + 3] > 200);
+          assert(pixels[(bottom * 64 + 32) * 4 + 3] == 0);
+        }
+      }
+    }
+    ring.destroy();
+  }
   CustomEffectProgramCache cache;
   const auto good = asset("user.last-good", 'a', kValidSource);
   const auto bad = asset("user.last-good", 'b', kGlInvalidSource);
