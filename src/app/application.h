@@ -312,10 +312,11 @@ private:
 
   GlSharedContext m_glShared;
   SharedTextureCache m_sharedTextureCache;
-  // Declared before every UI owner that receives its address so those controls
-  // release subscriptions and texture references before the cache is destroyed.
-  AsyncTextureCache m_asyncTextureCache;
   RenderContext m_renderContext;
+  // Declared after the render context, whose make-current callback it uses, and
+  // before every UI owner that receives its address. Reverse destruction then
+  // releases UI references, destroys this cache, and only then tears down GL.
+  AsyncTextureCache m_asyncTextureCache;
   // Config membership owns only asset-cache diagnostics. Renderer lifetime is
   // reconciled independently from actual per-surface scene consumers.
   std::set<std::string, std::less<>> m_configuredCustomEffectAssets;
