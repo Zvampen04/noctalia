@@ -19,6 +19,7 @@ const noctalia::bar::WidgetDefinition<ControlCenterWidget::Options>& controlCent
                   {.value = ControlCenterWidget::RingSource::Ram, .configValue = "ram", .labelKey = "settings.widgets.options.ram-percent"},
                   {.value = ControlCenterWidget::RingSource::Cpu, .configValue = "cpu", .labelKey = "settings.widgets.options.cpu-usage"},
                   {.value = ControlCenterWidget::RingSource::Gpu, .configValue = "gpu", .labelKey = "settings.widgets.options.gpu-usage"},
+                  {.value = ControlCenterWidget::RingSource::UpdateProgress, .configValue = "update_progress", .labelKey = "settings.widgets.options.update-progress"},
               },
               .presentation = settings::WidgetSettingPresentation{.visibleWhen = ringEnabled},
           }),

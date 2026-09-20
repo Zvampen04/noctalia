@@ -13,6 +13,7 @@
 #include "ui/style.h"
 
 #include <memory>
+#include <limits>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -94,7 +95,8 @@ void ControlCenterWidget::create() {
   }
 
   setRoot(std::move(area));
-  if (consumesSystemUpdates(m_iconSource, m_glyph != nullptr)) {
+  if (consumesSystemUpdates(m_iconSource, m_glyph != nullptr)
+      || (m_showRing && m_ringSource == RingSource::UpdateProgress)) {
     refreshSystemUpdateState();
     if (m_fileWatcher != nullptr) {
       for (std::size_t i = 0; i < kSystemUpdatePaths.size(); ++i) {
@@ -119,6 +121,26 @@ void ControlCenterWidget::refreshSystemUpdateState() {
       || !prompt.empty() || (state == "success" && (phase == "staged" || phase == "scheduled"))
       || hasActionableItems(status, settled) || (!status.contains("items") && hasActionableItems(session, settled));
   m_updateState = attention ? UpdateState::Attention : state == "success" ? UpdateState::Current : UpdateState::Unknown;
+  m_updateFailed = state == "failed";
+  m_updateProgress = settled ? 1.0F : 0.0F;
+  // Show one item's published progress, never an invented aggregate percentage.
+  const auto& itemsSource = status.contains("items") ? status : session;
+  if (state == "running" && itemsSource.contains("items") && itemsSource["items"].is_array()) {
+    std::int64_t firstOrder = std::numeric_limits<std::int64_t>::max();
+    for (const auto& item : itemsSource["items"]) {
+      if (!item.is_object() || !item.contains("progress") || !item["progress"].is_number()) continue;
+      const auto itemState = item.value("status", std::string{});
+      if (itemState != "running" && itemState != "selected" && itemState != "accepted") continue;
+      const double percent = item["progress"].get<double>();
+      if (!std::isfinite(percent) || percent >= 100.0) continue;
+      const auto order = item.contains("progress_order") && item["progress_order"].is_number_integer()
+          ? item["progress_order"].get<std::int64_t>() : std::int64_t{0};
+      if (order < firstOrder) {
+        firstOrder = order;
+        m_updateProgress = static_cast<float>(std::clamp(percent / 100.0, 0.0, 1.0));
+      }
+    }
+  }
 }
 
 void ControlCenterWidget::doLayout(Renderer& renderer, float /*containerWidth*/, float /*containerHeight*/) {
@@ -171,6 +193,9 @@ void ControlCenterWidget::doUpdate(Renderer& /*renderer*/) {
       const auto state = m_upower ? m_upower->state() : UPowerState{};
       progress = state.isPresent ? static_cast<float>(state.percentage / 100.0) : 0.0F;
       critical = state.isPresent && state.percentage <= 15.0;
+    } else if (m_ringSource == RingSource::UpdateProgress) {
+      progress = m_updateProgress;
+      critical = m_updateFailed;
     } else if (m_sysmon != nullptr) {
       const auto stats = m_sysmon->latest();
       switch (m_ringSource) {
@@ -178,6 +203,7 @@ void ControlCenterWidget::doUpdate(Renderer& /*renderer*/) {
       case RingSource::Cpu: progress = static_cast<float>(stats.cpuUsagePercent / 100.0); break;
       case RingSource::Gpu: progress = static_cast<float>(stats.gpuUsagePercent.value_or(0.0) / 100.0); break;
       case RingSource::Battery: break;
+      case RingSource::UpdateProgress: break;
       }
     }
     if (!std::isfinite(progress)) progress = 0.0F;

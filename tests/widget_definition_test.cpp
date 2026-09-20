@@ -147,6 +147,11 @@ int main() {
         || ControlCenterWidget::consumesSystemUpdates(ControlCenterWidget::IconSource::Static, true)) {
       fail("control-center", "system-update consumer did not follow the live glyph");
     }
+    config.settings["ring_source"] = std::string("update_progress");
+    if (controlCenterWidgetDefinition().resolve(&config, "control-center").ringSource
+        != ControlCenterWidget::RingSource::UpdateProgress) {
+      fail("control-center", "update progress ring setting did not resolve");
+    }
   }
   checkDefinition("custom_button", customButtonWidgetDefinition);
   checkDefinition("keyboard_layout", keyboardLayoutWidgetDefinition);

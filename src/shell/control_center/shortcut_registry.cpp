@@ -433,7 +433,7 @@ namespace {
     std::string_view iconOff() const override { return "refresh"; }
     bool enabled() const override { return std::filesystem::exists("/run/current-system/sw/bin/storeit-open-updates"); }
     void onClick() override {
-      if (enabled()) (void)process::runAsync({"/run/current-system/sw/bin/storeit-open-updates"});
+      if (enabled()) (void)process::runAsync({"/run/current-system/sw/bin/storeit-open-updates", "--quick-settings"});
     }
   };
 
