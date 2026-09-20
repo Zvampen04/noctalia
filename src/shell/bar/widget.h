@@ -18,6 +18,9 @@
 #include <utility>
 #include <vector>
 
+class SystemMonitorService;
+class UPowerService;
+class FileWatcher;
 class AnimationManager;
 class Box;
 class InputArea;
@@ -40,17 +43,21 @@ public:
       std::optional<float> anchorSurfaceY, PanelActivation activation
   )>;
 
+  Widget();
   virtual ~Widget();
+  void configureRing(bool enabled, std::string source, SystemMonitorService*, UPowerService*, FileWatcher*);
 
   virtual void create() = 0;
   void layout(Renderer& renderer, float containerWidth, float containerHeight) {
     UiPhaseScope layoutPhase(UiPhase::Layout);
     doLayout(renderer, containerWidth, containerHeight);
+    updateRing();
     syncOuterFromRoot();
   }
   void update(Renderer& renderer) {
     UiPhaseScope updatePhase(UiPhase::Update);
     doUpdate(renderer);
+    updateRing();
     syncOuterFromRoot();
   }
   virtual void onFrameTick(float deltaMs) { (void)deltaMs; }
@@ -203,7 +210,10 @@ private:
   // size in doLayout() and hide in doUpdate() (hide_when_no_media, hide_when_off, ...).
   void syncOuterFromRoot() noexcept;
 
-  // m_outer owns m_innerRoot as its only child until releaseRoot() hands it to the bar.
+  // m_outer owns m_innerRoot and the optional metric ring until releaseRoot() hands them to the bar.
+  struct RingState;
+  std::unique_ptr<RingState> m_ringState;
+  void updateRing();
   std::unique_ptr<Node> m_outer;
   Node* m_outerPtr = nullptr;
   Node* m_innerRoot = nullptr;

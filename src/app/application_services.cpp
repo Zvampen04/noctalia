@@ -1570,6 +1570,8 @@ void Application::initSessionBusServices() {
     m_trayService = std::make_unique<TrayService>(*m_bus);
     m_trayService->setChangeCallback([this]() {
       m_bar.refresh();
+      if (m_panelManager.isOpen())
+        m_panelManager.refresh();
       m_trayMenu.onTrayChanged();
       m_keyboardLayoutOsd.onTrayChanged(
           *m_trayService, m_configService.config(), m_configService.config().osd.kinds.keyboardLayout

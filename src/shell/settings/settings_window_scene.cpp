@@ -15,6 +15,7 @@
 #include "render/render_context.h"
 #include "render/scene/input_area.h"
 #include "render/scene/node.h"
+#include "scripting/plugin_registry.h"
 #include "shell/bar/widget_action.h"
 #include "shell/greeter/greeter_appearance_sync.h"
 #include "shell/profile/avatar_path.h"
@@ -24,7 +25,6 @@
 #include "shell/settings/settings_content_common.h"
 #include "shell/settings/settings_content_plugins.h"
 #include "shell/settings/settings_control_factory.h"
-#include "scripting/plugin_registry.h"
 #include "shell/settings/settings_sidebar.h"
 #include "shell/settings/settings_window.h"
 #include "shell/tooltip/tooltip_manager.h"
@@ -54,6 +54,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -855,6 +856,30 @@ std::vector<settings::GestureActionOption> SettingsWindow::gestureActionCatalog(
     return {};
   }
   std::vector<settings::GestureActionOption> options;
+  for (const auto& [command, label, description] : std::vector<std::tuple<std::string, std::string, std::string>>{
+           {"panel-toggle control-center media", "Media player", "Open media playback controls."},
+           {"panel-toggle control-center calendar-strip", "Rolling calendar",
+            "Open the configured compact calendar and shared events."},
+           {"panel-toggle control-center calendar-month", "Month calendar",
+            "Open the complete month and shared events."},
+           {"panel-toggle control-center home", "Quick Settings", "Open the configured home controls and shortcuts."},
+           {"panel-toggle session", "Power menu", "Open lock, logout, suspend and shutdown choices."},
+           {"panel-toggle wallpaper", "Wallpaper picker", "Browse and change wallpapers."},
+           {"settings-open appearance", "Themes and appearance", "Open theme and appearance settings."},
+           {"settings-open", "Settings", "Open all shell settings."},
+           {"exec storeit", "StoreIt", "Open the app and system update store."},
+           {"exec storeit-open-updates --quick-settings", "System updates",
+            "Follow the configured update popup policy."},
+           {"panel-toggle control-center system", "Task manager", "Show system usage and processes."},
+           {"panel-toggle control-center notifications", "Notifications", "Open notification history."},
+           {"panel-toggle clipboard", "Clipboard", "Browse clipboard history."},
+           {"panel-toggle control-center audio", "Audio mixer", "Control apps, devices and volume."},
+           {"panel-toggle control-center weather", "Weather", "Open the forecast."},
+           {"panel-toggle tray-drawer", "System tray", "Show background app tray icons."},
+           {"panel-toggle launcher", "Launcher", "Search apps and available launcher providers."}
+       }) {
+    options.push_back({.option = {.value = command, .label = label, .description = description}, .argsSpec = {}});
+  }
   for (const auto& handler : m_ipcService->handlers()) {
     // `exec` and `none` are grammar keywords, not commands, and are offered as their own rows.
     if (handler.command == noctalia::bar::kExecVerb || handler.command == noctalia::bar::kNoneVerb) {

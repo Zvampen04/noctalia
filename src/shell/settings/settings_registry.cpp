@@ -1836,6 +1836,11 @@ namespace settings {
         ToggleSetting{cfg.controlCenter.literalWidth}, "size exact literal width"
     ));
     entries.push_back(makeEntry(
+        SettingsSection::ControlCenter, "layout", "System tray in Quick Settings",
+        "Show background app icons. Hover shows the app name; click activates it; right-click opens its menu.",
+        {"control_center", "show_tray"}, ToggleSetting{cfg.controlCenter.showTray}, "tray background apps"
+    ));
+    entries.push_back(makeEntry(
         SettingsSection::ControlCenter, "layout", "Compact source panels",
         "Open media, calendar and quick controls as separate compact panels.",
         {"control_center", "compact_sections"}, ToggleSetting{cfg.controlCenter.compactSections}, "island panel compact"

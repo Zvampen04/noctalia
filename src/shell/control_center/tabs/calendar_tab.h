@@ -24,6 +24,7 @@ public:
   std::unique_ptr<Flex> create() override;
   std::unique_ptr<Flex> createHeaderActions() override;
   void setForceMonthView(bool force) noexcept { m_forceMonthView = force; }
+  void setForceWeekStrip(bool force) noexcept { m_forceWeekStrip = force; }
   void setActive(bool active) override;
   void onClose() override;
 
@@ -32,6 +33,7 @@ private:
   void rebuildWeekStrip();
   bool m_weekStrip = false;
   bool m_forceMonthView = false;
+  bool m_forceWeekStrip = false;
   CalendarMonthOpenIntent m_monthOpenIntent;
   int m_weekOffsetDays = 0;
   void focusToday();

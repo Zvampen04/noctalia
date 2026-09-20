@@ -36,6 +36,7 @@ struct TrayItemInfo {
   std::int32_t attentionWidth = 0;
   std::int32_t attentionHeight = 0;
   bool needsAttention = false;
+  std::uint64_t registrationOrder = 0;
 
   bool operator==(const TrayItemInfo&) const = default;
 };
@@ -145,6 +146,7 @@ private:
   [[nodiscard]] static std::string busNameFromItemId(const std::string& itemId);
   [[nodiscard]] static std::string canonicalItemId(const std::string& busName, const std::string& objectPath);
 
+  std::uint64_t m_registrationOrder = 0;
   SessionBus& m_bus;
   enum class WatcherRole { Owner, Client };
   WatcherRole m_watcherRole = WatcherRole::Owner;

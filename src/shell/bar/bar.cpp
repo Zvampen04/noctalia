@@ -3299,6 +3299,7 @@ void Bar::populateWidgets(BarInstance& instance) {
     if (widget == nullptr) {
       return;
     }
+    widget->configureRing(options.ring, options.ringSource, m_sysmon, m_upower, m_fileWatcher);
     widget->setConfigName(name);
     widget->applyCommonOptions(options, labelFontWeight, barFontFamily, std::format("widget.{}", name));
     widget->setActionContext(

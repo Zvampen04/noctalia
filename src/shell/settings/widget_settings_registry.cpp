@@ -638,6 +638,20 @@ namespace settings {
 
     auto enabled = boolSpec("enabled", true);
     enabled.visibleInInspector = false;
+    auto ring = withGroup(boolSpec("ring", false), "presentation");
+    auto ringSource = withGroup(
+        selectSpec(
+            "ring_source", "battery",
+            {{"battery", "Battery"},
+             {"ram", "RAM usage"},
+             {"cpu", "CPU usage"},
+             {"gpu", "GPU usage"},
+             {"update_progress", "Update progress (current item)"}}
+        ),
+        "presentation"
+    );
+    ringSource.literalLabels = true;
+    ringSource.visibleWhen = WidgetSettingVisibility{"ring", {"true"}};
     auto anchor = withGroup(boolSpec("anchor", false, true), "presentation");
     auto interactive = withGroup(boolSpec("interactive", true), "presentation");
     auto scale = withGroup(doubleSpec("scale", 1.0, 0.2, 2.5, 0.05), "presentation");
@@ -703,15 +717,26 @@ namespace settings {
     actions.visibleWhen = WidgetSettingVisibility{"interactive", {"true"}};
 
     return {
-        std::move(enabled),         std::move(anchor),
-        std::move(interactive),     std::move(scale),
-        std::move(fontScale),       std::move(widgetColor),
-        std::move(widgetIconColor), std::move(fontFamily),
-        std::move(fontWeight),      std::move(capsuleToggle),
-        std::move(capsuleRadius),   std::move(capsuleFill),
-        std::move(capsuleBorder),   std::move(capsuleForeground),
-        std::move(capsulePadding),  std::move(capsuleOpacity),
-        std::move(scrollRepeat),    std::move(actions),
+        std::move(ring),
+        std::move(ringSource),
+        std::move(enabled),
+        std::move(anchor),
+        std::move(interactive),
+        std::move(scale),
+        std::move(fontScale),
+        std::move(widgetColor),
+        std::move(widgetIconColor),
+        std::move(fontFamily),
+        std::move(fontWeight),
+        std::move(capsuleToggle),
+        std::move(capsuleRadius),
+        std::move(capsuleFill),
+        std::move(capsuleBorder),
+        std::move(capsuleForeground),
+        std::move(capsulePadding),
+        std::move(capsuleOpacity),
+        std::move(scrollRepeat),
+        std::move(actions),
     };
   }
 
@@ -748,6 +773,10 @@ namespace settings {
         specs = projection->presentedSettingSpecs();
       }
 
+      std::erase_if(commonSpecs, [&](const auto& common) {
+        return (common.schema.key == "ring" || common.schema.key == "ring_source")
+            && std::ranges::any_of(specs, [&](const auto& spec) { return spec.schema.key == common.schema.key; });
+      });
       specs.insert(
           specs.end(), std::make_move_iterator(commonSpecs.begin()), std::make_move_iterator(commonSpecs.end())
       );
@@ -1142,6 +1171,10 @@ namespace settings {
       auto fields = projection->schemaFields();
       auto common = commonWidgetSettingSpecs("sans-serif", false);
       applyCommonOverrides(common, projection->commonOverrides(), type);
+      std::erase_if(common, [&](const auto& spec) {
+        return (spec.schema.key == "ring" || spec.schema.key == "ring_source")
+            && std::ranges::any_of(fields, [&](const auto& field) { return field.key == spec.schema.key; });
+      });
       std::ranges::transform(common, std::back_inserter(fields), [](const WidgetSettingSpec& spec) {
         return spec.schema;
       });

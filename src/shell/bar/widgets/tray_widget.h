@@ -27,6 +27,7 @@ public:
     std::vector<std::string> hiddenItems;
     std::vector<std::string> pinnedItems;
     bool hidePassive = true;
+    std::string selection = "all";
     bool drawerMode = false;
     std::function<void()> itemActivated;
     std::string barPosition = "top";
@@ -86,6 +87,7 @@ private:
   std::vector<std::string> m_hiddenItems;
   std::vector<std::string> m_pinnedItems;
   bool m_hidePassive = true;
+  std::string m_selection = "all";
   std::vector<Image*> m_loadedImages;
   std::vector<Image*> m_colorizedAppIcons;
   std::unordered_map<std::string, std::size_t> m_initialPixmaps;

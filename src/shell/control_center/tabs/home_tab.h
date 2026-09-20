@@ -16,6 +16,7 @@
 #include <unordered_set>
 #include <vector>
 
+class TrayWidget;
 class AccountsService;
 class AsyncTextureCache;
 class Button;
@@ -87,6 +88,8 @@ private:
   bool resizeMediaArtToCard();
   void onPanelCardOpacityChanged(float opacity) override;
 
+  TrayService* m_trayService = nullptr;
+  std::unique_ptr<TrayWidget> m_tray;
   MprisService* m_mpris = nullptr;
   HttpClient* m_httpClient = nullptr;
   WeatherService* m_weather = nullptr;

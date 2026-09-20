@@ -167,8 +167,9 @@ namespace {
 TrayWidget::TrayWidget(ConfigService& config, TrayService* tray, Options options)
     : m_config(config), m_tray(tray), m_hiddenItems(std::move(options.hiddenItems)),
       m_pinnedItems(std::move(options.pinnedItems)), m_hidePassive(options.hidePassive),
-      m_drawerMode(options.drawerMode), m_itemActivated(std::move(options.itemActivated)),
-      m_barPosition(std::move(options.barPosition)), m_panelGridMode(options.panelGridMode),
+      m_selection(std::move(options.selection)), m_drawerMode(options.drawerMode),
+      m_itemActivated(std::move(options.itemActivated)), m_barPosition(std::move(options.barPosition)),
+      m_panelGridMode(options.panelGridMode),
       m_panelGridColumns(std::clamp<std::size_t>(options.panelGridColumns, 1U, 5U)),
       m_inlineEntryGap(std::max(0.0F, options.inlineEntryGap)), m_matchAdjacentSpacing(options.matchAdjacentSpacing),
       m_customItemSize(options.customItemSize) {
@@ -353,7 +354,18 @@ void TrayWidget::syncState(Renderer& renderer) {
     m_preferredIconPaths.clear();
   }
 
-  const auto next_items = (m_tray != nullptr) ? m_tray->items() : std::vector<TrayItemInfo>{};
+  auto next_items = (m_tray != nullptr) ? m_tray->items() : std::vector<TrayItemInfo>{};
+  if (m_selection == "newest" || m_selection == "oldest") {
+    std::erase_if(next_items, [this](const auto& item) {
+      return (m_hidePassive && tray::isPassiveStatus(item)) || isHiddenItem(item);
+    });
+    std::ranges::sort(next_items, [this](const auto& a, const auto& b) {
+      return m_selection == "newest" ? a.registrationOrder > b.registrationOrder
+                                     : a.registrationOrder < b.registrationOrder;
+    });
+    if (next_items.size() > 1)
+      next_items.resize(1);
+  }
   if (!desktopEntriesChanged && next_items == m_items) {
     return;
   }

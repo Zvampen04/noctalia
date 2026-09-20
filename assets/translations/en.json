@@ -415,6 +415,11 @@
       "view-day": "View Day Details"
     },
     "shortcuts": {
+      "themes": "Themes",
+      "storeit": "StoreIt",
+      "calendar": "Rolling calendar",
+      "calendar-month": "Month calendar",
+      "notifications": "Notifications",
       "audio": "Audio",
       "bluetooth": "Bluetooth",
       "caffeine": "Caffeine",
@@ -4082,6 +4087,9 @@
         "static-icon": "Configured icon",
         "system-updates": "System updates",
         "update-progress": "Update progress (current item)",
+        "tray-all": "All tray apps",
+        "tray-newest": "Newest registered tray app",
+        "tray-oldest": "Oldest registered tray app",
         "text": "Text",
         "text-only": "Text Only",
         "time": "Time",

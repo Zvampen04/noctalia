@@ -614,6 +614,7 @@ void Application::initPanelManagerAndPanels() {
           .accounts = m_accountsService.get(),
           .thumbnails = &m_thumbnailService,
           .asyncTextures = &m_asyncTextureCache,
+          .tray = m_trayService.get(),
       })
   );
   {

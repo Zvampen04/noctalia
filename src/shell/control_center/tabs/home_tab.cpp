@@ -16,8 +16,9 @@
 #include "render/core/async_texture_cache.h"
 #include "render/scene/input_area.h"
 #include "scripting/plugin_registry.h"
-#include "shell/control_center/shortcut_registry.h"
+#include "shell/bar/widgets/tray_widget.h"
 #include "shell/control_center/shortcut_identity.h"
+#include "shell/control_center/shortcut_registry.h"
 #include "shell/panel/panel_button_style.h"
 #include "shell/panel/panel_manager.h"
 #include "shell/profile/avatar_path.h"
@@ -27,6 +28,7 @@
 #include "time/time_format.h"
 #include "ui/builders.h"
 #include "ui/controls/grid_view.h"
+#include "ui/controls/scroll_view.h"
 #include "ui/dialogs/file_dialog.h"
 
 #include <algorithm>
@@ -163,9 +165,9 @@ namespace {
 } // namespace
 
 HomeTab::HomeTab(const ControlCenterServices& services)
-    : m_mpris(services.mpris), m_httpClient(services.httpClient), m_weather(services.weather),
-      m_config(services.config), m_accounts(services.accounts), m_wallpaper(services.wallpaper),
-      m_thumbnails(services.thumbnails), m_asyncTextures(services.asyncTextures),
+    : m_trayService(services.tray), m_mpris(services.mpris), m_httpClient(services.httpClient),
+      m_weather(services.weather), m_config(services.config), m_accounts(services.accounts),
+      m_wallpaper(services.wallpaper), m_thumbnails(services.thumbnails), m_asyncTextures(services.asyncTextures),
       m_services(services.shortcutServices()) {
   if (m_thumbnails != nullptr) {
     m_thumbnailPendingSub = m_thumbnails->subscribePendingUpload([this]() {
@@ -680,6 +682,22 @@ std::unique_ptr<Flex> HomeTab::create() {
   }
   tab->addChild(std::move(bottomRow));
 
+  m_tray.reset();
+  if (m_trayService && m_config && m_config->config().controlCenter.showTray) {
+    auto viewport = std::make_unique<ScrollView>();
+    viewport->setOrientation(ScrollOrientation::Horizontal);
+    viewport->setScrollbarVisible(false);
+    viewport->setContentScale(scale);
+    viewport->setMinHeight(36.0F * scale);
+    viewport->setMaxHeight(36.0F * scale);
+    m_tray = std::make_unique<TrayWidget>(
+        *m_config, m_trayService, TrayWidget::Options{.hidePassive = false, .inlineEntryGap = 12.0F}
+    );
+    m_tray->setContentScale(scale);
+    m_tray->create();
+    viewport->content()->addChild(m_tray->releaseRoot());
+    tab->addChild(std::move(viewport));
+  }
   return tab;
 }
 
@@ -762,6 +780,8 @@ void HomeTab::doLayout(Renderer& renderer, float contentWidth, float bodyHeight)
       m_shortcutsGrid->setFlexGrow(kHomeShortcutsFlexGrow);
     }
   }
+  if (m_tray)
+    m_tray->layout(renderer, contentWidth, 36.0F * contentScale());
   m_rootLayout->setSize(contentWidth, bodyHeight);
   m_rootLayout->layout(renderer);
 
@@ -1227,6 +1247,8 @@ void HomeTab::syncHeaderActions() {
 }
 
 void HomeTab::doUpdate(Renderer& renderer) {
+  if (m_tray)
+    m_tray->update(renderer);
   syncHeaderActions();
   if (!m_active) {
     m_progressTimer.stop();
@@ -1304,6 +1326,7 @@ void HomeTab::setActive(bool active) {
 }
 
 void HomeTab::onClose() {
+  m_tray.reset();
   m_progressTimer.stop();
   m_clockTimer.stop();
   m_rootLayout = nullptr;

@@ -1,18 +1,143 @@
 #include "shell/bar/widget.h"
 
+#include "core/files/file_watcher.h"
 #include "core/log.h"
 #include "cursor-shape-v1-client-protocol.h"
+#include "dbus/upower/upower_service.h"
 #include "render/animation/animation_manager.h"
+#include "render/scene/countdown_ring_node.h"
 #include "render/scene/input_area.h"
 #include "render/scene/node.h"
 #include "shell/bar/widget_action_dispatcher.h"
 #include "shell/bar/widget_gesture_defaults.h"
+#include "system/system_monitor_service.h"
 #include "ui/builders.h"
 #include "ui/palette.h"
 #include "util/string_utils.h"
 
 #include <algorithm>
+#include <cmath>
 #include <format>
+#include <fstream>
+#include <limits>
+#include <nlohmann/json.hpp>
+
+struct Widget::RingState {
+  CountdownRingNode* node = nullptr;
+  std::string source;
+  SystemMonitorService* monitor = nullptr;
+  UPowerService* battery = nullptr;
+  FileWatcher* watcher = nullptr;
+  std::vector<std::uint64_t> watches;
+  float progress = 0.0F;
+  bool failed = false;
+  ~RingState() {
+    if (monitor && source == "gpu")
+      monitor->releaseGpuUsage();
+    if (watcher)
+      for (auto id : watches)
+        if (id)
+          watcher->unwatch(id);
+  }
+  void refreshUpdates() {
+    auto read = [](const char* path) {
+      std::ifstream stream(path);
+      try {
+        return nlohmann::json::parse(stream);
+      } catch (...) {
+        return nlohmann::json::object();
+      }
+    };
+    const auto status = read("/var/lib/nixos-auto-update-switch/status.json");
+    const auto session = read("/var/lib/nixos-auto-update-switch/item-session.json");
+    const auto state = status.value("status", std::string{});
+    const auto phase = status.value("phase", std::string{});
+    failed = state == "failed";
+    progress = state == "success"
+            && (phase == "up-to-date" || phase == "no-changes" || phase == "switched" || phase == "completed")
+        ? 1.0F
+        : 0.0F;
+    const auto& data = status.contains("items") ? status : session;
+    if (state != "running" || !data.contains("items") || !data["items"].is_array())
+      return;
+    auto first = std::numeric_limits<std::int64_t>::max();
+    for (const auto& item : data["items"]) {
+      if (!item.is_object() || !item.contains("progress") || !item["progress"].is_number())
+        continue;
+      const auto itemState = item.value("status", std::string{});
+      if (itemState != "running" && itemState != "selected" && itemState != "accepted")
+        continue;
+      const auto percent = item["progress"].get<double>();
+      if (!std::isfinite(percent) || percent >= 100.0)
+        continue;
+      const auto order = item.contains("progress_order") && item["progress_order"].is_number_integer()
+          ? item["progress_order"].get<std::int64_t>()
+          : std::int64_t{0};
+      if (order < first) {
+        first = order;
+        progress = std::clamp(static_cast<float>(percent / 100.0), 0.0F, 1.0F);
+      }
+    }
+  }
+};
+
+Widget::Widget() = default;
+
+void Widget::configureRing(
+    bool enabled, std::string source, SystemMonitorService* monitor, UPowerService* battery, FileWatcher* watcher
+) {
+  if (!enabled)
+    return;
+  m_ringState = std::make_unique<RingState>();
+  auto& state = *m_ringState;
+  state.source = std::move(source);
+  state.monitor = monitor;
+  state.battery = battery;
+  state.watcher = watcher;
+  if (monitor && state.source == "gpu")
+    monitor->retainGpuUsage();
+  if (state.source == "update_progress") {
+    state.refreshUpdates();
+    if (watcher)
+      for (const auto* path :
+           {"/var/lib/nixos-auto-update-switch/status.json", "/var/lib/nixos-auto-update-switch/item-session.json"})
+        state.watches.push_back(watcher->watch(
+            path,
+            [this] {
+              m_ringState->refreshUpdates();
+              requestUpdate();
+            },
+            FileWatcher::WatchTrigger::WriteCompleted
+        ));
+  }
+}
+
+void Widget::updateRing() {
+  if (!m_ringState || !m_ringState->node)
+    return;
+  auto& state = *m_ringState;
+  float progress = 0.0F;
+  bool critical = false;
+  if (state.source == "battery" && state.battery) {
+    const auto battery = state.battery->state();
+    progress = battery.isPresent ? static_cast<float>(battery.percentage / 100.0) : 0.0F;
+    critical = battery.isPresent && battery.percentage <= 15.0;
+  } else if (state.source == "update_progress") {
+    progress = state.progress;
+    critical = state.failed;
+  } else if (state.monitor) {
+    const auto stats = state.monitor->latest();
+    if (state.source == "cpu")
+      progress = static_cast<float>(stats.cpuUsagePercent / 100.0);
+    if (state.source == "ram")
+      progress = static_cast<float>(stats.ramUsagePercent / 100.0);
+    if (state.source == "gpu")
+      progress = static_cast<float>(stats.gpuUsagePercent.value_or(0.0) / 100.0);
+  }
+  state.node->setProgress(std::isfinite(progress) ? std::clamp(progress, 0.0F, 1.0F) : 0.0F);
+  state.node->setThickness(1.2F * m_contentScale);
+  state.node->setColor(colorForRole(critical ? ColorRole::Error : ColorRole::Primary));
+}
 
 namespace {
 
@@ -130,6 +255,13 @@ void Widget::setRoot(std::unique_ptr<Node> root) {
     m_gestureArea->addChild(std::move(root));
   }
 
+  if (m_ringState) {
+    auto ring = std::make_unique<CountdownRingNode>();
+    m_ringState->node = ring.get();
+    ring->setHitTestVisible(false);
+    ring->setParticipatesInLayout(false);
+    gestureArea->addChild(std::move(ring));
+  }
   m_outer = std::move(gestureArea);
   m_outer->setHitTestVisible(!m_nonInteractive && !m_barPointerSuppressed);
   // Bindings are resolved before create() runs, so install them here too: whichever of the two
@@ -143,7 +275,13 @@ void Widget::syncOuterFromRoot() noexcept {
   if (outer == nullptr || m_innerRoot == nullptr) {
     return;
   }
-  outer->setSize(m_innerRoot->width(), m_innerRoot->height());
+  const float inset = m_ringState ? 6.0F * m_contentScale : 0.0F;
+  m_innerRoot->setPosition(inset, inset);
+  outer->setSize(m_innerRoot->width() + 2.0F * inset, m_innerRoot->height() + 2.0F * inset);
+  if (m_ringState && m_ringState->node) {
+    m_ringState->node->setSize(outer->width(), outer->height());
+    m_ringState->node->setVisible(m_innerRoot->width() > 0 && m_innerRoot->height() > 0);
+  }
   outer->setVisible(m_innerRoot->visible());
   outer->setParticipatesInLayout(m_innerRoot->participatesInLayout());
 }

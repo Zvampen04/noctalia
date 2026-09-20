@@ -447,6 +447,55 @@ namespace {
     void onRightClick() override { openTab("screen-time"); }
   };
 
+  class ThemesShortcut final : public Shortcut {
+  public:
+    std::string_view id() const override { return "themes"; }
+    std::string defaultLabel() const override { return i18n::tr("control-center.shortcuts.themes"); }
+    std::string_view iconOn() const override { return "palette"; }
+    std::string_view iconOff() const override { return "palette"; }
+    void onClick() override { PanelManager::instance().openSettingsWindow("appearance"); }
+  };
+
+  class StoreItShortcut final : public Shortcut {
+  public:
+    std::string_view id() const override { return "storeit"; }
+    std::string defaultLabel() const override { return i18n::tr("control-center.shortcuts.storeit"); }
+    std::string_view iconOn() const override { return "store"; }
+    std::string_view iconOff() const override { return "store"; }
+    bool enabled() const override { return process::commandExists("storeit"); }
+    void onClick() override {
+      if (enabled())
+        (void)process::runAsync({"storeit"});
+    }
+  };
+
+  class CalendarShortcut final : public Shortcut {
+  public:
+    std::string_view id() const override { return "calendar"; }
+    std::string defaultLabel() const override { return i18n::tr("control-center.shortcuts.calendar"); }
+    std::string_view iconOn() const override { return "calendar"; }
+    std::string_view iconOff() const override { return "calendar"; }
+    void onClick() override { openTab("calendar-strip"); }
+  };
+
+  class MonthCalendarShortcut final : public Shortcut {
+  public:
+    std::string_view id() const override { return "calendar_month"; }
+    std::string defaultLabel() const override { return i18n::tr("control-center.shortcuts.calendar-month"); }
+    std::string_view iconOn() const override { return "calendar"; }
+    std::string_view iconOff() const override { return "calendar"; }
+    void onClick() override { openTab("calendar-month"); }
+  };
+
+  class NotificationsShortcut final : public Shortcut {
+  public:
+    std::string_view id() const override { return "notifications"; }
+    std::string defaultLabel() const override { return i18n::tr("control-center.shortcuts.notifications"); }
+    std::string_view iconOn() const override { return "notification"; }
+    std::string_view iconOff() const override { return "notification"; }
+    void onClick() override { openTab("notifications"); }
+  };
+
   class WallpaperShortcut final : public Shortcut {
   public:
     std::string_view id() const override { return "wallpaper"; }
@@ -559,6 +608,26 @@ namespace {
       builtinShortcut<KeyboardLayoutShortcut, &ShortcutServices::platform, &ShortcutServices::config>({
           .type = "keyboard_layout",
           .labelKey = "control-center.shortcuts.keyboard-layout",
+      }),
+      builtinShortcut<ThemesShortcut>({
+          .type = "themes",
+          .labelKey = "control-center.shortcuts.themes",
+      }),
+      builtinShortcut<StoreItShortcut>({
+          .type = "storeit",
+          .labelKey = "control-center.shortcuts.storeit",
+      }),
+      builtinShortcut<CalendarShortcut>({
+          .type = "calendar",
+          .labelKey = "control-center.shortcuts.calendar",
+      }),
+      builtinShortcut<MonthCalendarShortcut>({
+          .type = "calendar_month",
+          .labelKey = "control-center.shortcuts.calendar-month",
+      }),
+      builtinShortcut<NotificationsShortcut>({
+          .type = "notifications",
+          .labelKey = "control-center.shortcuts.notifications",
       }),
       builtinShortcut<WallpaperShortcut>({
           .type = "wallpaper",

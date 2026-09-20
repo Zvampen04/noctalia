@@ -1801,6 +1801,7 @@ void TrayService::registerOrRefreshItem(const std::string& busName, const std::s
             .attentionWidth = 0,
             .attentionHeight = 0,
             .needsAttention = false,
+            .registrationOrder = ++m_registrationOrder,
         }
     );
 

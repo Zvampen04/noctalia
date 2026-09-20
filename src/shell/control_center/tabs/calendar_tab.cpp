@@ -66,7 +66,8 @@ std::unique_ptr<Flex> CalendarTab::create() {
     });
   }
 
-  m_weekStrip = m_config && m_config->config().controlCenter.calendarTab.weekStrip && !m_forceMonthView;
+  m_weekStrip =
+      (m_forceWeekStrip || (m_config && m_config->config().controlCenter.calendarTab.weekStrip)) && !m_forceMonthView;
   if (m_weekStrip) return createWeekStrip();
 
   if (m_config != nullptr) {

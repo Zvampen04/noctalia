@@ -542,6 +542,7 @@ namespace noctalia::config::schema {
         enumField(&ControlCenterConfig::sidebarMode, "sidebar", kControlCenterSidebarModes),
         enumField(&ControlCenterConfig::sidebarSectionMode, "sidebar_section", kControlCenterSidebarModes),
         field(&ControlCenterConfig::width, "width", kControlCenterWidthRange),
+        field(&ControlCenterConfig::showTray, "show_tray"),
         field(&ControlCenterConfig::compactSections, "compact_sections"),
         field(&ControlCenterConfig::compactHeight, "compact_height", kControlCenterCompactDimensionRange),
         field(&ControlCenterConfig::literalWidth, "literal_width"),

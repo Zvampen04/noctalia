@@ -875,6 +875,15 @@ namespace settings {
         actionVerb = parsed->verb;
       }
     }
+    // A complete named action (including its context) needs no separate argument editor.
+    if (!pending && std::ranges::any_of(*catalog, [&](const auto& entry) {
+          return entry.option.value == effective && entry.argsSpec.empty();
+        })) {
+      actionVerb = effective;
+      if (isOverridden)
+        selected = effective;
+      argument.clear();
+    }
     const bool execMode = actionVerb == kActionExecOption;
 
     std::vector<SelectOption> options;

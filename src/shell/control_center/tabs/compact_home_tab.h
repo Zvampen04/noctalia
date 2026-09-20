@@ -6,6 +6,7 @@
 #include "ui/material_target_catalog.h"
 #include <vector>
 
+class TrayWidget;
 class Slider;
 class Glyph;
 class Button;
@@ -22,6 +23,7 @@ private:
   void doLayout(Renderer&, float width, float height) override;
   void doUpdate(Renderer&) override;
   ControlCenterServices m_services;
+  std::unique_ptr<TrayWidget> m_tray;
   MediaTab m_media;
   NotificationsTab m_notifications;
   Flex* m_root = nullptr;

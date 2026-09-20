@@ -492,6 +492,8 @@ struct CommonWidgetOptions {
   WidgetBarCapsuleSpec capsule;
   std::string scrollRepeat = "auto";
   bool enableScroll = true;
+  bool ring = false;
+  std::string ringSource = "battery";
 };
 
 struct WidgetConfig {
@@ -1885,6 +1887,7 @@ struct ControlCenterConfig {
   ControlCenterSidebarMode sidebarMode = ControlCenterSidebarMode::Compact;
   ControlCenterSidebarMode sidebarSectionMode = ControlCenterSidebarMode::Compact;
   std::int32_t width = kDefaultWidth; // full-sidebar logical width; compact/none modes scale down from this
+  bool showTray = true;
   bool compactSections = false; // source-specific panels without shared navigation chrome
   std::int32_t compactHeight = 444;
   bool literalWidth = false; // treat width as the final panel width instead of a full-sidebar basis

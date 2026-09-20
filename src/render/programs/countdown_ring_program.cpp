@@ -46,19 +46,20 @@ void main() {
     vec2 center = u_rect_size * 0.5;
     float radius = min(u_rect_size.x, u_rect_size.y) * 0.5 - u_thickness * 0.5;
     vec2 p = v_pixel - center;
-    float dist = length(p);
+    vec2 straight = max(center - vec2(min(center.x, center.y)), vec2(0.0));
+    float dist = length(p - clamp(p, -straight, straight));
 
     float ring = abs(dist - radius) - u_thickness * 0.5;
     float aa = max(1.0, u_thickness * 0.18);
     float ringMask = 1.0 - smoothstep(-aa, aa, ring);
 
-    float theta = atan(p.y, p.x);
+    float theta = atan(p.y / max(center.y, 1.0), p.x / max(center.x, 1.0));
     float start = -PI * 0.5;
     float rel = mod(theta - start + 2.0 * PI, 2.0 * PI);
     float arcLen = 2.0 * PI * clamp(u_progress, 0.0, 1.0);
-    float arcMask = 1.0 - smoothstep(arcLen - 0.06, arcLen + 0.06, rel);
+    float arcMask = u_progress >= 1.0 ? 1.0 : 1.0 - smoothstep(arcLen - 0.06, arcLen + 0.06, rel);
 
-    float alpha = ringMask * arcMask * u_color.a;
+    float alpha = ringMask * arcMask * u_color.a * step(0.00001, u_progress);
     if (alpha <= 0.0) {
         discard;
     }

@@ -127,8 +127,10 @@ void ControlCenterPanel::create() {
     tab->setContentScale(scale);
     tab->setPanelCardOpacity(panelCardOpacity());
   }
-  if (auto* calendar = dynamic_cast<CalendarTab*>(m_tabs[tabIndex(TabId::Calendar)].get()))
+  if (auto* calendar = dynamic_cast<CalendarTab*>(m_tabs[tabIndex(TabId::Calendar)].get())) {
     calendar->setForceMonthView(pendingOpenContext() == "calendar-month");
+    calendar->setForceWeekStrip(pendingOpenContext() == "calendar-strip");
+  }
 
   auto rootLayout = ui::row({
       .out = &m_rootLayout,
@@ -851,7 +853,8 @@ void ControlCenterPanel::scheduleMprisRefreshFor(TabId tab) {
 }
 
 bool ControlCenterPanel::isDirectSectionOpenContext(std::string_view context) const {
-  if (context == "calendar-month") return true;
+  if (context == "calendar-month" || context == "calendar-strip")
+    return true;
   if (context.empty() || context == "home") {
     return false;
   }
@@ -872,7 +875,8 @@ ControlCenterSidebarMode ControlCenterPanel::sidebarModeForOpen(std::string_view
 }
 
 ControlCenterPanel::TabId ControlCenterPanel::tabFromContext(std::string_view context) const {
-  if (context == "calendar-month") return TabId::Calendar;
+  if (context == "calendar-month" || context == "calendar-strip")
+    return TabId::Calendar;
   for (const auto& tab : kTabs) {
     if (context == tab.key) {
       return tab.id;

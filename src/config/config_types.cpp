@@ -594,6 +594,8 @@ CommonWidgetOptions resolveCommonWidgetOptions(
     return options;
   }
 
+  options.ring = widget->getBool("ring", false);
+  options.ringSource = widget->getString("ring_source", "battery");
   options.enabled = widget->getBool("enabled", true);
   options.anchor = widget->getBool("anchor", false);
   options.interactive = widget->getBool("interactive", options.interactive);

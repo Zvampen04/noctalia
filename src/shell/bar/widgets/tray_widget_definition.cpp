@@ -10,6 +10,21 @@ const noctalia::bar::WidgetDefinition<TrayWidget::Options, TrayWidgetDefinitionC
       .type = "tray",
       .fields =
           {
+              field<&Options::selection>({
+                  .key = "selection",
+                  .choices =
+                      {
+                          {.value = std::string("all"),
+                           .configValue = "all",
+                           .labelKey = "settings.widgets.options.tray-all"},
+                          {.value = std::string("newest"),
+                           .configValue = "newest",
+                           .labelKey = "settings.widgets.options.tray-newest"},
+                          {.value = std::string("oldest"),
+                           .configValue = "oldest",
+                           .labelKey = "settings.widgets.options.tray-oldest"},
+                      },
+              }),
               field<&Options::hiddenItems>({
                   .key = "hidden",
               }),

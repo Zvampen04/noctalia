@@ -1,22 +1,25 @@
-#include "core/deferred_call.h"
 #include "shell/control_center/tabs/compact_home_tab.h"
+
+#include "compositors/compositor_platform.h"
 #include "config/config_service.h"
+#include "core/deferred_call.h"
 #include "core/timer_manager.h"
 #include "dbus/bluetooth/bluetooth_service.h"
 #include "dbus/network/inetwork_service.h"
 #include "pipewire/pipewire_service.h"
-#include "compositors/compositor_platform.h"
-#include "shell/panel/panel_manager.h"
-#include "shell/control_center/shortcut_registry.h"
-#include "shell/control_center/shortcut_identity.h"
 #include "shell/bar/bar_material_target.h"
+#include "shell/bar/widgets/tray_widget.h"
+#include "shell/control_center/shortcut_identity.h"
+#include "shell/control_center/shortcut_registry.h"
+#include "shell/panel/panel_manager.h"
 #include "system/brightness_service.h"
 #include "ui/builders.h"
 #include "ui/controls/button.h"
 #include "ui/controls/flex.h"
-#include "ui/controls/slider.h"
-#include "ui/controls/scroll_view.h"
 #include "ui/controls/glyph.h"
+#include "ui/controls/scroll_view.h"
+#include "ui/controls/slider.h"
+
 #include <algorithm>
 #include <unordered_map>
 
@@ -171,6 +174,23 @@ std::unique_ptr<Flex> CompactHomeTab::create() {
   auto list = m_notifications.create(); m_notificationRoot = list.get(); list->setFlexGrow(1.0F);
   notifications->addChild(std::move(list)); root->addChild(std::move(notifications));
 
+  m_tray.reset();
+  if (m_services.tray && m_services.config && m_services.config->config().controlCenter.showTray) {
+    auto viewport = std::make_unique<ScrollView>();
+    viewport->setOrientation(ScrollOrientation::Horizontal);
+    viewport->setScrollbarVisible(false);
+    viewport->setContentScale(s);
+    viewport->setMinHeight(36.0F * s);
+    viewport->setMaxHeight(36.0F * s);
+    m_tray = std::make_unique<TrayWidget>(
+        *m_services.config, m_services.tray, TrayWidget::Options{.hidePassive = false, .inlineEntryGap = 12.0F}
+    );
+    m_tray->setContentScale(s);
+    m_tray->create();
+    viewport->content()->addChild(m_tray->releaseRoot());
+    root->addChild(std::move(viewport));
+  }
+
   auto actionsViewport = std::make_unique<ScrollView>();
   actionsViewport->setOrientation(ScrollOrientation::Horizontal);
   actionsViewport->setScrollbarVisible(false);
@@ -235,6 +255,8 @@ void CompactHomeTab::doLayout(Renderer& renderer, float width, float height) {
       : std::max(1.0F, width);
   m_connections->setMinWidth(leftWidth); m_connections->setMaxWidth(leftWidth);
   for (auto* label : {m_wifiDetail, m_bluetoothDetail}) label->setMaxWidth(std::max(1.0F, leftWidth - 68.0F * contentScale()));
+  if (m_tray)
+    m_tray->layout(renderer, width, 36.0F * contentScale());
   m_root->layout(renderer);
   for (auto* icon : {m_brightnessGlyph, m_volumeGlyph}) if (icon) icon->layout(renderer);
   if (m_mediaRoot != nullptr) m_media.layout(renderer, m_mediaRoot->width(), m_mediaRoot->height());
@@ -278,6 +300,8 @@ void CompactHomeTab::doUpdate(Renderer& renderer) {
   m_syncing = false;
   if (m_mediaRoot != nullptr) m_media.update(renderer);
   m_notifications.update(renderer);
+  if (m_tray)
+    m_tray->update(renderer);
 }
 void CompactHomeTab::setActive(bool active) {
   if (m_showMedia) m_media.setActive(active);
@@ -288,6 +312,7 @@ void CompactHomeTab::onFrameTick(float dt) {
   m_notifications.onFrameTick(dt);
 }
 void CompactHomeTab::onClose() {
+  m_tray.reset();
   m_brightnessGlyph = nullptr; m_volumeGlyph = nullptr;
   if (m_showMedia) m_media.onClose();
   m_notifications.onClose();
