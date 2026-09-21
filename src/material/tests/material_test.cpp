@@ -156,6 +156,11 @@ int main() {
 
   // Radial lens uses local logical vectors, never normalized screen UVs. Its
   // transverse component on a wide bar is intentionally distinct from Snell.
+  CHECK(radialLensVector({0,0},{800,400})==Vec2{});
+  CHECK((radialLensVector({0,-100},{800,400})==Vec2{0,-400}));
+  CHECK((radialLensVector({100,0},{800,400})==Vec2{800,0}));
+  const auto diagonal = radialLensVector({100,100},{800,400});
+  CHECK(near(diagonal.x,2*diagonal.y));
   Optical radial;radial.edgeWidth=20;radial.lensStrength=.2F;radial.maximumDisplacement=128;
   const auto topLeft=radialOpticalDisplacement({-80,-35},0,radial);
   CHECK(near(topLeft.x,16,.002F) && near(topLeft.y,7,.002F));

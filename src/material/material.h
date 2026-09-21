@@ -307,13 +307,27 @@ inline Vec2 smoothOpticalLimit(Vec2 offset, float limit) noexcept {
   return {offset.x * factor, offset.y * factor};
 }
 
+inline Vec2 radialLensVector(Vec2 fromCenter, Vec2 halfSize) noexcept {
+  const float scale = std::max({std::abs(fromCenter.x), std::abs(fromCenter.y), 0.0001F});
+  const float x = fromCenter.x / scale, y = fromCenter.y / scale;
+  const float magnitude = std::max(std::hypot(x, y), 0.0001F);
+  return {x / magnitude * std::max(halfSize.x, 0.0F),
+          y / magnitude * std::max(halfSize.y, 0.0F)};
+}
+
 // C2-continuous face-to-edge transition for every supported falloff, including
 // values below one. The rational bias preserves the strength/width controls.
 inline float radialLensEnvelope(float proximity, float falloff) noexcept {
   const float p = std::clamp(proximity, 0.0F, 1.0F);
   falloff = std::max(falloff, 0.1F);
   const float t = p / (falloff + (1.0F - falloff) * p);
-  return t * t * t * (10.0F + t * (-15.0F + 6.0F * t));
+  const float u = std::min(t, 1.0F - t);
+  const float blend = u * u * u * (10.0F + u * (-15.0F + 6.0F * u));
+  const float shoulder = t <= 0.5F ? blend : 1.0F - blend;
+  constexpr float epsilon = 0.02F;
+  const float base = std::sqrt(1.0F + epsilon * epsilon);
+  return shoulder * shoulder * (base + epsilon)
+      / (base + std::sqrt(std::max(1.0F - shoulder * shoulder, 0.0F) + epsilon * epsilon));
 }
 
 // Normal-incidence ray entering glass from air, with a bounded screen offset.

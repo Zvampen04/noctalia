@@ -110,6 +110,14 @@ vec2 materialGlassDisplacement(vec2 slope, vec4 optical) {
     return materialGlassLimitDisplacement(offset, optical.w);
 }
 
+// Shoji-style radial direction scaled by the optical body's half extents.
+// Normalize in scaled coordinates to avoid mediump overflow on large windows.
+vec2 materialGlassRadialVector(vec2 fromCenter, vec2 halfSize) {
+    float scale = max(max(abs(fromCenter.x), abs(fromCenter.y)), 0.0001);
+    vec2 direction = fromCenter / scale;
+    return direction / max(length(direction), 0.0001) * max(halfSize, vec2(0.0));
+}
+
 // Independently implemented radial edge contraction in logical coordinates.
 // Lens fields: optical radius, mapping, radial strength, edge falloff. Keep the
 // existing Snell branch and no-material defaults available.
@@ -123,7 +131,15 @@ vec2 materialGlassLensDisplacement(vec2 slope, vec2 fromCenter, float distance,
     // Unlike pow(proximity, falloff), this remains smooth for falloff < 1.
     float falloff = max(lens.w, 0.1);
     float t = proximity / (falloff + (1.0 - falloff) * proximity);
-    float envelope = t * t * t * (10.0 + t * (-15.0 + 6.0 * t));
+    float u = min(t, 1.0 - t);
+    float blend = u * u * u * (10.0 + u * (-15.0 + 6.0 * u));
+    float shoulder = t <= 0.5 ? blend : 1.0 - blend;
+    // Circular sag, as in Shoji, with a small regularizer at the outer rim.
+    // Rationalized subtraction preserves tiny offsets near the clear face.
+    const float epsilon = 0.02;
+    float base = sqrt(1.0 + epsilon * epsilon);
+    float envelope = shoulder * shoulder * (base + epsilon)
+        / (base + sqrt(max(1.0 - shoulder * shoulder, 0.0) + epsilon * epsilon));
     vec2 displacement = -fromCenter * (lens.z * envelope);
     return materialGlassLimitDisplacement(displacement, optical.w);
 }
