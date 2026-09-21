@@ -89,10 +89,18 @@ Schema 4 adds an independently implemented radial edge lens. `lens_mapping` is
 exactly 0 (existing Snell, the default) or 1 (radial contraction). Radial strength
 is dimensionless [0,1], default 0.2; `lens_falloff` is [0.1,16], default 1.
 `materialGlassLensDisplacement()` accepts the logical vector from the optical
-body center plus the optical signed distance. It preserves the original Snell
-helper for mode zero, and caps radial displacement with the existing maximum.
+body center plus the optical signed distance. It selects the Snell
+helper for mode zero. Both mappings use a smooth displacement bound rather than
+a hard magnitude clamp, avoiding a slope discontinuity at the configured limit.
 Zero edge width, radial strength or displacement produces no radial offset.
 Chromatic/scattering capture padding therefore keeps its existing bound.
+
+The radial envelope uses a rational falloff bias followed by a quintic smooth
+transition. Its first and second derivatives vanish at the face and edge for
+every supported falloff, including values below one. This avoids the inset seam
+of the former sine/power profile. The shared CPU reference and GLSL use the same
+profile; shell surfaces and compositor terminal backdrops consume this helper.
+See [glass source comparison](../../docs/glass-source-comparison.md) for references.
 
 `refraction_radius` defaults to -1 (follow the original shape); zero selects a
 square optical distance field, and positive values are logical pixels up to 512.

@@ -158,7 +158,7 @@ int main() {
   // transverse component on a wide bar is intentionally distinct from Snell.
   Optical radial;radial.edgeWidth=20;radial.lensStrength=.2F;radial.maximumDisplacement=128;
   const auto topLeft=radialOpticalDisplacement({-80,-35},0,radial);
-  CHECK(near(topLeft.x,16) && near(topLeft.y,7));
+  CHECK(near(topLeft.x,16,.002F) && near(topLeft.y,7,.002F));
   CHECK(radialOpticalDisplacement({0,0},0,radial)==Vec2{});
   CHECK(radialOpticalDisplacement({-80,-35},-20,radial)==Vec2{});
   const auto opposite=radialOpticalDisplacement({80,35},0,radial);
@@ -172,6 +172,27 @@ int main() {
   radial.edgeWidth=0;CHECK(radialOpticalDisplacement({-80,-35},0,radial)==Vec2{});
   radial.edgeWidth=20;radial.lensStrength=0;CHECK(radialOpticalDisplacement({-80,-35},0,radial)==Vec2{});
   radial.lensStrength=1;radial.maximumDisplacement=0;CHECK(radialOpticalDisplacement({-80,-35},0,radial)==Vec2{});
+
+  // The old sin(pow(p, .8)) profile had an infinite slope at the inner
+  // edge. All supported biases must join the flat face with zero slope.
+  for (float falloff : {.1F,.8F,1.F,4.F,16.F}) {
+    CHECK(radialLensEnvelope(0,falloff)==0);
+    CHECK(radialLensEnvelope(1,falloff)==1);
+    CHECK(radialLensEnvelope(.0001F,falloff)/.0001F < .002F);
+    CHECK(radialLensEnvelope(.0001F,falloff) < radialLensEnvelope(.001F,falloff));
+    float previous=0;
+    for (int sample=1;sample<=1000;++sample) {
+      const float amount=radialLensEnvelope(sample/1000.F,falloff);
+      CHECK(amount>=previous-.000002F && amount>=0 && amount<=1.000002F);
+      previous=amount;
+    }
+  }
+  // No hard change of slope where displacement reaches its configured limit.
+  const float center=smoothOpticalLimit({20,0},20).x;
+  const float before=(center-smoothOpticalLimit({19.99F,0},20).x)/.01F;
+  const float after=(smoothOpticalLimit({20.01F,0},20).x-center)/.01F;
+  CHECK(std::abs(before-after)<.01F && after>.2F);
+  CHECK(smoothOpticalLimit({10000,0},20).x<=20);
 
   // Stable identity is deterministic, bounded, and independent of repaint time.
   CHECK(illustrationPhase(0x12345678U) == illustrationPhase(0x12345678U));

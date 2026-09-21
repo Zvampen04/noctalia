@@ -296,6 +296,26 @@ inline Vec2 plateauShadowOffset(const Parameters& p) noexcept {
   return {-light.x / extent * p.plateau.shadowDistance, -light.y / extent * p.plateau.shadowDistance};
 }
 
+// CPU reference of the shared GLSL smooth displacement bound.
+inline Vec2 smoothOpticalLimit(Vec2 offset, float limit) noexcept {
+  if (limit <= 0.0F) return {};
+  const float magnitude = std::hypot(offset.x, offset.y);
+  const float scale = std::max({magnitude, limit, 0.0001F});
+  const float ratio = std::min(magnitude, limit) / scale;
+  const float ratio2 = ratio * ratio;
+  const float factor = (limit / scale) / std::pow(1.0F + ratio2 * ratio2, 0.25F);
+  return {offset.x * factor, offset.y * factor};
+}
+
+// C2-continuous face-to-edge transition for every supported falloff, including
+// values below one. The rational bias preserves the strength/width controls.
+inline float radialLensEnvelope(float proximity, float falloff) noexcept {
+  const float p = std::clamp(proximity, 0.0F, 1.0F);
+  falloff = std::max(falloff, 0.1F);
+  const float t = p / (falloff + (1.0F - falloff) * p);
+  return t * t * t * (10.0F + t * (-15.0F + 6.0F * t));
+}
+
 // Normal-incidence ray entering glass from air, with a bounded screen offset.
 inline Vec2 opticalDisplacement(Vec2 slope, float thickness, float refractiveIndex,
                                 float maximumDisplacement) noexcept {
@@ -316,9 +336,7 @@ inline Vec2 opticalDisplacement(Vec2 slope, float thickness, float refractiveInd
   const float rayZ = -eta - factor * normal.z;
   Vec2 offset{-factor * normal.x * o.thickness / std::max(-rayZ, 0.15F),
               -factor * normal.y * o.thickness / std::max(-rayZ, 0.15F)};
-  const float length = std::sqrt(offset.x * offset.x + offset.y * offset.y);
-  const float scale = std::min(1.0F, o.maximumDisplacement / std::max(length, 0.0001F));
-  return {offset.x * scale, offset.y * scale};
+  return smoothOpticalLimit(offset, o.maximumDisplacement);
 }
 
 // Stable phase without reducing large IDs through a lossy uint -> float cast.
@@ -353,10 +371,9 @@ inline Vec2 radialOpticalDisplacement(Vec2 fromCenter, float distance, const Opt
   if (!std::isfinite(fromCenter.x) || !std::isfinite(fromCenter.y) || !std::isfinite(distance)
       || o.edgeWidth<=0.0001F || o.maximumDisplacement<=0.0F || o.lensStrength<=0.0F) return {};
   const float proximity=std::clamp(1.0F+distance/o.edgeWidth,0.0F,1.0F);
-  const float amount=o.lensStrength*std::sin(1.57079632679F*std::pow(proximity,o.lensFalloff));
+  const float amount=o.lensStrength*radialLensEnvelope(proximity,o.lensFalloff);
   const float x=-fromCenter.x*amount, y=-fromCenter.y*amount;
-  const float bounded=std::min(1.0F,o.maximumDisplacement/std::max(std::hypot(x,y),0.0001F));
-  return {x*bounded,y*bounded};
+  return smoothOpticalLimit({x,y},o.maximumDisplacement);
 }
 
 // Uniforms are plain vec4 packs for both GLES 2 and desktop GL. Upload values

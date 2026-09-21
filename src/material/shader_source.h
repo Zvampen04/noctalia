@@ -89,26 +89,43 @@ float materialGlassHeight(float distance, vec4 optical) {
     return pow(max(1.0 - pow(1.0 - t, 4.0), 0.0), 0.25) * optical.x;
 }
 
+// Smooth fourth-norm saturation keeps the displacement bound without the
+// derivative discontinuity of min(1, limit/length). Normalize before taking
+// powers so large logical coordinates cannot overflow intermediate products.
+vec2 materialGlassLimitDisplacement(vec2 offset, float limit) {
+    if (limit <= 0.0) return vec2(0.0);
+    float magnitude = length(offset);
+    float scale = max(max(magnitude, limit), 0.0001);
+    float ratio = min(magnitude, limit) / scale;
+    float ratio2 = ratio * ratio;
+    return offset * ((limit / scale) / pow(1.0 + ratio2 * ratio2, 0.25));
+}
+
 // Pass central differences of materialGlassHeight() as slope. Finite differences
 // keep the high-curvature outer edge finite without changing the height profile.
 vec2 materialGlassDisplacement(vec2 slope, vec4 optical) {
     vec3 normal = normalize(vec3(-clamp(slope, vec2(-64.0), vec2(64.0)), 1.0));
     vec3 ray = refract(vec3(0.0, 0.0, -1.0), normal, 1.0 / max(optical.z, 1.0));
     vec2 offset = ray.xy / max(-ray.z, 0.15) * optical.x;
-    return offset * min(1.0, optical.w / max(length(offset), 0.0001));
+    return materialGlassLimitDisplacement(offset, optical.w);
 }
 
 // Independently implemented radial edge contraction in logical coordinates.
 // Lens fields: optical radius, mapping, radial strength, edge falloff. Keep the
-// existing Snell branch untouched, including its no-material defaults.
+// existing Snell branch and no-material defaults available.
 vec2 materialGlassLensDisplacement(vec2 slope, vec2 fromCenter, float distance,
                                    vec4 optical, vec4 lens) {
     if (lens.y < 0.5) return materialGlassDisplacement(slope, optical);
     if (optical.y <= 0.0001 || optical.w <= 0.0 || lens.z <= 0.0) return vec2(0.0);
     float proximity = clamp(1.0 + distance / optical.y, 0.0, 1.0);
-    float envelope = sin(1.57079632679 * pow(proximity, lens.w));
+    // Bias changes how broadly the lens reaches into the face, while the
+    // quintic envelope has zero first AND second derivatives at either end.
+    // Unlike pow(proximity, falloff), this remains smooth for falloff < 1.
+    float falloff = max(lens.w, 0.1);
+    float t = proximity / (falloff + (1.0 - falloff) * proximity);
+    float envelope = t * t * t * (10.0 + t * (-15.0 + 6.0 * t));
     vec2 displacement = -fromCenter * (lens.z * envelope);
-    return displacement * min(1.0, optical.w / max(length(displacement), 0.0001));
+    return materialGlassLimitDisplacement(displacement, optical.w);
 }
 
 // Applies only to sampled backdrop, before the palette coating and foreground.
