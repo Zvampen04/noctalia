@@ -89,8 +89,9 @@ Schema 4 adds an independently implemented radial edge lens. `lens_mapping` is
 exactly 0 (existing Snell, the default) or 1 (radial contraction). Radial strength
 is dimensionless [0,1], default 0.2; `lens_falloff` is [0.1,16], default 1.
 `materialGlassLensDisplacement()` accepts the logical vector from the optical
-body center, normalized and scaled by body half extents through
-`materialGlassRadialVector()`, plus the optical signed distance. It selects the Snell
+body center, body half extents, and the optical signed distance. The geometry
+overload normalizes and scales the radial vector and bounds the edge width to
+the body, keeping a clear center even on small modules. It selects the Snell
 helper for mode zero. Both mappings use a smooth displacement bound rather than
 a hard magnitude clamp, avoiding a slope discontinuity at the configured limit.
 Zero edge width, radial strength or displacement produces no radial offset.

@@ -144,6 +144,16 @@ vec2 materialGlassLensDisplacement(vec2 slope, vec2 fromCenter, float distance,
     return materialGlassLimitDisplacement(displacement, optical.w);
 }
 
+// Keep the optical shoulder within the body on small modules. Otherwise the
+// normalized radial direction would retain nonzero distortion at the center.
+vec2 materialGlassLensDisplacement(vec2 slope, vec2 fromCenter, vec2 halfSize,
+                                   float distance, vec4 optical, vec4 lens) {
+    if (lens.y >= 0.5)
+        optical.y = min(optical.y, max(min(halfSize.x, halfSize.y), 0.0));
+    return materialGlassLensDisplacement(slope,
+        materialGlassRadialVector(fromCenter, halfSize), distance, optical, lens);
+}
+
 // Applies only to sampled backdrop, before the palette coating and foreground.
 vec3 materialGlassBackdropColor(vec3 color, vec4 adjustment) {
     float luminance=dot(color,vec3(0.2126,0.7152,0.0722));

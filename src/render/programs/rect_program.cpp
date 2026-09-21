@@ -346,8 +346,8 @@ void main() {
         vec2 slope = vec2(hR - hL, hB - hT) / (2.0 * e);
         vec2 bodyMin=min(max(u_logical_inset.xy,vec2(0.0)),u_rect_size);
         vec2 bodyMax=max(bodyMin,u_rect_size-max(u_logical_inset.zw,vec2(0.0)));
-        vec2 localOffset = materialGlassLensDisplacement(slope,materialGlassRadialVector(
-            local_point-(bodyMin+bodyMax)*0.5,(bodyMax-bodyMin)*0.5),
+        vec2 localOffset = materialGlassLensDisplacement(slope,
+            local_point-(bodyMin+bodyMax)*0.5,(bodyMax-bodyMin)*0.5,
             optical_distance(local_point),u_material_optical,u_material_optical_lens);
         vec2 offset = vec2(dot(u_displacement_axes.xy, localOffset), dot(u_displacement_axes.zw, localOffset));
         vec2 pixel = gl_FragCoord.xy;
