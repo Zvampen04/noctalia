@@ -26,7 +26,7 @@ int main() {
     const auto original = config.config().shell.materialOverrides;
     const std::vector<std::string> path{"shell", "material_overrides", "surfaces", "window.background", "thickness"};
     int previews = 0;
-    config.addReloadCallback([&] { if (config.materialPreviewUpdate()) ++previews; });
+    config.addReloadCallback([&] { if (config.continuousPreviewUpdate()) ++previews; });
     const auto start = std::chrono::steady_clock::now();
     for (int i = 0; i < 100; ++i) assert(config.setOverride(path, double(20 + i % 20)));
     const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start);
@@ -41,6 +41,23 @@ int main() {
     assert(config.setOverride(path, 30.0));
     assert(config.commitProfilePreview());
     assert(toml::parse_file(settings.string())["shell"]["material_overrides"]["surfaces"]["window.background"]["thickness"].value<double>() == 30.0);
+    const auto originalAnimation = config.config().shell.animation;
+    const auto beforeCurvePreviews = previews;
+    for (int i = 0; i < 100; ++i) {
+      assert(config.setOverrides({
+          {{"shell", "animation", "curve_x1"}, double(i) / 100.0},
+          {{"shell", "animation", "curve_y1"}, -0.5},
+          {{"shell", "animation", "curve_x2"}, 0.7},
+          {{"shell", "animation", "curve_y2"}, 1.5},
+          {{"shell", "animation", "style"}, std::string("custom")},
+      }));
+    }
+    assert(previews == beforeCurvePreviews + 100);
+    assert(config.config().shell.animation.curveX1 == 0.99F);
+    assert(config.config().shell.animation.curveY1 == -0.5F);
+    assert(config.config().shell.animation.style == MotionStyle::Custom);
+    config.cancelProfilePreview();
+    assert(config.config().shell.animation == originalAnimation);
     std::cout << "100 material previews: " << elapsed.count() << " ms\n";
   }
   fs::remove_all(root);

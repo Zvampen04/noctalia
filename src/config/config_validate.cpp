@@ -822,6 +822,12 @@ namespace noctalia::config {
 
   } // namespace
 
+  schema::Diagnostics validatePluginPreview(const toml::table& values) {
+    schema::Diagnostics diagnostics;
+    validatePluginSettings(values, diagnostics, scripting::PluginRegistry::instance());
+    return diagnostics;
+  }
+
   schema::Diagnostics validateConfigSources(std::string_view configDir, std::string_view settingsTomlPath) {
     schema::Diagnostics diag;
     std::vector<std::filesystem::path> loadedFiles;

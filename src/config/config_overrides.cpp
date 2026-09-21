@@ -1946,7 +1946,7 @@ bool ConfigService::mutateOverrides(
   }
 
   if (clearPaths.empty()) {
-    if (const auto preview = previewMaterialScalars(overrides, changed)) return *preview;
+    if (const auto preview = previewContinuousSettings(overrides, changed)) return *preview;
   }
 
   const auto erasePath = [this](toml::table& table, const std::vector<std::string>& path) {

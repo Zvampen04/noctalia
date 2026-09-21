@@ -9,20 +9,21 @@
 namespace settings {
 // A pointer can produce hundreds of changes before configuration resolution
 // finishes. Retain only the latest preview and always flush the released value.
-class SliderPreview : public std::enable_shared_from_this<SliderPreview> {
+template <class Value>
+class SettingPreview : public std::enable_shared_from_this<SettingPreview<Value>> {
 public:
-  explicit SliderPreview(std::function<void(double)> commit) : m_commit(std::move(commit)) {}
+  explicit SettingPreview(std::function<void(Value)> commit) : m_commit(std::move(commit)) {}
 
-  void queue(double value) {
+  void queue(Value value) {
     m_pending = value;
     if (m_timer.active()) return;
-    const auto weak = weak_from_this();
+    const auto weak = this->weak_from_this();
     m_timer.start(std::chrono::milliseconds(16), [weak] {
       if (const auto self = weak.lock()) self->flush();
     });
   }
 
-  void finish(double value) {
+  void finish(Value value) {
     m_timer.stop();
     m_pending = value;
     flush();
@@ -37,7 +38,8 @@ private:
   }
 
   Timer m_timer;
-  std::optional<double> m_pending, m_last;
-  std::function<void(double)> m_commit;
+  std::optional<Value> m_pending, m_last;
+  std::function<void(Value)> m_commit;
 };
+using SliderPreview = SettingPreview<double>;
 }

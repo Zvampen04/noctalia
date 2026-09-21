@@ -445,7 +445,8 @@ namespace scripting {
 
   void PluginManager::refresh() {
     const PluginsConfig& pc = m_config.config().plugins;
-    if (m_applied && pc == m_lastApplied) {
+    if (m_applied && pc.sources == m_lastApplied.sources && pc.enabled == m_lastApplied.enabled) {
+      m_lastApplied = pc;
       return;
     }
     // Heal wiped source storage / restored config once at startup. Source storage

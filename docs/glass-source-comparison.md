@@ -5,7 +5,11 @@ slider retains the latest value per 16 ms preview interval and flushes the final
 value on release. `config/material_preview.cpp` validates scalar material edits
 through the existing shell schema and updates the in-memory profile without file
 reads or plugin discovery. Save, Cancel, imports and structural changes retain
-the normal profile transaction path.
+the normal profile transaction path. Curve editors use the same latest-value
+queue and flush the restored curve on Escape. Native animation curves and
+registered plugin curve fields also preview in memory, with their existing
+schema validation. Plugin settings alone do not rescan the plugin registry;
+source or enablement changes still do.
 
 `compositors/hyprland/material_bridge.cpp` sends material changes directly to
 Infinite Desktop's existing settings API. Its worker coalesces pending updates

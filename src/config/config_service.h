@@ -65,7 +65,7 @@ public:
   // Which sections changed in the reload currently being dispatched. Valid while
   // reload callbacks run; subscribers consult it to skip unaffected work.
   [[nodiscard]] const ConfigChangeSet& lastChange() const noexcept { return m_lastChange; }
-  [[nodiscard]] bool materialPreviewUpdate() const noexcept { return m_materialPreviewUpdate; }
+  [[nodiscard]] bool continuousPreviewUpdate() const noexcept { return m_continuousPreviewUpdate; }
   [[nodiscard]] const std::string& lastMutationError() const noexcept { return m_lastMutationError; }
   [[nodiscard]] bool matchesKeybind(KeybindAction action, std::uint32_t sym, std::uint32_t modifiers) const;
   [[nodiscard]] int watchFd() const noexcept { return m_inotify.fd(); }
@@ -237,8 +237,8 @@ public:
   static void deepMerge(toml::table& base, const toml::table& overlay);
 
 private:
-  bool m_materialPreviewUpdate = false;
-  std::optional<bool> previewMaterialScalars(
+  bool m_continuousPreviewUpdate = false;
+  std::optional<bool> previewContinuousSettings(
       const std::vector<std::pair<std::vector<std::string>, ConfigOverrideValue>>& overrides, bool* changed);
   void loadAll();
   [[nodiscard]] static Config makeDefaultConfig();

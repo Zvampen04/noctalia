@@ -211,9 +211,7 @@ void Application::run(std::function<void()> startupReadyCallback) {
     m_pluginManager.refresh();
     m_materialBridge.update(m_configService.config());
     m_configService.addReloadCallback([this]() { m_materialBridge.update(m_configService.config()); });
-    m_configService.addReloadCallback([this]() {
-      if (!m_configService.materialPreviewUpdate()) m_pluginManager.refresh();
-    });
+    m_configService.addReloadCallback([this]() { m_pluginManager.refresh(); });
     // Opt-in auto-update: pull each flagged git source in the background, once now
     // and then every 6h so a long-running session isn't stuck on the startup snapshot.
     runPluginAutoUpdate();

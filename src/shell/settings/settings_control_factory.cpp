@@ -49,7 +49,6 @@ namespace settings {
       CurveSetting setting;
       std::function<void(std::vector<std::pair<std::vector<std::string>, ConfigOverrideValue>>)> setOverrides;
       std::optional<BezierEditor::Curve> pending;
-      bool queued = false;
     };
 
     void commitPendingCurve(const std::shared_ptr<CurveCommitState>& state) {
@@ -406,21 +405,17 @@ namespace settings {
         .setting = setting,
         .setOverrides = m_ctx.setOverrides,
     });
-    editor->setOnChanged([commit, interaction = m_ctx.setInteractiveEdit](BezierEditor::Curve curve) {
-      if (interaction) interaction(true);
+    const auto preview = std::make_shared<SettingPreview<BezierEditor::Curve>>([commit](BezierEditor::Curve curve) {
       commit->pending = curve;
-      if (commit->queued) return;
-      commit->queued = true;
-      DeferredCall::callLater([weak = std::weak_ptr<CurveCommitState>(commit)] {
-        const auto state = weak.lock();
-        if (!state) return; // Editor was rebuilt or closed before the queued preview.
-        state->queued = false;
-        commitPendingCurve(state);
-      });
-    });
-    editor->setOnEditEnd([commit, interaction = m_ctx.setInteractiveEdit] {
-      // Persist the exact release/cancel value before allowing a deferred settings rebuild.
       commitPendingCurve(commit);
+    });
+    editor->setOnChanged([preview, interaction = m_ctx.setInteractiveEdit](BezierEditor::Curve curve) {
+      if (interaction) interaction(true);
+      preview->queue(curve);
+    });
+    editor->setOnEditEnd([preview, editorPtr = editor.get(), interaction = m_ctx.setInteractiveEdit] {
+      // Persist the exact release/cancel value before allowing a deferred settings rebuild.
+      preview->finish(editorPtr->curve());
       if (interaction) interaction(false);
     });
     return editor;

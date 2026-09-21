@@ -7,6 +7,8 @@
 #include <string_view>
 
 namespace noctalia::config {
+  // Uses already-loaded manifests; continuous curve previews must not rescan plugin sources.
+  [[nodiscard]] schema::Diagnostics validatePluginPreview(const toml::table& values);
 
   // Validates an already merged and normalized effective config table. This is the
   // shared, side-effect-free semantic validation pass used by live reload and the CLI.
