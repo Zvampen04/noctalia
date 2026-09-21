@@ -1,6 +1,7 @@
 #include "ui/controls/bezier_editor.h"
 #include "ui/controls/spring_response_preview.h"
 #include "shell/settings/settings_control_factory.h"
+#include "shell/settings/slider_preview.h"
 
 #include "config/config_service.h"
 #include "config/config_types.h"
@@ -671,15 +672,16 @@ namespace settings {
       commitValue = [commit, inverted](double magValue) { commit(*inverted ? -magValue : magValue); };
     }
 
-    // Pointer drags preview immediately. Programmatic reconciliation only updates
+    // Pointer drags preview at a bounded cadence. Programmatic reconciliation only updates
     // the display; keyboard/wheel completion and explicit text submission retain
     // their existing commit path. The window defers rebuilds while input is captured.
-    slider->setOnValueChanged([commitValue, sliderPtr, valueInputPtr, integerValue](double next) {
+    const auto preview = std::make_shared<SliderPreview>(commitValue);
+    slider->setOnValueChanged([preview, sliderPtr, valueInputPtr, integerValue](double next) {
       valueInputPtr->setInvalid(false);
       valueInputPtr->setValue(formatSliderValue(next, integerValue));
-      if (sliderPtr->dragging()) commitValue(next);
+      if (sliderPtr->dragging()) preview->queue(next);
     });
-    slider->setOnDragEnd([commitValue, sliderPtr]() { commitValue(sliderPtr->value()); });
+    slider->setOnDragEnd([preview, sliderPtr]() { preview->finish(sliderPtr->value()); });
 
     const auto commitInputText = [commitValue, sliderPtr, valueInputPtr, minValue, maxValue,
                                   integerValue](const std::string& text) {

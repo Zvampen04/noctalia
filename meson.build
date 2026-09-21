@@ -469,6 +469,7 @@ _noctalia_sources = files(
   'src/core/files/resource_paths.cpp',
   'src/core/inotify/inotify.cpp',
   'src/core/timer_manager.cpp',
+  'src/config/material_preview.cpp',
   'src/core/ui_phase.cpp',
   'src/dbus/accounts/accounts_service.cpp',
   'src/dbus/bluetooth/bluetooth_agent.cpp',
@@ -945,6 +946,7 @@ _noctalia_sources = files(
   'src/compositors/ext_workspace/ext_workspace_output_backend.cpp',
   'src/compositors/ext_workspace/ext_workspace_backend.cpp',
   'src/compositors/hyprland/hyprland_runtime.cpp',
+  'src/compositors/hyprland/material_bridge.cpp',
   'src/compositors/hyprland/hyprland_event_handler.cpp',
   'src/compositors/hyprland/hyprland_output_backend.cpp',
   'src/compositors/hyprland/hyprland_workspace_backend.cpp',
@@ -1156,6 +1158,8 @@ install_data(
 
 if build_tests
   _cpp_test_names = [
+    'slider_preview',
+    'material_preview',
     'annotation_document',
     'annotation_raster',
     'animation_manager',

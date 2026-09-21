@@ -1,5 +1,17 @@
 # Glass source comparison
 
+Material slider previews are numeric updates, not shader compilation. The settings
+slider retains the latest value per 16 ms preview interval and flushes the final
+value on release. `config/material_preview.cpp` validates scalar material edits
+through the existing shell schema and updates the in-memory profile without file
+reads or plugin discovery. Save, Cancel, imports and structural changes retain
+the normal profile transaction path.
+
+`compositors/hyprland/material_bridge.cpp` sends material changes directly to
+Infinite Desktop's existing settings API. Its worker coalesces pending updates
+and bounds socket waits; neither the UI thread nor a one-second polling loop
+owns delivery. Shader identities remain unchanged while parameters change.
+
 Reviewed the source of [Shoji liquid glass](https://github.com/bea4dev/liquid-glass-config-shojiwm/blob/main/src/liquid-glass.frag)
 and the [GNOME Liquid Glass extension](https://github.com/ryohsuke1231/liquid-glass).
 The GNOME effect is an extension, not a built-in GNOME compositor effect.

@@ -1945,6 +1945,10 @@ bool ConfigService::mutateOverrides(
     return false;
   }
 
+  if (clearPaths.empty()) {
+    if (const auto preview = previewMaterialScalars(overrides, changed)) return *preview;
+  }
+
   const auto erasePath = [this](toml::table& table, const std::vector<std::string>& path) {
     const bool erased = eraseOverridePath(table, path, overridePreserveDepthForPath(path));
     if (erased && path.size() == 2 && path[0] == "idle" && path[1] == "behavior") {

@@ -125,9 +125,30 @@ lib.warnIf cudaSupport
 
   mesonBuildType = "release";
 
-  mesonFlags = [ "-Dtests=disabled" ];
+  mesonFlags = [ "-Dtests=enabled" ];
 
   ninjaFlags = [ "-v" ];
+  buildPhase = ''
+    runHook preBuild
+    if ninja -t targets all | grep '^material_preview_test:' >/dev/null; then
+      ninja -j"$NIX_BUILD_CORES" noctalia slider_preview_test material_preview_test
+    else
+      # The greeter derives this package with the shell test suite disabled.
+      ninja -j"$NIX_BUILD_CORES"
+    fi
+    runHook postBuild
+  '';
+  doCheck = true;
+  checkPhase = ''
+    runHook preCheck
+    meson test --no-rebuild --print-errorlogs slider_preview material_preview
+    runHook postCheck
+  '';
+  installPhase = ''
+    runHook preInstall
+    meson install --no-rebuild
+    runHook postInstall
+  '';
 
   meta = with lib; {
     description = "A sleek, customizable desktop shell crafted for Wayland.";

@@ -6,6 +6,7 @@
 #include "calendar/calendar_service.h"
 #include "capture/screenshot_service.h"
 #include "compositors/compositor_platform.h"
+#include "compositors/hyprland/material_bridge.h"
 #include "compositors/workspace_alert_service.h"
 #include "config/config_poll_source.h"
 #include "config/config_service.h"
@@ -228,6 +229,7 @@ private:
   WaylandConnection m_wayland;
   WorkspaceAlertService m_workspaceAlertService;
   CompositorPlatform m_compositorPlatform{m_wayland};
+  compositors::hyprland::MaterialBridge m_materialBridge;
   security::SecretStore m_secretStore;
   security::StorageKeyProvider m_storageKeyProvider{m_secretStore};
   ClipboardService m_clipboardService{m_storageKeyProvider};
