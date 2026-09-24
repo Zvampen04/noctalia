@@ -7,6 +7,7 @@
 #include "core/deferred_call.h"
 #include "dbus/mpris/mpris_service.h"
 #include "i18n/i18n.h"
+#include "material/material.h"
 #include "notification/notification_manager.h"
 #include "render/core/renderer.h"
 #include "render/scene/input_area.h"
@@ -41,6 +42,15 @@ namespace {
 
   float tabContentHeight(float viewportHeight) {
     return std::max(1.0F, std::floor(viewportHeight - kTabViewportClipInset));
+  }
+
+  // ScrollView clips its children to its own bounds. Leave enough room around
+  // the navigation buttons for the material's outer shadow before that clip.
+  float sidebarButtonBleed(float scale) {
+    const auto material = Style::materialFor("control", "button");
+    if (material.primitive != noctalia::material::Primitive::Plateau || material.plateau.elevation <= 0.0F)
+      return 0.0F;
+    return std::ceil(noctalia::material::samplingPadding(material) * scale);
   }
 
 } // namespace
@@ -169,16 +179,17 @@ void ControlCenterPanel::create() {
     wireSidebarScroll(m_sidebarScrollArea);
     sidebar->addChild(std::move(sidebarScrollArea));
 
+    const float buttonBleed = sidebarButtonBleed(scale);
     const std::optional<float> sidebarScrollWidth =
-        m_compact ? std::optional<float>{Style::controlHeightSm * scale} : std::nullopt;
+        m_compact ? std::optional<float>{Style::controlHeightSm * scale + buttonBleed * 2.0F} : std::nullopt;
 
     auto sidebarScroll = ui::scrollView({
         .out = &m_sidebarScrollView,
         .state = &m_sidebarScrollState,
         .contentScale = scale,
         .scrollbarVisible = true,
-        .viewportPaddingH = 0.0F,
-        .viewportPaddingV = 0.0F,
+        .viewportPaddingH = buttonBleed,
+        .viewportPaddingV = buttonBleed,
         .fillWidth = false,
         .fillHeight = true,
         .width = sidebarScrollWidth,
@@ -920,6 +931,7 @@ void ControlCenterPanel::layoutFullSidebarWidth(Renderer& renderer, float panelW
   }
 
   const float scale = contentScale();
+  const float buttonBleed = sidebarButtonBleed(scale);
   const float fontSize = Style::fontSizeBody * scale;
   const float paddingH = Style::spaceSm * scale * 2.0F;
   const float gap = Style::spaceSm * scale;
@@ -939,16 +951,18 @@ void ControlCenterPanel::layoutFullSidebarWidth(Renderer& renderer, float panelW
       panelWidth, minWidth, 160.0F * scale, Style::panelPadding * scale);
 
   // Scrollbar gutter lives inside the scroll viewport; reserve it only when the nav overflows.
-  float targetWidth = contentWidth;
+  float targetWidth = control_center_width::fittedFullSidebar(
+      contentWidth + buttonBleed * 2.0F, panelWidth, minWidth + buttonBleed * 2.0F,
+      160.0F * scale, Style::panelPadding * scale);
   const float scrollHeight = m_sidebarScrollView->height();
   if (scrollHeight > 0.0F) {
     LayoutConstraints navConstraints;
-    navConstraints.setExactWidth(contentWidth);
+    navConstraints.setExactWidth(std::max(0.0F, targetWidth - buttonBleed * 2.0F));
     const float navHeight = m_sidebarNav->measure(renderer, navConstraints).height;
     if (navHeight > scrollHeight + 0.5F) {
       targetWidth = control_center_width::fittedFullSidebar(
-          contentWidth + m_sidebarScrollView->scrollbarGutter(), panelWidth,
-          minWidth, 160.0F * scale, Style::panelPadding * scale);
+          contentWidth + buttonBleed * 2.0F + m_sidebarScrollView->scrollbarGutter(), panelWidth,
+          minWidth + buttonBleed * 2.0F, 160.0F * scale, Style::panelPadding * scale);
     }
   }
 

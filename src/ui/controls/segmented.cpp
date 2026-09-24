@@ -290,7 +290,18 @@ void Segmented::refreshVariants() {
       m_buttons[i]->setRadii(Radii{r});
       continue;
     }
-    m_buttons[i]->setVariant(i == m_selected ? ButtonVariant::TabActive : ButtonVariant::Tab);
+    const bool selected = i == m_selected;
+    m_buttons[i]->setVariant(selected ? ButtonVariant::TabActive : ButtonVariant::Tab);
+    if (Style::neumorphicSurfaces()) {
+      auto palette = Button::defaultPalette(selected ? ButtonVariant::TabActive : ButtonVariant::Tab);
+      if (!selected) {
+        // The group is the shared material surface. Keep unselected options
+        // transparent in every state so their individual halos cannot form seams.
+        palette.normal.bg = palette.hover.bg = palette.pressed.bg = palette.disabled.bg = clearColorSpec();
+        palette.hover.label = palette.pressed.label = colorSpecFromRole(ColorRole::Primary);
+      }
+      m_buttons[i]->setCustomPalette(palette);
+    }
     Radii radii;
     if (n == 1) {
       radii = Radii{r, r, r, r};

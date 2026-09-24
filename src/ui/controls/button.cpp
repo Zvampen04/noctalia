@@ -641,9 +641,11 @@ void Button::resolveVisualStateColors(Color& targetBg, Color& targetBorder, Colo
     targetBorder = resolveColorSpec(m_palette.selected->border);
     targetLabel = resolveColorSpec(m_palette.selected->label);
   } else if (keyboardNavFocus) {
-    targetBg = resolveColorSpec(colorSpecFromRole(ColorRole::Secondary));
-    targetBorder = resolveColorSpec(clearColorSpec());
-    targetLabel = resolveColorSpec(colorSpecFromRole(ColorRole::OnSecondary));
+    // A custom palette owns its focus paint too. Segmented options use this to
+    // keep focus on the shared track instead of creating another raised tile.
+    targetBg = resolveColorSpec(m_customPalette ? m_palette.hover.bg : colorSpecFromRole(ColorRole::Secondary));
+    targetBorder = resolveColorSpec(m_customPalette ? m_palette.hover.border : clearColorSpec());
+    targetLabel = resolveColorSpec(m_customPalette ? m_palette.hover.label : colorSpecFromRole(ColorRole::OnSecondary));
   } else if (isHovered || isSelected) {
     targetBg = resolveColorSpec(m_palette.hover.bg);
     targetBorder = resolveColorSpec(m_palette.hover.border);
