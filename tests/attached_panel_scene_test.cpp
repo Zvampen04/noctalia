@@ -1,5 +1,6 @@
 #include "shell/panel/panel_manager.h"
 #include "shell/panel/panel.h"
+#include "shell/panel/panel_source_route.h"
 #include "compositors/compositor_platform.h"
 #include "config/config_service.h"
 #include "render/core/renderer.h"
@@ -348,6 +349,12 @@ public:
   }
 };
 int main() {
+  const std::vector<std::string> routes{"control-center=status", "control-center/calendar=clock", "launcher=clock"};
+  TEST_CHECK(attached_panel::sourceSection(routes, "control-center", "calendar") == "clock");
+  TEST_CHECK(attached_panel::sourceSection(routes, "control-center", "audio") == "status");
+  TEST_CHECK(attached_panel::sourceSection(routes, "control-center", "") == "status");
+  TEST_CHECK(attached_panel::sourceSection(routes, "launcher", "") == "clock");
+  TEST_CHECK(attached_panel::sourceSection(routes, "session", "").empty());
   PrivateFiles files;
   ConfigService config;
   WaylandConnection wayland;

@@ -210,6 +210,7 @@ namespace {
            .radius = Style::scaledRadiusMd(m_style.scale)}
       );
       addChild(std::move(row));
+      m_row->setMaterialIdentity("surface", "launcher-row");
 
       m_row->addChild(
           ui::label({
@@ -476,6 +477,7 @@ namespace {
           .fillHeight = true,
       });
       addChild(std::move(col));
+      m_col->setMaterialIdentity("surface", "launcher-row");
 
       addChild(
           ui::glyph({

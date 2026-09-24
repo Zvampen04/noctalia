@@ -2,6 +2,7 @@
 #include "render/scene/countdown_ring_node.h"
 #include "shell/panel/attached_panel_layout.h"
 #include "shell/panel/screen_edge_attachment.h"
+#include "shell/panel/panel_source_route.h"
 #include "core/input/key_symbols.h"
 #include "ui/controls/slider.h"
 
@@ -634,15 +635,10 @@ void PanelManager::openPanel(const std::string& panelId, PanelOpenRequest reques
   if (m_attachedSource.section == AttachedPanelSourceSection::Unknown
       && m_attachedSource.sectionId.empty()
       && m_config) {
-    const auto prefix = panelId + "=";
-    for (const auto& route : m_config->config().shell.panel.sourceSections) {
-      if (!route.starts_with(prefix))
-        continue;
-      const auto id = route.substr(prefix.size());
-      if (std::ranges::any_of(barConfig.sections, [&](const auto& section) { return section.id == id; }))
-        m_attachedSource.sectionId = id;
-      break;
-    }
+    const auto id = attached_panel::sourceSection(
+        m_config->config().shell.panel.sourceSections, panelId, request.context);
+    if (std::ranges::any_of(barConfig.sections, [&](const auto& section) { return section.id == id; }))
+      m_attachedSource.sectionId = id;
   }
   if (barConfig.sectionBackgrounds && barConfig.islandMorph && m_attachedSourceGeometryProvider) {
     if (auto source = m_attachedSourceGeometryProvider(request.output, m_sourceBarName, m_attachedSource);

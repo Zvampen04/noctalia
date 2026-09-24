@@ -232,7 +232,7 @@ private:
   std::unordered_map<wl_surface*, BarInstance*> m_surfaceMap;
   BarInstance* m_hoveredInstance = nullptr;
   void notifyAttachedSourceGeometryChanged(const BarInstance& instance);
-  void syncTransientActivityGeometry(BarInstance& instance);
+  void syncTransientActivityGeometry(BarInstance& instance, Renderer* renderer = nullptr);
   std::function<void(wl_output*, std::string_view)> m_attachedSourceGeometryChangedCallback;
   std::function<bool(const BarInstance&)> m_autoHideSuppressionCallback;
   noctalia::bar::WidgetActionDispatcher m_actionDispatcher;

@@ -85,6 +85,8 @@ inline constexpr std::array kMaterialFamilies{
     MaterialTarget{"container", "Containers", "surface", ""},
     MaterialTarget{"panel", "Panels", "surface", ""},
     MaterialTarget{"bar", "Bars", "surface", ""},
+    MaterialTarget{"bar-widget", "Bar buttons", "surface", "bar"},
+    MaterialTarget{"launcher-row", "Launcher results", "surface", "panel"},
     MaterialTarget{"dock", "Docks", "surface", ""},
     MaterialTarget{"notification", "Notifications", "surface", ""},
     MaterialTarget{"osd", "On-screen indicators", "surface", ""},

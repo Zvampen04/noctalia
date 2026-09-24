@@ -17,4 +17,17 @@ The lane backgrounds and shadows are retained scene nodes. Layout derives their 
 
 Blur and pointer regions use the painted rounded lane shapes. Visible gaps pass pointer input through. An auto-hidden bar retains its existing narrow edge trigger so it can still be revealed. Live layout and slide updates refresh these regions; ordinary widget hover/focus and explicit capsules remain available. Material shadow bleed and attached-panel shadow exclusion are preserved for each lane.
 
+For island morphing, `shell.panel.source_sections` also resolves keyboard and
+IPC opens to a named section. Entries use `panel-id=section-id`; a page-specific
+entry such as `control-center/calendar=clock` takes precedence over
+`control-center=status`. An explicit module click keeps its own source. These
+routes are editable under **Panels → Panel source sections**. A continuous bar
+uses connected panel corners; an island morph retains convex corners throughout
+its transition and replaces the source island while the panel is visible.
+
+Section volume and brightness activity replaces the section's ordinary content
+with an icon, adjustable level meter, and value. The configured progress thickness
+also sets the compact meter thumb size. Notification activity retains its text
+layout; both return to the section's original content on dismissal.
+
 `bar_section_geometry_test` covers content sizing, signed clipping at output boundaries, hidden/empty lanes, narrow layouts, zero padding/gap, missing center lanes and horizontal/vertical coordinates. This CPU test and syntax validation do not approve appearance. Native captures must still inspect all four orientations, live widget changes, each material, shadow clipping, hover hit targets, fractional scaling, auto-hide and attached panels.

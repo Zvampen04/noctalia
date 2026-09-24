@@ -1731,7 +1731,7 @@ namespace settings {
     ));
     entries.push_back(makeEntry(
         SettingsSection::Panels, "panels", "Panel source sections",
-        "Keyboard/IPC opening anchors, written as panel-id=bar-section-id. Clicking a module retains that module as its source.",
+        "Keyboard/IPC opening anchors: panel-id=bar-section-id, or panel-id/page=bar-section-id for a specific page. Clicking a module retains that module as its source.",
         {"shell","panel","source_sections"},ListSetting{cfg.shell.panel.sourceSections,{}},"island anchor section routing"
     ));
     entries.push_back(makeEntry(

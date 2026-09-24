@@ -1583,7 +1583,6 @@ namespace {
             ? std::max(slotCross + crossGrow, slotCross + (activityCross-slotCross)*section.activityReveal)
             : slotCross + crossGrow;
         if (reverseCross) crossStart -= std::max(0.0F, crossLength-slotCross-crossGrow);
-        section.content->setOpacity(section.activityRoot ? 1.0F-section.activityReveal : 1.0F);
         for (auto& widget : section.widgets)
           widget->setBarPointerSuppressed(section.activityRoot && section.activityReveal > 0.0F);
         if (isVertical) {
@@ -1597,8 +1596,12 @@ namespace {
           section.content->setPosition((length - section.content->width()) * 0.5F,
                                        (crossLength - section.content->height()) * 0.5F);
         }
-        section.slot->setClipChildren(!section.config.allowOverlap);
-        section.content->setOpacity(panelOwnsSection ? 0.0F : 1.0F);
+        // Raised materials paint beyond their layout bounds. Keep the section's
+        // content clip for ordinary surfaces, but let plateau shadows bridge
+        // the otherwise hard edge between adjacent section slots.
+        section.slot->setClipChildren(!section.config.allowOverlap && !Style::neumorphicSurfaces());
+        section.content->setOpacity(panelOwnsSection ? 0.0F
+            : section.activityRoot ? 1.0F-section.activityReveal : 1.0F);
         applyBarWidgetHitTargets(
             section.content, section.slot, isVertical,
             std::max(0.0F, instance.barConfig.islandHoverGrow + std::abs(instance.barConfig.islandHoverOffset)));
@@ -1658,7 +1661,7 @@ namespace {
     }
 
     auto configureSlot = [&](Node* slot, float mainOffset, float mainSize) {
-      slot->setClipChildren(true);
+      slot->setClipChildren(!Style::neumorphicSurfaces());
       if (isVertical) {
         slot->setPosition(0.0F, mainOffset);
         slot->setSize(slotCross, mainSize);
@@ -3527,7 +3530,13 @@ void Bar::attachWidgetsToSections(BarInstance& instance) {
             .out = &boxPtr,
             .fill = scaleAlpha(widget.widgetForegroundOr(colorSpecFromRole(ColorRole::OnSurface)), 0.0F),
             .visible = false,
-            .configure = [](Box& box) { box.setZIndex(-1); },
+            .configure = [](Box& box) {
+              // A hover tint is paint over the button, not another raised
+              // surface. A plateau would turn its small alpha into an opaque
+              // illuminated block as soon as the pointer enters.
+              box.setMaterialPrimitive(noctalia::material::Primitive::Flat);
+              box.setZIndex(-1);
+            },
         })
     );
     widget.setBarHoverBox(boxPtr);
@@ -3678,6 +3687,8 @@ void Bar::attachWidgetsToSections(BarInstance& instance) {
       shellPtr->addChild(std::move(capsuleBg));
       if (widget.hasBarMaterialSurface())
         bgPtr->setMaterialIdentityPath("surface", "bar-widget", widget.barMaterialSurfaces());
+      else
+        bgPtr->setMaterialIdentity("surface", "bar-widget");
       Box* hoverPtr = addHoverBox(widget, *shellPtr);
       shellPtr->addChild(widget.releaseRoot());
       widget.setBarCapsuleScene(shellPtr, bgPtr);
@@ -3776,6 +3787,7 @@ void Bar::attachWidgetsToSections(BarInstance& instance) {
           },
       });
       shellPtr->addChild(std::move(capsuleBg));
+      bgPtr->setMaterialIdentity("surface", "bar-widget");
 
       // Visual order: with accordion + Start direction the always-visible first member sits last,
       // so the hidden members unfold before it along the lane's main axis. Flex children,
@@ -4473,7 +4485,7 @@ void Bar::buildScene(BarInstance& instance, std::uint32_t width, std::uint32_t h
   layoutBarSections(
       instance, renderer, barAreaW, barAreaH, padding, isVertical, mainSpan, mainInsetStart, mainInsetEnd
   );
-  syncTransientActivityGeometry(instance);
+  syncTransientActivityGeometry(instance, &renderer);
 
   float contentLeft = barAreaX;
   float contentTop = barAreaY;
@@ -4543,11 +4555,11 @@ void Bar::updateWidgets(BarInstance& instance) {
   layoutBarSections(
       instance, renderer, barAreaW, barAreaH, padding, isVertical, mainSpan, mainInsetStart, mainInsetEnd
   );
-  syncTransientActivityGeometry(instance);
+  syncTransientActivityGeometry(instance, &renderer);
   if (instance.barConfig.sectionBackgrounds || !instance.dynamicSections.empty()) syncBarSurfaceChrome(instance);
 }
 
-void Bar::syncTransientActivityGeometry(BarInstance& instance) {
+void Bar::syncTransientActivityGeometry(BarInstance& instance, Renderer* renderer) {
   for (auto& section : instance.dynamicSections) {
     if (section.activityRoot == nullptr || section.background == nullptr) continue;
     const float width = section.background->width();
@@ -4562,6 +4574,10 @@ void Bar::syncTransientActivityGeometry(BarInstance& instance) {
     if (section.activityContent != nullptr) {
       section.activityContent->setSize(width, height);
       section.activityContent->setOpacity(section.activityReveal);
+      // Bar layout is explicit; this row is not part of the widget lanes.
+      // Arrange it after resizing so the glyph, meter and value use the whole
+      // activity capsule instead of overlapping at their initial origins.
+      if (renderer) section.activityContent->layout(*renderer);
     }
     if (section.activityRing) {
       auto ring = section.widgets.size() == 1 ? section.widgets.front()->usageRingStyle() : std::nullopt;
@@ -4709,27 +4725,20 @@ bool Bar::presentTransientActivity(
         .glyph = activity.icon.empty() ? "bell" : activity.icon,
         .glyphSize = Style::fontSizeBody,
     }));
-    const std::string primary = activity.title.empty() ? activity.value : activity.title;
-    auto text = ui::column({.justify = FlexJustify::Center, .flexGrow = 1.0F});
-    text->addChild(ui::label({
+    if (!activity.showProgress) {
+      const std::string primary = activity.title.empty() ? activity.value : activity.title;
+      auto text = ui::column({.justify = FlexJustify::Center, .flexGrow = 1.0F});
+      text->addChild(ui::label({
         .out = &section->activityTitle,
         .text = primary,
         .fontSize = Style::fontSizeCaption,
         .fontWeight = FontWeight::Medium,
         .maxLines = 1,
         .ellipsize = TextEllipsize::End,
-        .flexGrow = 1.0F,
-    }));
-    if (route.showBody && !activity.body.empty()) text->addChild(ui::label({
-        .text = activity.body, .fontSize = Style::fontSizeCaption, .maxLines = 1, .ellipsize = TextEllipsize::End}));
-    row->addChild(std::move(text));
-    if (!activity.title.empty() && !activity.value.empty()) {
-      row->addChild(ui::label({
-          .out = &section->activityValue,
-          .text = activity.value,
-          .fontSize = Style::fontSizeCaption,
-          .maxLines = 1,
       }));
+      if (route.showBody && !activity.body.empty()) text->addChild(ui::label({
+        .text = activity.body, .fontSize = Style::fontSizeCaption, .maxLines = 1, .ellipsize = TextEllipsize::End}));
+      row->addChild(std::move(text));
     }
     if (activity.showProgress && activity.setProgress) {
       auto slider = std::make_unique<Slider>();
@@ -4737,21 +4746,32 @@ bool Bar::presentTransientActivity(
       slider->setRange(0.0, 1.0);
       slider->setStep(0.01);
       slider->setValue(std::clamp(activity.progress, 0.0F, 1.0F));
-      slider->setControlHeight(Style::controlHeightSm);
+      slider->setControlHeight(std::min(Style::controlHeightSm, static_cast<float>(route.height)));
       slider->setTrackHeight(static_cast<float>(route.progressThickness));
+      slider->setThumbSize(static_cast<float>(route.progressThickness));
       slider->setWheelAdjustEnabled(true);
       slider->setOnValueChanged([setProgress = activity.setProgress](double value) {
         setProgress(static_cast<float>(value));
       });
-      slider->setMinWidth(std::clamp(route.width*.28F,24.F,72.F));
-      slider->setMaxWidth(std::clamp(route.width*.28F,24.F,72.F));
+      slider->setMinWidth(24.F);
+      slider->setFlexGrow(1.F);
       row->addChild(std::move(slider));
     } else if (activity.showProgress) {
-      row->addChild(ui::progressBar({
+      auto progress = ui::progressBar({
           .out = &section->activityProgress,
           .progress = std::clamp(activity.progress, 0.0F, 1.0F),
           .width = 48.0F,
           .height = static_cast<float>(route.progressThickness),
+      });
+      progress->setFlexGrow(1.F);
+      row->addChild(std::move(progress));
+    }
+    if (!activity.value.empty() && (activity.showProgress || !activity.title.empty())) {
+      row->addChild(ui::label({
+          .out = &section->activityValue,
+          .text = activity.value,
+          .fontSize = Style::fontSizeCaption,
+          .maxLines = 1,
       }));
     }
     root->addChild(std::move(row));
@@ -4913,7 +4933,7 @@ void Bar::prepareFrame(BarInstance& instance, bool needsUpdate, bool needsLayout
     layoutBarSections(
         instance, renderer, barAreaW, barAreaH, padding, isVertical, mainSpan, mainInsetStart, mainInsetEnd
     );
-    syncTransientActivityGeometry(instance);
+    syncTransientActivityGeometry(instance, &renderer);
   }
   if (instance.barConfig.sectionBackgrounds || !instance.dynamicSections.empty()) syncBarSurfaceChrome(instance);
   notifyAttachedSourceGeometryChanged(instance);
