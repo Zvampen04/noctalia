@@ -2,12 +2,36 @@
 #include "shell/bar/bar_section_geometry.h"
 #include "shell/panel/attached_panel_layout.h"
 #include "shell/panel/attached_panel_morph.h"
+#include "shell/panel/screen_edge_attachment.h"
 #include "tests/test_check.h"
 
 #include <cassert>
 #include <cmath>
 
 int main() {
+  {
+    ShellConfig shell;
+    shell.desktopFrame.enabled = true;
+    shell.desktopFrame.left = 64;
+    shell.desktopFrame.top = 12;
+    shell.desktopFrame.right = 12;
+    shell.desktopFrame.bottom = 12;
+    const auto edge = attached_panel::screenEdgeBar(shell, "bottom_center", 1600, 900);
+    TEST_CHECK(edge.position == "bottom" && edge.thickness == 12);
+    TEST_CHECK(!edge.reserveSpace && edge.panelOverlap == 1);
+    const float anchor = attached_panel::screenEdgeAnchor(shell, "bottom_center", 1600, 900, 630, 500);
+    TEST_CHECK(anchor == 826.0F);
+    const auto body = attached_panel::fitBody(AttachedRevealDirection::Up,
+        {0, 900 - edge.thickness, 1600, edge.thickness}, 1600, 900, 630, 500, 8,
+        edge.panelOverlap, 30, 30, anchor);
+    TEST_CHECK(body.x == 511 && body.y == 389 && body.width == 630 && body.height == 500);
+    // The one-pixel common fill meets the frame's resolved inner bottom edge.
+    TEST_CHECK(body.y + body.height == 900 - edge.thickness + edge.panelOverlap);
+    TEST_CHECK(attached_panel::screenEdgePosition("auto") == "bottom_center");
+    TEST_CHECK(attached_panel::screenEdgePosition("center") == "bottom_center");
+    const auto narrow = attached_panel::screenEdgeAnchor(shell, "bottom_right", 480, 320, 630, 500);
+    TEST_CHECK(narrow >= 0.0F && narrow <= 480.0F);
+  }
   {
     const attached_panel::BodyRect bar{0,10,1920,34};
     const AttachedPanelSource media{.section=AttachedPanelSourceSection::Start,.x=873,.y=10,.width=34,.height=34};

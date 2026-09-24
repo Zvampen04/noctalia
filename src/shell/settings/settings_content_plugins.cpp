@@ -947,7 +947,29 @@ namespace settings {
         continue;
       }
       const std::vector<std::string> path = {"plugin_settings", pluginId, spec.schema.key};
-      const WidgetSettingValue value = pluginSettingValue(cfg, pluginId, spec);
+      WidgetSettingValue value = pluginSettingValue(cfg, pluginId, spec);
+      // The schema accepts legacy positions for floating panels. When this
+      // panel is edge-attached, present only positions that attach to an edge.
+      const auto panelEntry = std::ranges::find_if(manifest.entries, [&](const auto& candidate) {
+        return candidate.kind == scripting::PluginEntryKind::Panel
+            && spec.schema.key == scripting::panelShellSettingKey(candidate.id, "position");
+      });
+      if (panelEntry != manifest.entries.end()) {
+        const auto placementKey = scripting::panelShellSettingKey(panelEntry->id, "placement");
+        const auto placementSpec = std::ranges::find_if(specs, [&](const auto& candidate) {
+          return candidate.schema.key == placementKey;
+        });
+        if (placementSpec != specs.end()
+            && valueAsString(pluginSettingValue(cfg, pluginId, *placementSpec)) == "screen_edge") {
+          std::erase_if(spec.options, [](const auto& option) {
+            return option.value == "auto" || option.value == "center";
+          });
+          if (const auto* current = std::get_if<std::string>(&value);
+              current != nullptr && (*current == "auto" || *current == "center")) {
+            value = std::string{"bottom_center"};
+          }
+        }
+      }
       SettingEntry entry{
           .section = SettingsSection::Bar,
           .group = "plugin-settings",

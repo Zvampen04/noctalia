@@ -1243,7 +1243,9 @@ namespace {
 
 } // namespace
 
-bool ConfigService::setDesktopWidgetsState(const DesktopWidgetsConfig& desktopWidgets) {
+bool ConfigService::setDesktopWidgetsState(
+    const DesktopWidgetsConfig& desktopWidgets, ConfigMutationOrigin origin
+) {
   if (m_overridesPath.empty()) {
     return false;
   }
@@ -1257,23 +1259,7 @@ bool ConfigService::setDesktopWidgetsState(const DesktopWidgetsConfig& desktopWi
   desktopWidgetsTbl->insert_or_assign("schema_version", static_cast<std::int64_t>(desktopWidgets.schemaVersion));
   writeWidgetsPlacementToTable(*desktopWidgetsTbl, desktopWidgets.grid, desktopWidgets.widgets);
 
-  if (!validateOverrideMutation(next)) {
-    return false;
-  }
-  if (!m_profilePreview && noctalia::profile::subset(next) != noctalia::profile::subset(m_overridesTable))
-    beginProfilePreview();
-  toml::table previous = std::move(m_overridesTable);
-  m_overridesTable = std::move(next);
-
-  if (!writeOverridesToFile()) {
-    m_overridesTable = std::move(previous);
-    kLog.warn("failed to write {}", m_overridesPath);
-    return false;
-  }
-
-  loadAll();
-  fireReloadCallbacks();
-  return true;
+  return commitOverrideTable(std::move(next), nullptr, origin);
 }
 
 bool ConfigService::setLockscreenWidgetsState(

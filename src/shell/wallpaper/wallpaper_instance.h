@@ -52,3 +52,14 @@ struct WallpaperInstance {
   WallpaperTransition activeTransition = WallpaperTransition::Fade;
   TransitionParams transitionParams;
 };
+
+// The desktop frame is independent of Noctalia's wallpaper. Its Bottom-layer
+// surface stays above Background-layer wallpaper sources and below windows.
+struct DesktopFrameInstance {
+  std::uint32_t outputName = 0;
+  struct wl_output* output = nullptr;
+  std::unique_ptr<Node> sceneRoot;
+  // The surface holds a non-owning scene pointer, so destroy it first.
+  std::unique_ptr<LayerSurface> surface;
+  Box* frameNode = nullptr;
+};

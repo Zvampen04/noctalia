@@ -181,7 +181,10 @@ public:
   // Persist dock enabled override to settings.toml and trigger the reload pipeline.
   void setDockEnabled(bool enabled);
   // Persist desktop widget layout/editor state to settings.toml and trigger the reload pipeline.
-  bool setDesktopWidgetsState(const DesktopWidgetsConfig& desktopWidgets);
+  bool setDesktopWidgetsState(
+      const DesktopWidgetsConfig& desktopWidgets,
+      ConfigMutationOrigin origin = ConfigMutationOrigin::UserEdit
+  );
   bool setLockscreenWidgetsState(
       const LockscreenWidgetsConfig& lockscreenWidgets,
       ConfigMutationOrigin origin = ConfigMutationOrigin::UserEdit

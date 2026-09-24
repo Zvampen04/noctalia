@@ -16,6 +16,7 @@ class LockscreenWidgetsController;
 class IpcService;
 class RenderContext;
 class WaylandConnection;
+enum class ConfigMutationOrigin;
 struct KeyboardEvent;
 struct PointerEvent;
 
@@ -75,7 +76,7 @@ public:
 
 private:
   void loadSnapshotFromConfig();
-  void saveSnapshotToConfig();
+  void saveSnapshotToConfig(ConfigMutationOrigin origin);
   void applyVisibility();
   void handleConfigReload();
   void normalizeSnapshot();

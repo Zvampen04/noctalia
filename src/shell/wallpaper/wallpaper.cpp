@@ -15,6 +15,7 @@
 #include "render/core/shared_texture_cache.h"
 #include "render/render_context.h"
 #include "shell/wallpaper/wallpaper_geometry.h"
+#include "shell/wallpaper/desktop_frame_geometry.h"
 #include "shell/wallpaper/wallpaper_instance.h"
 #include "shell/wallpaper/wallpaper_paths.h"
 #include "shell/wallpaper/wallpaper_shuffle_state.h"
@@ -399,6 +400,9 @@ void Wallpaper::onGpuResourcesInvalidated() {
       inst->surface->requestRedraw();
     }
   }
+  for (auto& inst : m_frameInstances) {
+    if (inst->surface != nullptr) inst->surface->requestRedraw();
+  }
 }
 
 bool Wallpaper::initialize(
@@ -420,7 +424,15 @@ bool Wallpaper::initialize(
         inst->surface->requestRedraw();
       }
     }
+    for (auto& inst : m_frameInstances) {
+      updateFrameStyle(*inst);
+      if (inst->surface != nullptr) inst->surface->requestRedraw();
+    }
   });
+
+  // Outputs may already be announced before the Wallpaper service starts, and
+  // the desktop frame remains available when wallpaper rendering is disabled.
+  syncFrameInstances();
 
   if (!m_config->config().wallpaper.enabled) {
     m_wallpaperEnabled = false;
@@ -439,6 +451,9 @@ bool Wallpaper::initialize(
 }
 
 void Wallpaper::reload() {
+  // The frame owns an independent Bottom-layer surface. A preset preview can
+  // restyle it even when the wallpaper configuration itself has not changed.
+  syncFrameInstances();
   const auto& wallpaperConfig = m_config->config().wallpaper;
   const bool nowEnabled = wallpaperConfig.enabled;
 
@@ -482,7 +497,9 @@ void Wallpaper::reload() {
 }
 
 void Wallpaper::onOutputChange() {
-  if (m_config == nullptr || !m_config->config().wallpaper.enabled) {
+  if (m_config == nullptr) return;
+  syncFrameInstances();
+  if (!m_config->config().wallpaper.enabled) {
     return;
   }
   syncInstances();
@@ -857,6 +874,96 @@ void Wallpaper::syncInstances() {
     }
 
     createInstance(output);
+  }
+}
+
+void Wallpaper::updateFrameStyle(DesktopFrameInstance& instance) {
+  if (m_config == nullptr || instance.frameNode == nullptr) return;
+  const auto& config = m_config->config().shell.desktopFrame;
+  const auto geometry = desktop_frame::resolve(
+      config, instance.frameNode->width(), instance.frameNode->height());
+
+  RoundedRectStyle style;
+  style.fill = resolveColorSpec(config.fill);
+  style.border = resolveColorSpec(config.border);
+  style.fillMode = FillMode::Solid;
+  style.logicalInset = geometry.inset;
+  style.radius = geometry.radius;
+  style.cornerPower = m_config->config().shell.design.cornerPower;
+  style.borderWidth = geometry.borderWidth;
+  style.frameContour = geometry.contour;
+  for (std::size_t i = 0; i < geometry.borderLayers.size(); ++i) {
+    style.contourBorderLayers[i] = {
+        .color = resolveColorSpec(config.borderLayers[i].color),
+        .width = geometry.borderLayers[i].width,
+        .offset = geometry.borderLayers[i].offset,
+    };
+  }
+  instance.frameNode->setStyle(style);
+}
+
+void Wallpaper::syncFrameInstances() {
+  if (m_config == nullptr || m_wayland == nullptr || m_renderContext == nullptr) return;
+  if (!m_config->config().shell.desktopFrame.enabled) {
+    m_frameInstances.clear();
+    return;
+  }
+
+  const auto& outputs = m_wayland->outputs();
+  std::erase_if(m_frameInstances, [&](const auto& instance) {
+    return std::ranges::none_of(outputs, [&](const WaylandOutput& output) {
+      return output.name == instance->outputName && output.output == instance->output
+          && output.done && output.hasUsableGeometry();
+    });
+  });
+
+  for (const auto& output : outputs) {
+    if (!output.done || !output.hasUsableGeometry() || output.output == nullptr) continue;
+    const bool exists = std::ranges::any_of(m_frameInstances, [&](const auto& instance) {
+      return instance->outputName == output.name;
+    });
+    if (exists) continue;
+
+    auto instance = std::make_unique<DesktopFrameInstance>();
+    instance->outputName = output.name;
+    instance->output = output.output;
+    auto surfaceConfig = LayerSurfaceConfig{
+        // This output-space decorative surface uses the desktop-widget namespace
+        // contract so canvas compositors carry it above wallpaper and below
+        // windows. Input stays click-through below.
+        .nameSpace = "noctalia-desktop-widget-frame",
+        .layer = LayerShellLayer::Bottom,
+        .anchor = LayerShellAnchor::Top | LayerShellAnchor::Bottom | LayerShellAnchor::Left | LayerShellAnchor::Right,
+        .width = 0,
+        .height = 0,
+        .exclusiveZone = -1,
+    };
+    instance->surface = std::make_unique<LayerSurface>(*m_wayland, std::move(surfaceConfig));
+    instance->surface->setRenderContext(m_renderContext);
+    instance->surface->setClickThrough(true);
+    instance->sceneRoot = ui::node({});
+    instance->frameNode = static_cast<Box*>(instance->sceneRoot->addChild(ui::box({})));
+    instance->frameNode->setMaterialIdentity("surface", "desktop-frame", "desktop.frame");
+    instance->surface->setSceneRoot(instance->sceneRoot.get());
+    auto* raw = instance.get();
+    instance->surface->setConfigureCallback([this, raw](std::uint32_t width, std::uint32_t height) {
+      const auto w = static_cast<float>(width);
+      const auto h = static_cast<float>(height);
+      raw->sceneRoot->setSize(w, h);
+      raw->frameNode->setPosition(0.0F, 0.0F);
+      raw->frameNode->setSize(w, h);
+      updateFrameStyle(*raw);
+    });
+    if (!instance->surface->initialize(output.output)) {
+      kLog.warn("failed to initialize desktop frame on {}", output.connectorName);
+      continue;
+    }
+    m_frameInstances.push_back(std::move(instance));
+  }
+
+  for (auto& instance : m_frameInstances) {
+    updateFrameStyle(*instance);
+    if (instance->surface != nullptr) instance->surface->requestRedraw();
   }
 }
 

@@ -116,6 +116,9 @@ namespace scripting {
     if (value == "floating") {
       return PanelPlacement::Floating;
     }
+    if (value == "screen_edge") {
+      return PanelPlacement::ScreenEdge;
+    }
     return fallback;
   }
 

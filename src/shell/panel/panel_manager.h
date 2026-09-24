@@ -204,6 +204,7 @@ private:
   };
   struct RetainedPlacement {
     bool attached = true;
+    bool screenEdge = false;
     bool islandMorph = false;
     bool anchoredRight = false, anchoredBottom = false;
     bool fillWidth = false, fillHeight = false;
@@ -351,6 +352,7 @@ private:
   bool m_inTransition = false;
   bool m_closing = false;
   bool m_attachedToBar = false;
+  bool m_screenEdgeAttachment = false;
   bool m_attachedOpenAnimationPending = false;
   std::size_t m_attachedPopupCount = 0;
   ContextMenuPopup* m_activePopup = nullptr;

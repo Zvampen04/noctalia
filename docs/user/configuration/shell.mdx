@@ -6,6 +6,7 @@ sidebar:
 ---
 
 - [Shell settings](#shell-settings)
+- [Desktop frame and screen-edge panels](#desktop-frame-and-screen-edge-panels)
 - [Privacy capture filters](#privacy-capture-filters)
 - [Accessibility](#accessibility)
 - [OSD](#osd)
@@ -77,16 +78,16 @@ transparency_mode     = "solid"  # solid | soft | glass; controls floating panel
 borders               = true   # outline on floating panel surfaces
 shadow                = true   # cast the global [shell.shadow] from panel surfaces
 list_item_background  = false  # filled rounded background behind launcher and clipboard list items
-floating_layer         = "overlay" # overlay | top; applies to floating interactive panels
-launcher_placement       = "floating" # attached | floating
-clipboard_placement      = "floating" # attached | floating
-control_center_placement = "attached" # attached | floating
-wallpaper_placement      = "attached" # attached | floating
-session_placement        = "attached" # attached | floating
-polkit_placement         = "floating" # attached | floating
-launcher_position        = "center"   # auto | center | top_left | … (floating only)
-clipboard_position       = "center"   # auto | center | top_left | … (floating only)
-polkit_position          = "center"   # auto | center | top_left | … (floating only)
+floating_layer         = "overlay" # overlay | top; applies to floating and screen-edge panels
+launcher_placement       = "floating" # attached | floating | screen_edge
+clipboard_placement      = "floating" # attached | floating | screen_edge
+control_center_placement = "attached" # attached | floating | screen_edge
+wallpaper_placement      = "attached" # attached | floating | screen_edge
+session_placement        = "attached" # attached | floating | screen_edge
+polkit_placement         = "floating" # attached | floating | screen_edge
+launcher_position        = "center"   # auto | center | top_left | … (floating or screen_edge)
+clipboard_position       = "center"   # auto | center | top_left | … (floating or screen_edge)
+polkit_position          = "center"   # auto | center | top_left | … (floating or screen_edge)
 floating_offset          = 8           # px gap between a floating panel and the bar edge
 open_near_click_control_center = false  # attached/floating: follow the bar click instead of bar-center
 open_near_click_launcher       = false  # attached/floating: follow the bar click instead of bar-center
@@ -232,10 +233,10 @@ Notes:
 - `shell.panel.borders` draws an outline on floating panel surfaces. Attached panels stay borderless on the bar edge. Default is `true`; set to `false` for a flatter look. Section cards inside panels are controlled by `[shell].card_borders`.
 - `shell.panel.shadow` toggles the rendered drop shadow on attached and floating panels. Shadow direction and alpha come from `[shell.shadow]`.
 - `shell.panel.list_item_background` draws a filled rounded background behind each item in the launcher results (list and app-grid views) and the clipboard history list. The fill uses the same rounded shape as the hover highlight and follows the panel transparency mode; hover and keyboard-selection colors are unchanged. Default is `false`. Toggle in **Settings → Panels → Effects**.
-- `shell.panel.floating_layer` selects the layer-shell layer for floating Launcher, Clipboard, Control Center, Wallpaper, Session, and Setup Wizard panels. `overlay` is the default and keeps these panels above fullscreen content. Use `top` when a compositor places input-method candidate popups below the Overlay layer. Attached panels continue to use their bar's configured layer; system overlays such as the polkit prompt keep their own layer policy. Plugin panels expose a separate per-entry **Layer** setting under **Settings → Plugins**. Change the built-in panel setting in **Settings → Panels → General**.
-- `shell.panel.launcher_placement`, `clipboard_placement`, `control_center_placement`, `wallpaper_placement`, `session_placement`, and `polkit_placement` accept only `attached` or `floating`. An attached panel keeps its own layer surface and anchors it to the host bar's inward edge; floating placement opens it detached. `center` is a floating `*_position`, not a third placement. Defaults are floating at the center position for Launcher, Clipboard, and the polkit auth prompt; Control Center, Wallpaper, and Session default to attached.
-- Per-panel `*_position` keys (`launcher_position`, `clipboard_position`, `control_center_position`, `wallpaper_position`, `session_position`, `polkit_position`) apply when placement is `floating`. `auto` keeps the panel bar-relative; `center` and the edge/corner tokens anchor on screen (same vocabulary as notification/OSD position).
-- `shell.panel.floating_offset` sets the gap in pixels a floating panel keeps from the bar edge, or from the screen edge when it is pinned with a `*_position` (default `8`). It also spaces panels using the reserved edge area when multiple bars share an edge. `attached` panels ignore it.
+- `shell.panel.floating_layer` selects the layer-shell layer for floating and screen-edge Launcher, Clipboard, Control Center, Wallpaper, Session, and Setup Wizard panels. `overlay` is the default and keeps these panels above fullscreen content. Use `top` when a compositor places input-method candidate popups below the Overlay layer. Bar-attached panels continue to use their bar's configured layer; system overlays such as the polkit prompt keep their own layer policy. Plugin panels expose a separate per-entry **Layer** setting under **Settings → Plugins**. Change the built-in panel setting in **Settings → Panels → General**.
+- `shell.panel.launcher_placement`, `clipboard_placement`, `control_center_placement`, `wallpaper_placement`, `session_placement`, and `polkit_placement` accept `attached`, `floating`, or `screen_edge`. An attached panel keeps its own layer surface and anchors it to the host bar's inward edge; floating placement opens it detached. `screen_edge` joins a chosen screen edge without requiring a bar. Defaults are floating at the center position for Launcher, Clipboard, and the polkit auth prompt; Control Center, Wallpaper, and Session default to attached.
+- Per-panel `*_position` keys (`launcher_position`, `clipboard_position`, `control_center_position`, `wallpaper_position`, `session_position`, `polkit_position`) apply when placement is `floating` or `screen_edge`. For floating panels, `auto` keeps the panel bar-relative; `center` and the edge/corner tokens anchor on screen. For `screen_edge`, the token selects the edge and alignment as described below.
+- `shell.panel.floating_offset` sets the gap in pixels a floating panel keeps from the bar edge, or from the screen edge when it is pinned with a `*_position` (default `8`). It also spaces panels using the reserved edge area when multiple bars share an edge. `attached` and `screen_edge` panels ignore it.
 - When multiple enabled bars resolve to the same edge on one monitor, exact source-bar attachment is ambiguous. In that case attached/floating panels use the compositor's reserved edge area and open outside the bar stack instead of anchoring to one bar. Prefer setting `shell.panel_anchor_bar` when you have more than one bar and open panels via IPC or shortcuts.
 - `shell.panel.open_near_click_control_center`, `open_near_click_launcher`, `open_near_click_clipboard`, `open_near_click_wallpaper`, and `open_near_click_session` position attached or floating panels near the click location on the bar instead of centering them along the bar. They are ignored when a panel is `floating` with a `*_position` other than `auto`, since it is then pinned to a fixed screen position.
 - `shell.launcher.categories` shows compact category filters in the launcher for providers that expose categories, currently Applications and Emoji. **All** leaves results unfiltered. With a prefixed provider such as `/emo`, the filters come from that provider. Press `Tab` while the launcher is open to hide/show the filters; the left/right keybind actions move between filters.
@@ -311,6 +312,31 @@ Glyphs, symbolic tray icons, media album art, and other non-app-bitmap images ar
 Icons are desaturated on the CPU, contrast-normalized, then tinted. Changes apply immediately when you edit the setting in **Settings → Appearance → Interface**, switch light/dark mode, or change the palette.
 
 Per-widget `colorize_icons` / `icon_colorization` keys on the dock or tray are no longer used - configure this only under `[shell]`.
+
+## Desktop frame and screen-edge panels
+
+The optional frame draws a continuous palette-colored perimeter around each output. Its inner opening reveals the wallpaper, with rounded or chamfered corners. It uses a click-through Bottom-layer surface behind windows and remains available when Noctalia's wallpaper is disabled or an external Background-layer wallpaper is used. All settings are public geometry and color roles; rendering does not depend on a preset name.
+
+```toml
+[shell.desktop_frame]
+enabled = true                  # default: false
+fill = "surface"                # semantic palette role or ColorSpec
+border = "outline"
+border_width = 0
+left = 16                       # logical px of frame on each output edge
+top = 16
+right = 16
+bottom = 48
+radius = 32                     # inner opening radius
+
+[shell.panel]
+launcher_placement = "screen_edge"
+launcher_position = "bottom_center"
+```
+
+`screen_edge` uses the panel's `*_position` to choose `top_left`, `top_center`, `top_right`, `center_left`, `center_right`, `bottom_left`, `bottom_center`, or `bottom_right`. It aligns to the frame's inner edge and uses the frame fill when enabled; without a frame it joins the physical screen edge. Existing `auto` or `center` values resolve to `bottom_center` in this placement. The same placement is available to plugin panels.
+
+The frame also supports `chamfered` with four `chamfer_*` dimensions, four named `*_shelf` tables, up to eight `shelf_1`–`shelf_8` tables with an `edge`, and three `border_layer_1`–`border_layer_3` tables. Shelves add joined protrusions to the perimeter. A positive `reference_width` and `reference_height` pair scales the geometry proportionally on other output sizes; zero uses logical pixels directly. The frame updates with output size, palette, and settings previews.
 
 ## Privacy capture filters
 

@@ -101,13 +101,9 @@ void DesktopWidgetsController::initialize(const DesktopWidgetsControllerServices
   m_editor->initialize(services.widgets);
   m_editor->setExitRequestedCallback([this]() { exitEdit(); });
   loadSnapshotFromConfig();
-  const bool placementChanged = m_placementMapper.remapForOutputChange(*m_wayland, m_snapshot.widgets);
   m_initialized = true;
   if (m_config != nullptr) {
     m_lastEnabled = m_config->config().desktopWidgets.enabled;
-  }
-  if (placementChanged) {
-    saveSnapshotToConfig();
   }
   applyVisibility();
 
@@ -263,7 +259,7 @@ void DesktopWidgetsController::onOutputChange() {
   normalizeSnapshot();
   placementChanged |= m_placementMapper.remapForOutputChange(*m_wayland, m_snapshot.widgets);
   if (placementChanged) {
-    saveSnapshotToConfig();
+    saveSnapshotToConfig(ConfigMutationOrigin::SystemNormalization);
   }
   pruneWallpaperMasks();
   if (isEditing()) {
@@ -347,7 +343,7 @@ void DesktopWidgetsController::exitEdit() {
   m_placementMapper.rebaseForCurrentOutputs(*m_wayland, m_snapshot.widgets);
   m_host->show(m_snapshot);
   (void)m_editor->close();
-  saveSnapshotToConfig();
+  saveSnapshotToConfig(ConfigMutationOrigin::UserEdit);
   applyVisibility();
   if (m_onExitEdit) {
     m_onExitEdit();
@@ -424,14 +420,18 @@ void DesktopWidgetsController::loadSnapshotFromConfig() {
     return;
   }
   m_snapshot = m_config->config().desktopWidgets;
+  bool placementChanged = m_placementMapper.remapForOutputChange(*m_wayland, m_snapshot.widgets);
   normalizeSnapshot();
+  placementChanged |= m_placementMapper.remapForOutputChange(*m_wayland, m_snapshot.widgets);
+  // Reload after Save or Cancel retries a remap deferred by an active draft.
+  if (placementChanged) saveSnapshotToConfig(ConfigMutationOrigin::SystemNormalization);
 }
 
-void DesktopWidgetsController::saveSnapshotToConfig() {
+void DesktopWidgetsController::saveSnapshotToConfig(ConfigMutationOrigin origin) {
   if (m_config == nullptr) {
     return;
   }
-  m_config->setDesktopWidgetsState(m_snapshot);
+  m_config->setDesktopWidgetsState(m_snapshot, origin);
 }
 
 void DesktopWidgetsController::applyVisibility() {
@@ -444,7 +444,7 @@ void DesktopWidgetsController::applyVisibility() {
   if (!runtimeWantsVisible()) {
     if (isEditing() && m_editor != nullptr) {
       m_snapshot = m_editor->close();
-      saveSnapshotToConfig();
+      saveSnapshotToConfig(ConfigMutationOrigin::UserEdit);
     }
     m_host->hide();
     return;

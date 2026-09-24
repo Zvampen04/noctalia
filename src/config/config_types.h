@@ -1086,20 +1086,25 @@ panelCardOpacityForTransparencyMode(PanelTransparencyMode mode, float panelBackg
 enum class PanelPlacement : std::uint8_t {
   Attached = 0,
   Floating = 1,
+  ScreenEdge = 2,
 };
 
 constexpr EnumOption<PanelPlacement> kPanelPlacements[] = {
     {PanelPlacement::Attached, "attached", "settings.options.shell.panel-placement.attached"},
     {PanelPlacement::Floating, "floating", "settings.options.shell.panel-placement.floating"},
+    {PanelPlacement::ScreenEdge, "screen_edge", "settings.options.shell.panel-placement.screen-edge"},
 };
 
-// Screen-anchor tokens for a floating panel's `<panel>_position`. "auto" keeps the
-// panel bar-relative (the historical floating behavior); "center" reserves the
-// screen center; the rest anchor to a screen edge/corner. Same vocabulary as the
-// OSD/notification `position`.
+// Screen-anchor tokens for a panel's `<panel>_position`. Floating panels use
+// these positions directly; screen-edge panels use the named edge and alignment.
+// "auto" retains bar-relative floating behavior. Imported "auto" and "center"
+// screen-edge values resolve to bottom_center for compatibility.
 constexpr std::string_view kPanelPositions[] = {"auto",          "center",      "top_left",     "top_center",
                                                 "top_right",     "center_left", "center_right", "bottom_left",
                                                 "bottom_center", "bottom_right"};
+constexpr std::string_view kScreenEdgePanelPositions[] = {
+    "top_left", "top_center", "top_right", "center_left", "center_right",
+    "bottom_left", "bottom_center", "bottom_right"};
 
 constexpr EnumOption<WallpaperFillMode> kWallpaperFillModes[] = {
     {WallpaperFillMode::Center, "center", "settings.options.wallpaper.fill.center"},
@@ -1263,7 +1268,8 @@ struct ShellConfig {
     PanelPlacement sessionPlacement = PanelPlacement::Attached;
     PanelPlacement polkitPlacement = PanelPlacement::Floating;
     // Floating screen position per panel (one of kPanelPositions). "auto" = bar-relative.
-    // Launcher/clipboard default to "center" (the historical center-screen behavior).
+    // Screen-edge placement uses kScreenEdgePanelPositions; imported auto/center
+    // select bottom_center. Launcher/clipboard retain their center-screen default.
     std::string launcherPosition = "center";
     std::string clipboardPosition = "center";
     std::string controlCenterPosition = "auto";

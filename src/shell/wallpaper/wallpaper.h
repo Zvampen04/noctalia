@@ -20,6 +20,7 @@ enum class ThemeMode : std::uint8_t;
 enum class WallpaperTransitionDirection;
 struct TextureHandle;
 struct WallpaperInstance;
+struct DesktopFrameInstance;
 struct PointerEvent;
 struct WaylandOutput;
 struct wl_surface;
@@ -119,6 +120,8 @@ private:
   void discardPendingWallpaper(WallpaperInstance& instance);
   void runQueuedWallpaper(WallpaperInstance& instance);
   void updateRendererState(WallpaperInstance& instance);
+  void syncFrameInstances();
+  void updateFrameStyle(DesktopFrameInstance& instance);
   void releaseInstanceTextures(WallpaperInstance& inst);
 
   WaylandConnection* m_wayland = nullptr;
@@ -135,5 +138,6 @@ private:
   Signal<>::ScopedConnection m_paletteConn;
   Signal<> m_changed;
   std::vector<std::unique_ptr<WallpaperInstance>> m_instances;
+  std::vector<std::unique_ptr<DesktopFrameInstance>> m_frameInstances;
   std::unordered_set<std::string> m_externallyManagedOutputs;
 };

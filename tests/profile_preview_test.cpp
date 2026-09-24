@@ -990,6 +990,41 @@ void lockscreenSystemNormalizationOwnership() {
       "Post-Save normalization replaced or fabricated the user commit receipt");
 }
 
+void desktopWidgetSystemNormalizationOwnership() {
+  Fixture fixture;
+  ConfigService service;
+  auto normalized = service.config().desktopWidgets;
+  normalized.widgets.push_back(lockClock("clock@DP-1", 420.0F));
+
+  check(service.setDesktopWidgetsState(normalized, ConfigMutationOrigin::SystemNormalization),
+      service.lastMutationError());
+  check(!service.profilePreviewActive() && !service.profilePreviewDirty(),
+      "Automatic desktop-widget remap opened an appearance preview");
+  check(service.committedConfig()->desktopWidgets.widgets == normalized.widgets,
+      "Automatic desktop-widget remap was not persisted as clean state");
+
+  auto userEdit = normalized;
+  userEdit.widgets.front().cx = 500.0F;
+  check(service.setDesktopWidgetsState(userEdit), service.lastMutationError());
+  check(service.profilePreviewActive() && service.profilePreviewDirty(),
+      "Desktop-widget editor change did not open a guarded preview");
+
+  auto laterNormalization = userEdit;
+  laterNormalization.widgets.front().cx *= 2560.0F / laterNormalization.widgets.front().placementWidth;
+  laterNormalization.widgets.front().placementWidth = 2560.0F;
+  const auto draft = snapshot(service);
+  check(!service.setDesktopWidgetsState(laterNormalization, ConfigMutationOrigin::SystemNormalization),
+      "Automatic desktop-widget remap joined an active user draft");
+  check(snapshot(service) == draft,
+      "Rejected desktop-widget remap changed the active user draft");
+
+  service.cancelProfilePreview();
+  check(!service.profilePreviewActive() && !service.profilePreviewDirty(),
+      "Cancelling desktop-widget editor change left a dirty preview");
+  check(service.committedConfig()->desktopWidgets.widgets == normalized.widgets,
+      "Cancelling editor change lost the clean automatic remap");
+}
+
 void emptyDesktopWidgetProfileRoundtrip() {
   Fixture fixture;
   writeFile(fixture.root / "config/noctalia/config.toml",
@@ -1686,6 +1721,7 @@ int main(int argc, char** argv) {
            {"exact material plane and appearance registry", exactMaterialPlaneAndSnapshotTransport},
            {"lock widget appearance ownership/transport", lockWidgetAppearanceOwnershipAndTransport},
            {"lockscreen system normalization ownership", lockscreenSystemNormalizationOwnership},
+           {"desktop widget system normalization ownership", desktopWidgetSystemNormalizationOwnership},
            {"durable commit receipt", durableCommitReceipt},
            {"detached popup scope inheritance", detachedPopupMaterialScope},
            {"control presentation preview/persistence", controlPresentationPreviewPersistence},

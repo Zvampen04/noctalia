@@ -328,30 +328,31 @@ Persistent panels trade away the features that only make sense for a transient p
 - `keyboard_focus = "exclusive"` is rejected: a surface that is never dismissed would hold the keyboard forever
 - no `ui.select` dropdowns inside the panel yet
 
-**Placement** matches built-in shell panels (`attached` anchors the panel's own surface to the bar edge, while `floating`
-opens detached). The host
+**Placement** matches built-in shell panels: `attached` anchors to a bar, `floating` opens detached, and `screen_edge`
+joins a chosen screen edge without a bar. The host
 injects four standard settings for every `[[panel]]` entry. You do **not** declare them as `[[panel.setting]]` unless
 you need a custom key. They appear in **Settings → Plugins** (gear on the plugin row) with the same controls as built-in
-panels: a segmented **Attached / Floating** toggle, **Position** and **Layer** dropdowns (only when floating), and
+panels: a placement selector, **Position** and **Layer** dropdowns (for floating or screen-edge panels), and
 **Open Near Click**.
 
 | `[[panel]]` manifest key | `plugin_settings` key | Notes |
 |--------------------------|-------------------------|-------|
-| `placement` | `<entry>_placement` | `attached` or `floating` (default `floating`) |
-| `position` | `<entry>_position` | `auto`, `center`, or a screen anchor; only applies when floating |
+| `placement` | `<entry>_placement` | `attached`, `floating`, or `screen_edge` (default `floating`) |
+| `position` | `<entry>_position` | `auto`, `center`, or a screen anchor; applies when floating or screen-edge |
 | `open_near_click` | `<entry>_open_near_click` | Open near the bar widget that toggled the panel (default `false`) |
 | `dismiss_on_outside_click` | _(none, manifest only)_ | Close when clicking outside (default `true`; requires <PluginApiBadge feature="dismiss-on-outside-click" />) |
 | `keyboard_focus` | _(none, manifest only)_ | `on_demand` (default), `exclusive`, or `none` (requires <PluginApiBadge feature="keyboard-focus" />) |
 | `persistent` | _(none, manifest only)_ | Keep open when another panel opens (requires <PluginApiBadge feature="persistent-panel" />) |
 | `capture_keys` | _(none, manifest only)_ | Key chords the panel handles itself while focused (requires <PluginApiBadge feature="panel-capture-keys" />) |
-| `layer` | `<entry>_layer` | `top` (default) or `overlay`; only applies when floating (optional manifest default requires <PluginApiBadge feature="panel-layer" />) |
+| `layer` | `<entry>_layer` | `top` (default) or `overlay`; applies when floating or screen-edge (optional manifest default requires <PluginApiBadge feature="panel-layer" />) |
 
 Declare defaults on the `[[panel]]` table; users override through the plugin settings GUI or
 `[plugin_settings."author/plugin"]`. The host supplies every standard setting even when the manifest declares no
 default, so plugin maintainers do not need to add anything for users to choose a layer. Position and open-near-click
-follow the same rules as built-in panels (pinned screen positions disable open-near-click).
+follow the same rules as built-in panels (pinned screen positions and screen-edge placement disable open-near-click).
+For screen-edge placement, use one of the eight edge/corner anchors; `auto` and `center` resolve to `bottom_center`.
 
-**Layer** controls the floating surface's layer-shell layer. `top` keeps the panel under fullscreen windows; `overlay`
+**Layer** controls the floating or screen-edge surface's layer-shell layer. `top` keeps the panel under fullscreen windows; `overlay`
 keeps it above them, which is what an on-screen keyboard or heads-up panel needs. An attached panel ignores this
 setting and sits at its host bar's configured layer.
 

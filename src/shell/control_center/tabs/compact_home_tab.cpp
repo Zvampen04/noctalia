@@ -24,6 +24,12 @@
 #include <unordered_map>
 
 namespace {
+// Keep the compact controls' established shape while allowing public design
+// radii and the global corner scale to flatten them (including to zero).
+float compactRadius(float currentRadius, float designRadius, float defaultDesignRadius, float scale) {
+  return Style::scaledRadius(std::min(currentRadius, designRadius * currentRadius / defaultDesignRadius), scale);
+}
+
 void openSection(const char* context) {
   PanelManager::instance().navigatePanelContext("control-center", context);
 }
@@ -108,7 +114,8 @@ std::unique_ptr<Flex> CompactHomeTab::create() {
   auto tile = [&](const char* title, const char* icon, const char* context, std::string targetId, Button** toggle,
       Label** detail, std::function<void()> action) {
     auto row = ui::row({.align = FlexAlign::Center, .gap = 8.0F * s, .padding = 9.0F * s,
-        .fill = colorSpecFromRole(ColorRole::SurfaceVariant, panelCardOpacity()), .radius = 30.0F * s,
+        .fill = colorSpecFromRole(ColorRole::SurfaceVariant, panelCardOpacity()),
+        .radius = compactRadius(30.0F, Style::radiusXl, 12.0F, s),
         .minHeight = 60.0F * s, .maxHeight = 60.0F * s});
     if (!m_showMedia) row->setFlexGrow(1.0F);
     const auto path = std::vector<std::string>{"panel", "control-center", "control-center.home",
@@ -119,7 +126,8 @@ std::unique_ptr<Flex> CompactHomeTab::create() {
     row->addChild(ui::button({.out = toggle, .glyph = icon, .glyphSize = 20.0F * s,
         .controlHeight = 42.0F * s, .variant = ButtonVariant::Primary,
         .tooltip = title, .minWidth = 42.0F * s, .maxWidth = 42.0F * s,
-        .padding = 0.0F, .radius = 21.0F * s, .onClick = std::move(action)}));
+        .padding = 0.0F, .radius = compactRadius(21.0F, Style::radiusXl, 12.0F, s),
+        .onClick = std::move(action)}));
     auto labels = ui::column({.align = FlexAlign::Stretch, .gap = 0.0F, .flexGrow = 1.0F});
     labels->addChild(ui::button({.text = title, .fontSize = 14.0F * s, .controlHeight = 21.0F * s,
         .contentAlign = ButtonContentAlign::Start, .variant = ButtonVariant::Ghost,
@@ -150,7 +158,8 @@ std::unique_ptr<Flex> CompactHomeTab::create() {
                         std::function<void(double)> change) {
     auto card = ui::column({.align = FlexAlign::Stretch, .gap = 0.0F, .paddingV = 5.0F * s,
         .paddingH = 9.0F * s, .fill = colorSpecFromRole(ColorRole::SurfaceVariant, panelCardOpacity()),
-        .radius = 19.0F * s, .minHeight = 59.0F * s, .maxHeight = 59.0F * s});
+        .radius = compactRadius(19.0F, Style::radiusLg, 9.0F, s),
+        .minHeight = 59.0F * s, .maxHeight = 59.0F * s});
     const auto path = std::vector<std::string>{"panel", "control-center", "control-center.home",
         "control-center.home.compact", "control-center.home.compact.slider-card", targetId};
     card->setMaterialIdentityPath("surface", "card", path);
@@ -178,7 +187,8 @@ std::unique_ptr<Flex> CompactHomeTab::create() {
     if (!m_syncing && m_services.audio) m_services.audio->setVolume(static_cast<float>(v / 100.0));
   }));
   auto notifications = ui::column({.align = FlexAlign::Stretch, .gap = 4.0F * s, .paddingV = 8.0F * s, .paddingH = 14.0F * s,
-      .fill = colorSpecFromRole(ColorRole::SurfaceVariant, panelCardOpacity()), .radius = 19.0F * s, .flexGrow = 1.0F});
+      .fill = colorSpecFromRole(ColorRole::SurfaceVariant, panelCardOpacity()),
+      .radius = compactRadius(19.0F, Style::radiusLg, 9.0F, s), .flexGrow = 1.0F});
   notifications->addChild(ui::button({.text = "Notifications", .fontSize = 13.0F * s,
       .controlHeight = 22.0F * s, .contentAlign = ButtonContentAlign::Start, .variant = ButtonVariant::Ghost,
       .padding = 0.0F, .onClick = [] { openSection("notifications"); }}));
@@ -233,7 +243,7 @@ std::unique_ptr<Flex> CompactHomeTab::create() {
         .glyph = shortcut->displayIcon(), .glyphSize = 20.0F * s,
         .controlHeight = 46.0F * s, .tooltip = shortcut->displayLabel(),
         .minWidth = 46.0F * s, .maxWidth = 46.0F * s, .padding = 0.0F,
-        .radius = 23.0F * s,
+        .radius = compactRadius(23.0F, Style::radiusXl, 12.0F, s),
         .onClick = [this, index] {
           if (index < m_actions.size() && m_actions[index].shortcut) m_actions[index].shortcut->onClick();
         },

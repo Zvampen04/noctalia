@@ -1,6 +1,7 @@
 #include "shell/panel/panel_manager.h"
 #include "render/scene/countdown_ring_node.h"
 #include "shell/panel/attached_panel_layout.h"
+#include "shell/panel/screen_edge_attachment.h"
 #include "core/input/key_symbols.h"
 #include "ui/controls/slider.h"
 
@@ -600,11 +601,25 @@ void PanelManager::openPanel(const std::string& panelId, PanelOpenRequest reques
     return;
   }
 
-  auto barConfigOpt = resolvePanelBarConfig(m_config, m_platform, request.output, request.sourceBarName);
-  if (!barConfigOpt.has_value()) {
+  const bool screenEdge = it->second->panelPlacement() == PanelPlacement::ScreenEdge;
+  auto barConfigOpt = screenEdge ? std::optional<BarConfig>{}
+                                 : resolvePanelBarConfig(m_config, m_platform, request.output, request.sourceBarName);
+  if (!barConfigOpt.has_value() && !screenEdge) {
     return;
   }
-  auto barConfig = std::move(*barConfigOpt);
+  auto barConfig = barConfigOpt.value_or(BarConfig{});
+  if (screenEdge) {
+    const auto* output = m_platform != nullptr ? m_platform->findOutputByWl(request.output) : nullptr;
+    if (output == nullptr || output->effectiveLogicalWidth() <= 0 || output->effectiveLogicalHeight() <= 0)
+      return;
+    const std::string position = panelId.contains(':') ? it->second->panelScreenPosition()
+                                                       : resolvePanelPosition(m_config, panelId);
+    barConfig = attached_panel::screenEdgeBar(
+        m_config->config().shell, position, output->effectiveLogicalWidth(), output->effectiveLogicalHeight());
+    if (panelId.contains(':')) {
+      barConfig.layer = it->second->layer() == LayerShellLayer::Overlay ? "overlay" : "top";
+    }
+  }
 
   m_activePanel = it->second.get();
   m_activePanelId = panelId;
@@ -615,7 +630,7 @@ void PanelManager::openPanel(const std::string& panelId, PanelOpenRequest reques
   auto panelWidth = static_cast<std::uint32_t>(preferredPanelWidth());
   auto panelHeight = static_cast<std::uint32_t>(preferredPanelHeight());
   m_sourceBarName = barConfig.name;
-  m_attachedSource = request.source;
+  m_attachedSource = screenEdge ? AttachedPanelSource{} : request.source;
   if (m_attachedSource.section == AttachedPanelSourceSection::Unknown
       && m_attachedSource.sectionId.empty()
       && m_config) {
@@ -639,7 +654,7 @@ void PanelManager::openPanel(const std::string& panelId, PanelOpenRequest reques
   m_attachedAnchorAvailable = request.hasAnchorPosition;
   m_attachedAnchorX = request.anchorX;
   m_attachedAnchorY = request.anchorY;
-  if (m_attachedPanelLayerProvider != nullptr) {
+  if (!screenEdge && m_attachedPanelLayerProvider != nullptr) {
     if (auto layer = m_attachedPanelLayerProvider(request.output, m_sourceBarName); layer.has_value()) {
       barConfig.layer = *layer;
     }
@@ -718,8 +733,8 @@ void PanelManager::openPanel(const std::string& panelId, PanelOpenRequest reques
   const std::uint32_t detachedSurfaceHeight =
       shell::panel_surface::surfaceExtent(panelHeight, detachedShadowBleed.up, detachedShadowBleed.down);
   const auto barRect = resolveBarVisibleRect(barConfig, outputWidth, outputHeight);
-  const bool multipleBarsOnEdge =
-      hasMultipleEnabledBarsOnEdge(m_config, m_platform, request.output, barConfig.position);
+  const bool multipleBarsOnEdge = !screenEdge
+      && hasMultipleEnabledBarsOnEdge(m_config, m_platform, request.output, barConfig.position);
   const bool useReservedEdgePlacement = !useCenterScreenLayout
       && !useScreenPosition
       && multipleBarsOnEdge
@@ -888,8 +903,8 @@ void PanelManager::openPanel(const std::string& panelId, PanelOpenRequest reques
     detachedPanelInputRect.height = std::max(1, outputHeight - screenPadding * 2);
   }
 
-  const bool useRetainedPlacement = activePlacement == PanelPlacement::Attached
-      && (m_attachedPanelAvailabilityCallback == nullptr
+  const bool useRetainedPlacement = (screenEdge || activePlacement == PanelPlacement::Attached)
+      && (screenEdge || m_attachedPanelAvailabilityCallback == nullptr
           || m_attachedPanelAvailabilityCallback(request.output, m_sourceBarName))
       && barConfig.thickness > 0
       && outputWidth > 0
@@ -982,6 +997,7 @@ void PanelManager::openPanel(const std::string& panelId, PanelOpenRequest reques
     m_attachedSource = {};
     m_attachedPanelGeometry.reset();
     m_attachedToBar = false;
+    m_screenEdgeAttachment = false;
     ++m_attachedPlacementGeneration;
     m_attachedPlacement.reset();
     m_attachedPlacementPending = m_attachedAwaitingConfigure = m_sceneGeometryDirty = false;
@@ -1019,7 +1035,8 @@ void PanelManager::openPanel(const std::string& panelId, PanelOpenRequest reques
     }
 
     m_attachedAnchorAvailable = request.hasAnchorPosition;
-    m_attachedHasAnchor = m_attachedAnchorAvailable && openNearClickEnabled(m_activePanel, m_activePanelId, m_config);
+    m_attachedHasAnchor = !screenEdge && m_attachedAnchorAvailable
+        && openNearClickEnabled(m_activePanel, m_activePanelId, m_config);
     m_attachedAnchorX = request.anchorX;
     m_attachedAnchorY = request.anchorY;
     const int startRadius = barIsVertical ? (barIsLeft ? barConfig.radiusTopRight : barConfig.radiusTopLeft)
@@ -1031,7 +1048,11 @@ void PanelManager::openPanel(const std::string& panelId, PanelOpenRequest reques
         outputWidth, outputHeight, static_cast<int>(panelWidth), static_cast<int>(panelHeight), screenPadding,
         barConfig.panelOverlap, static_cast<int>(std::ceil(startRadius + cornerRadius)),
         static_cast<int>(std::ceil(endRadius + cornerRadius)),
-        m_attachedHasAnchor ? std::optional<float>(barIsVertical ? request.anchorY : request.anchorX) : std::nullopt);
+        screenEdge ? std::optional<float>(attached_panel::screenEdgeAnchor(
+            m_config->config().shell, panelPosition, outputWidth, outputHeight, panelWidth, panelHeight))
+                   : m_attachedHasAnchor
+                       ? std::optional<float>(barIsVertical ? request.anchorY : request.anchorX)
+                       : std::nullopt);
     if (m_islandMorph) {
       body = barConfig.islandOutward ? attached_panel::fitOutwardIsland(
           attached_panel::revealDirection(barPosition),
@@ -1086,6 +1107,7 @@ void PanelManager::openPanel(const std::string& panelId, PanelOpenRequest reques
     m_keyboardRelaxTimer.stop();
     m_attachedBarPosition = std::string(barPosition);
     m_attachedToBar = true;
+    m_screenEdgeAttachment = screenEdge;
 
     // Convert panel screen coords to bar-surface-local coords for shadow exclusion.
     // Bar surface origin sits one shadow bleed inset from the visible bar top-left,
@@ -1184,6 +1206,7 @@ void PanelManager::openPanel(const std::string& panelId, PanelOpenRequest reques
 
     ++m_attachedPlacementGeneration;
     m_attachedPlacement = RetainedPlacement{
+        .screenEdge = screenEdge,
         .islandMorph = m_islandMorph,
         .anchoredRight = barIsRight, .anchoredBottom = barIsBottom,
         .barName = m_sourceBarName, .position = m_attachedBarPosition, .body = body,
@@ -1201,7 +1224,7 @@ void PanelManager::openPanel(const std::string& panelId, PanelOpenRequest reques
         .anchor = attachedAnchor,
         .width = surfaceWidth,
         .height = surfaceHeight,
-        .exclusiveZone = 0,
+        .exclusiveZone = screenEdge ? -1 : 0,
         .marginTop = attachedMarginTop,
         .marginRight = attachedMarginRight,
         .marginBottom = attachedMarginBottom,
@@ -1241,7 +1264,7 @@ void PanelManager::openPanel(const std::string& panelId, PanelOpenRequest reques
         const std::uint64_t gen = m_destroyGeneration;
         const LayerShellKeyboard relaxed = *attachedKeyboardPlan.relaxed;
         m_keyboardRelaxTimer.start(kKeyboardRelaxDelay, [this, gen, relaxed]() {
-          if (m_destroyGeneration != gen || !isAttachedOpen() || m_layerSurface == nullptr || m_closing) {
+          if (m_destroyGeneration != gen || !m_attachedToBar || m_layerSurface == nullptr || m_closing) {
             return;
           }
           m_layerSurface->setKeyboardInteractivity(relaxed);
@@ -1254,12 +1277,13 @@ void PanelManager::openPanel(const std::string& panelId, PanelOpenRequest reques
       return;
     }
 
-    if (m_attachedPanelGeometryCallback) {
+    if (!m_screenEdgeAttachment && m_attachedPanelGeometryCallback) {
       m_attachedPanelGeometryCallback(request.output, m_sourceBarName, std::nullopt);
     }
     m_surface.reset();
     m_layerSurface = nullptr;
     m_attachedToBar = false;
+    m_screenEdgeAttachment = false;
     ++m_attachedPlacementGeneration;
     m_attachedPlacement.reset();
     m_attachedPlacementPending = m_attachedAwaitingConfigure = false;
@@ -1303,6 +1327,7 @@ void PanelManager::openPanel(const std::string& panelId, PanelOpenRequest reques
   m_detachedRevealDirection = detachedDirection;
   m_attachedPanelGeometry.reset();
   m_attachedToBar = false;
+  m_screenEdgeAttachment = false;
   configureSurfaceCallbacks(*m_surface);
   if (wantsOutsideDismiss) {
     m_panelOutputInputRect = detachedPanelInputRect;
@@ -1462,7 +1487,7 @@ void PanelManager::closePanel(bool animateClose) {
 }
 
 void PanelManager::destroyPanel() {
-  if (m_attachedToBar && m_attachedPanelGeometryCallback && m_output != nullptr) {
+  if (m_attachedToBar && !m_screenEdgeAttachment && m_attachedPanelGeometryCallback && m_output != nullptr) {
     m_attachedPanelGeometryCallback(m_output, m_sourceBarName, std::nullopt);
   }
   // Defensive: closePanel deactivates first, but destroyPanel can also be
@@ -1526,6 +1551,7 @@ void PanelManager::destroyPanel() {
   m_attachedSource = {};
   m_attachedPanelGeometry.reset();
   m_attachedToBar = false;
+  m_screenEdgeAttachment = false;
   ++m_attachedPlacementGeneration;
   m_attachedPlacement.reset();
   m_attachedPlacementPending = m_attachedAwaitingConfigure = m_sceneGeometryDirty = false;
@@ -1751,7 +1777,9 @@ bool PanelManager::isPanelTransitionActive() const noexcept {
   return m_detachedRevealProgress < 0.999F;
 }
 
-bool PanelManager::isAttachedOpen() const noexcept { return isOpen() && m_attachedToBar; }
+bool PanelManager::isAttachedOpen() const noexcept {
+  return isOpen() && m_attachedToBar && !m_screenEdgeAttachment;
+}
 
 wl_output* PanelManager::attachedPanelOutput() const noexcept { return m_output; }
 
@@ -1819,7 +1847,8 @@ void PanelManager::applyPreferredPanelSize() {
   if (!isOpen() || m_activePanel == nullptr || m_surface == nullptr || m_layerSurface == nullptr) {
     return;
   }
-  if (m_attachedToBar || m_attachedPlacement || m_activePanel->panelPlacement() == PanelPlacement::Attached) {
+  if (m_attachedToBar || m_attachedPlacement || m_activePanel->panelPlacement() == PanelPlacement::Attached
+      || m_activePanel->panelPlacement() == PanelPlacement::ScreenEdge) {
     // This path keeps the existing panel tree and resolves its body, join,
     // shadow, input and blur from the same current bar geometry.
     refreshPanelPlacement();
@@ -2460,7 +2489,7 @@ void PanelManager::startAttachedOpenAnimation() {
     applyAttachedReveal(1.0F);
     return;
   }
-  if (m_attachedPanelBarSettledCallback != nullptr
+  if (!m_screenEdgeAttachment && m_attachedPanelBarSettledCallback != nullptr
       && m_output != nullptr
       && !m_attachedPanelBarSettledCallback(m_output, m_sourceBarName)) {
     return;
@@ -2474,7 +2503,8 @@ void PanelManager::startAttachedOpenAnimation() {
 }
 
 void PanelManager::publishAttachedPanelGeometry(float revealProgress) {
-  if (!m_attachedToBar || !m_attachedPanelGeometryCallback || m_output == nullptr || !m_attachedPanelGeometry) {
+  if (!m_attachedToBar || m_screenEdgeAttachment || !m_attachedPanelGeometryCallback
+      || m_output == nullptr || !m_attachedPanelGeometry) {
     return;
   }
 
@@ -2737,15 +2767,25 @@ void PanelManager::refreshPanelPlacement() {
     return;
   struct Reset { bool& flag; ~Reset() { flag = false; } } reset{m_refreshingRetainedPlacement};
   m_refreshingRetainedPlacement = true;
-  const auto barConfigOpt = resolvePanelBarConfig(m_config, m_platform, m_output, m_openingSourceBarName);
+  const bool screenEdge = m_activePanel->panelPlacement() == PanelPlacement::ScreenEdge;
+  const auto barConfigOpt = screenEdge ? std::optional<BarConfig>{}
+      : resolvePanelBarConfig(m_config, m_platform, m_output, m_openingSourceBarName);
   auto bar = barConfigOpt.value_or(BarConfig{});
   const auto* output = m_platform->findOutputByWl(m_output);
   if (!output) return;
   const int outputWidth = output->effectiveLogicalWidth(), outputHeight = output->effectiveLogicalHeight();
   if (outputWidth <= 0 || outputHeight <= 0) return;
-  const bool wantsAttachment = m_activePanel->panelPlacement() == PanelPlacement::Attached;
-  bool available = barConfigOpt && !m_config->config().bars.empty() && bar.enabled && bar.thickness > 0;
-  if (available && m_attachedPanelAvailabilityCallback) {
+  if (screenEdge) {
+    const std::string position = m_activePanelId.contains(':') ? m_activePanel->panelScreenPosition()
+        : resolvePanelPosition(m_config, m_activePanelId);
+    bar = attached_panel::screenEdgeBar(m_config->config().shell, position, outputWidth, outputHeight);
+    if (m_activePanelId.contains(':')) {
+      bar.layer = m_activePanel->layer() == LayerShellLayer::Overlay ? "overlay" : "top";
+    }
+  }
+  const bool wantsAttachment = screenEdge || m_activePanel->panelPlacement() == PanelPlacement::Attached;
+  bool available = screenEdge || (barConfigOpt && !m_config->config().bars.empty() && bar.enabled && bar.thickness > 0);
+  if (!screenEdge && available && m_attachedPanelAvailabilityCallback) {
     const auto generation = m_destroyGeneration;
     available = m_attachedPanelAvailabilityCallback(m_output, bar.name);
     if (generation != m_destroyGeneration || !isOpen()) return;
@@ -2810,7 +2850,7 @@ void PanelManager::refreshPanelPlacement() {
     queuePanelPlacement(std::move(placement),anchor,top,end,foot,start,exclusiveZone);
     return;
   }
-  if (m_attachedPanelLayerProvider) {
+  if (!screenEdge && m_attachedPanelLayerProvider) {
     const auto generation = m_destroyGeneration;
     const auto layer = m_attachedPanelLayerProvider(m_output, bar.name);
     if (generation != m_destroyGeneration || !isOpen()) return;
@@ -2827,14 +2867,21 @@ void PanelManager::refreshPanelPlacement() {
                                   : (bottom ? bar.radiusTopLeft : bar.radiusBottomLeft);
   const int endRadius = vertical ? (left ? bar.radiusBottomRight : bar.radiusBottomLeft)
                                 : (bottom ? bar.radiusTopRight : bar.radiusBottomRight);
-  m_attachedHasAnchor = m_attachedAnchorAvailable && openNearClickEnabled(m_activePanel, m_activePanelId, m_config);
+  m_attachedHasAnchor = !screenEdge && m_attachedAnchorAvailable
+      && openNearClickEnabled(m_activePanel, m_activePanelId, m_config);
   auto body = attached_panel::fitBody(direction,
       {rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top}, outputWidth, outputHeight,
       static_cast<int>(std::lround(preferredPanelWidth())),
       static_cast<int>(std::lround(preferredPanelHeight())), static_cast<int>(Style::spaceSm),
       bar.panelOverlap, static_cast<int>(std::ceil(startRadius + radius)),
       static_cast<int>(std::ceil(endRadius + radius)),
-      m_attachedHasAnchor ? std::optional<float>(vertical ? m_attachedAnchorY : m_attachedAnchorX) : std::nullopt);
+      screenEdge ? std::optional<float>(attached_panel::screenEdgeAnchor(
+          m_config->config().shell, m_activePanelId.contains(':') ? m_activePanel->panelScreenPosition()
+              : resolvePanelPosition(m_config, m_activePanelId), outputWidth, outputHeight,
+          preferredPanelWidth(), preferredPanelHeight()))
+                 : m_attachedHasAnchor
+                     ? std::optional<float>(vertical ? m_attachedAnchorY : m_attachedAnchorX)
+                     : std::nullopt);
   if (bar.sectionBackgrounds && bar.islandMorph && m_attachedSourceGeometryProvider) {
     const auto generation = m_destroyGeneration;
     const auto source = m_attachedSourceGeometryProvider(m_output, bar.name, m_attachedSource);
@@ -2861,6 +2908,7 @@ void PanelManager::refreshPanelPlacement() {
   const int away = 2 + (vertical ? (left ? bleed.right : bleed.left) : (bottom ? bleed.up : bleed.down));
   const int toward=islandMorph?2+(vertical?(left?bleed.left:bleed.right):(bottom?bleed.down:bleed.up)):0;
   RetainedPlacement placement{
+      .screenEdge = screenEdge,
       .islandMorph = islandMorph,
       .anchoredRight = right, .anchoredBottom = bottom,
       .barName = bar.name, .position = bar.position, .body = body,
@@ -2892,7 +2940,7 @@ void PanelManager::refreshPanelPlacement() {
       bottom ? 0 : surfaceY - (vertical ? 0 : reserved),
       right ? outputWidth - width - surfaceX - reserved : 0,
       bottom ? outputHeight - height - surfaceY - reserved : 0,
-      right ? 0 : surfaceX - (left ? reserved : 0),0);
+      right ? 0 : surfaceX - (left ? reserved : 0),screenEdge ? -1 : 0);
 }
 
 void PanelManager::queuePanelPlacement(RetainedPlacement placement, std::uint32_t anchor,
@@ -2964,12 +3012,15 @@ void PanelManager::applyPanelPlacement(std::uint32_t width, std::uint32_t height
   const bool vertical = right || placement.position == "left";
   const auto accepted = attached_panel::configuredBody(placement.body, placement.insetX, placement.insetY,
       placement.trailingX, placement.trailingY, placement.surfaceWidth, placement.surfaceHeight, width, height, right, bottom);
-  if (m_attachedToBar && (!placement.attached || m_sourceBarName != placement.barName) && m_attachedPanelGeometryCallback && m_output) {
+  if (m_attachedToBar && !m_screenEdgeAttachment
+      && (!placement.attached || placement.screenEdge || m_sourceBarName != placement.barName)
+      && m_attachedPanelGeometryCallback && m_output) {
     const auto generation = m_destroyGeneration;
     m_attachedPanelGeometryCallback(m_output, m_sourceBarName, std::nullopt);
     if (generation != m_destroyGeneration || placementGeneration != m_attachedPlacementGeneration || !m_attachedToBar) return;
   }
   applyAttachmentMode(placement.attached);
+  m_screenEdgeAttachment = placement.attached && placement.screenEdge;
   m_islandMorph=placement.attached && placement.islandMorph;
   m_sourceBarName = placement.barName;
   m_attachedBarPosition = placement.attached ? placement.position : std::string{};

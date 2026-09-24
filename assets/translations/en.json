@@ -1616,7 +1616,8 @@
       "shell": {
         "panel-placement": {
           "attached": "Attached",
-          "floating": "Floating"
+          "floating": "Floating",
+          "screen-edge": "Screen edge"
         },
         "panel-transparency": {
           "glass": "Glass",

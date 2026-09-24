@@ -1592,14 +1592,27 @@ namespace settings {
         },
         "floating detached panel gap offset distance bar"
     ));
-    // Floating-position select for a panel, shown only when its placement is Floating.
+    // Screen position also selects the virtual attachment edge.
     const auto panelPositionEntry = [&](SettingsSection section, std::string group, std::string_view panelKey,
                                         std::string_view labelKey, std::string_view descKey, const std::string& current,
                                         PanelPlacement ShellConfig::PanelConfig::* placement) {
+      const bool screenEdge = cfg.shell.panel.*placement == PanelPlacement::ScreenEdge;
+      const std::string_view selected = screenEdge && (current == "auto" || current == "center")
+          ? std::string_view{"bottom_center"} : std::string_view{current};
       auto e = makeEntry(
           section, group, tr(labelKey), tr(descKey),
           {std::string("shell"), std::string("panel"), std::string(panelKey) + "_position"},
-          plainSelect(
+          screenEdge ? plainSelect(
+              {{"top_left", "settings.options.screen-position.top-left"},
+               {"top_center", "settings.options.screen-position.top-center"},
+               {"top_right", "settings.options.screen-position.top-right"},
+               {"center_left", "settings.options.screen-position.center-left"},
+               {"center_right", "settings.options.screen-position.center-right"},
+               {"bottom_left", "settings.options.screen-position.bottom-left"},
+               {"bottom_center", "settings.options.screen-position.bottom-center"},
+               {"bottom_right", "settings.options.screen-position.bottom-right"}},
+              selected
+          ) : plainSelect(
               {{"auto", "settings.options.panel-position.auto"},
                {"center", "settings.options.screen-position.center"},
                {"top_left", "settings.options.screen-position.top-left"},
@@ -1610,11 +1623,14 @@ namespace settings {
                {"bottom_left", "settings.options.screen-position.bottom-left"},
                {"bottom_center", "settings.options.screen-position.bottom-center"},
                {"bottom_right", "settings.options.screen-position.bottom-right"}},
-              current
+              selected
           ),
           "panel position screen anchor corner edge floating bottom right"
       );
-      e.visibleWhen = [placement](const Config& c) { return c.shell.panel.*placement == PanelPlacement::Floating; };
+      e.visibleWhen = [placement](const Config& c) {
+        return c.shell.panel.*placement == PanelPlacement::Floating
+            || c.shell.panel.*placement == PanelPlacement::ScreenEdge;
+      };
       return e;
     };
 

@@ -1202,6 +1202,13 @@ int main() {
     const auto settings = scripting::seedEntrySettings(entry, {{"panel_layer", std::string("top")}});
     const auto shellConfig = scripting::resolvePluginPanelShellConfig(entry, settings);
     ok = expectEq(shellConfig.layer, "top", "user layer override should win") && ok;
+    auto edgeSettings = settings;
+    edgeSettings["panel_placement"] = std::string("screen_edge");
+    edgeSettings["panel_position"] = std::string("bottom_center");
+    const auto edgeConfig = scripting::resolvePluginPanelShellConfig(entry, edgeSettings);
+    ok = expect(edgeConfig.placement == PanelPlacement::ScreenEdge,
+                "screen-edge panel placement should resolve") && ok;
+    ok = expectEq(edgeConfig.position, "bottom_center", "screen-edge alignment should resolve") && ok;
   }
 
   // A [[widget]] entry can declare bar gesture defaults, kept as raw strings: the gesture

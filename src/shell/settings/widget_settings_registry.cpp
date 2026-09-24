@@ -927,6 +927,7 @@ namespace settings {
       spec.options = {
           {"attached", tr("settings.options.shell.panel-placement.attached")},
           {"floating", tr("settings.options.shell.panel-placement.floating")},
+          {"screen_edge", tr("settings.options.shell.panel-placement.screen-edge")},
       };
       for (const auto& option : spec.options) {
         spec.schema.enumValues.push_back(option.value);
@@ -959,7 +960,7 @@ namespace settings {
         spec.schema.enumValues.push_back(option.value);
       }
       spec.schema.type = schemaTypeForControl(spec.control);
-      spec.visibleWhen = WidgetSettingVisibility{placementKey, {"floating"}};
+      spec.visibleWhen = WidgetSettingVisibility{placementKey, {"floating", "screen_edge"}};
       return spec;
     };
 
@@ -980,7 +981,7 @@ namespace settings {
         spec.schema.enumValues.push_back(option.value);
       }
       spec.schema.type = schemaTypeForControl(spec.control);
-      spec.visibleWhen = WidgetSettingVisibility{placementKey, {"floating"}};
+      spec.visibleWhen = WidgetSettingVisibility{placementKey, {"floating", "screen_edge"}};
       return spec;
     };
 
