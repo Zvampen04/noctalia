@@ -1460,9 +1460,11 @@ namespace {
     finalizeCapsules(instance.centerCapsuleRuns);
     finalizeCapsules(instance.endCapsuleRuns);
 
-    // When bar touches screen edge, put the padding inside the sections, and extend the hit targets of
-    // the first/last widgets to cover the area. So clicking on the screen edge still triggers the widget.
-    const bool screenEdgeClick = !instance.barConfig.sectionBackgrounds && instance.barConfig.marginEnds == 0 && padding > 0;
+    // Legacy lanes put padding inside their end sections on a connected bar,
+    // preserving the existing screen-edge click area. Named sections do not
+    // use those Flex paddings, so keep their content span inset instead.
+    const bool screenEdgeClick = instance.dynamicSections.empty() && !instance.barConfig.sectionBackgrounds
+        && instance.barConfig.marginEnds == 0 && padding > 0;
     const float paddingInsideSection = screenEdgeClick ? padding : 0.0F;
     const float contentMainStart = mainInsetStart + (screenEdgeClick ? 0.0F : padding);
     const float contentMainEnd =
