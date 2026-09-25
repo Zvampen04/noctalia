@@ -114,7 +114,7 @@ public:
   void openPanel(const std::string& panelId, PanelOpenRequest request = {});
   // Change content without destroying its surface, source island or reveal state.
   void navigatePanelContext(const std::string& panelId, std::string context);
-  void closePanel(bool animateClose = true);
+  void closePanel(bool animateClose = true, std::function<void()> afterClosed = {});
   void togglePanel(const std::string& panelId, PanelOpenRequest request);
   // IPC-friendly overload: asks CompositorPlatform for preferred interactive output.
   void togglePanel(const std::string& panelId);
@@ -271,6 +271,7 @@ private:
   std::function<std::vector<InputRect>(wl_output*)> m_clickShieldExcludeRectsProvider;
   std::function<std::vector<wl_surface*>()> m_focusGrabBarSurfacesProvider;
   std::function<void()> m_panelClosedCallback;
+  std::function<void()> m_afterCloseCallback;
   std::function<void()> m_panelOpenedCallback;
   std::function<bool(wl_output*, std::string_view)> m_attachedPanelAvailabilityCallback;
   std::function<std::optional<std::string>(wl_output*, std::string_view)> m_attachedPanelLayerProvider;

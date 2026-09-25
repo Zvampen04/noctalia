@@ -1427,7 +1427,7 @@ void PanelManager::deactivateOutsideClickHandlers() {
   m_focusGrab.reset();
 }
 
-void PanelManager::closePanel(bool animateClose) {
+void PanelManager::closePanel(bool animateClose, std::function<void()> afterClosed) {
   if(m_resizeAnimationId)m_animations.cancel(m_resizeAnimationId);
   m_resizeAnimationId=0;m_resizeSize.reset();m_resizeTarget.reset();
   if (!isOpen() || m_inTransition || m_closing) {
@@ -1443,6 +1443,7 @@ void PanelManager::closePanel(bool animateClose) {
   // Disable input during close animation
   m_inputDispatcher.setSceneRoot(nullptr);
   m_closing = true;
+  m_afterCloseCallback = std::move(afterClosed);
   m_attachedOpenAnimationPending = false;
 
   if (animateClose && m_sceneRoot != nullptr && m_activePanel != nullptr && m_activePanel->wantsCloseAnimation()) {
@@ -1557,8 +1558,13 @@ void PanelManager::destroyPanel() {
   if (m_platform != nullptr) {
     m_platform->stopKeyRepeat();
   }
+  auto afterClosed = std::move(m_afterCloseCallback);
+  m_afterCloseCallback = {};
   if (m_panelClosedCallback) {
     m_panelClosedCallback();
+  }
+  if (afterClosed) {
+    afterClosed();
   }
 }
 

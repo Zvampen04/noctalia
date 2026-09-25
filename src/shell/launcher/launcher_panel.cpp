@@ -1017,10 +1017,11 @@ void LauncherPanel::finishActivation(LauncherProvider& provider, const std::stri
   if (shouldTrackUsage() && provider.trackUsage()) {
     m_usageTracker.record(provider.id(), resultId);
   }
-  PanelManager::instance().closePanel(false);
-  if (copied && provider.supportsAutoPaste() && m_onCopiedActivation) {
-    m_onCopiedActivation();
+  std::function<void()> afterClosed;
+  if (copied && provider.supportsAutoPaste()) {
+    afterClosed = m_onCopiedActivation;
   }
+  PanelManager::instance().closePanel(true, std::move(afterClosed));
 }
 
 void LauncherPanel::addProvider(std::unique_ptr<LauncherProvider> provider) {

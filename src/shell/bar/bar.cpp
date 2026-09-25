@@ -4832,7 +4832,7 @@ void Bar::withdrawTransientActivity(std::uint64_t serial) {
         owned->animations.cancelForOwner(section.activityRoot);
         const auto id = section.config.id;
         const auto token = section.activitySerial;
-        owned->animations.animate(section.activityReveal,0.F,Style::animNormal,Easing::EaseOutCubic,
+        owned->animations.animate(section.activityReveal,0.F,Style::animNormal,Easing::EaseInOutQuad,
           [instance=owned.get(),id](float value){
             auto it=std::ranges::find(instance->dynamicSections,id,[](const auto& s){return s.config.id;});
             if(it!=instance->dynamicSections.end())it->activityReveal=value;
