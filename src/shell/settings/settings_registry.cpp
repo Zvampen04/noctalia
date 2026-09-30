@@ -1917,6 +1917,18 @@ namespace settings {
         {"control_center", "calendar", "height"}, SliderSetting{cfg.controlCenter.calendarTab.height, 64, 1600, 1, true}, "compact dimension"
     ));
     entries.push_back(makeEntry(
+        SettingsSection::ControlCenter, "calendar", "Month panel width",
+        "Logical width of the expanded month calendar. Zero inherits the ordinary panel width.",
+        {"control_center", "calendar", "month_width"},
+        SliderSetting{cfg.controlCenter.calendarTab.monthWidth, 0, 1600, 1, true}, "calendar month dimension"
+    ));
+    entries.push_back(makeEntry(
+        SettingsSection::ControlCenter, "calendar", "Month panel height",
+        "Logical height of the expanded month calendar. Zero inherits the ordinary panel height.",
+        {"control_center", "calendar", "month_height"},
+        SliderSetting{cfg.controlCenter.calendarTab.monthHeight, 0, 1600, 1, true}, "calendar month dimension"
+    ));
+    entries.push_back(makeEntry(
         SettingsSection::ControlCenter, "media", "Compact panel width", "Logical panel width.",
         {"control_center", "media", "width"}, SliderSetting{cfg.controlCenter.media.width, 64, 1600, 1, true}, "compact dimension"
     ));

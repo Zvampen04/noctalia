@@ -202,6 +202,8 @@ Button* SessionPanel::createActionButton(const SessionPanelActionConfig& cfg, st
       .onClick = [this, index]() { armEntry(index); },
       .configure =
           [](Button& control) {
+            control.setTextMaxLines(2);
+            if (control.label() != nullptr) control.label()->setTextAlign(TextAlign::Center);
             control.setDirection(FlexDirection::Vertical);
             control.setAlign(FlexAlign::Center);
             control.setJustify(FlexJustify::Center);

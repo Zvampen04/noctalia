@@ -527,6 +527,8 @@ namespace noctalia::config::schema {
           field(&ControlCenterConfig::CalendarTabConfig::weekStrip, "week_strip"),
           field(&ControlCenterConfig::CalendarTabConfig::width, "width", kControlCenterCompactDimensionRange),
           field(&ControlCenterConfig::CalendarTabConfig::height, "height", kControlCenterCompactDimensionRange),
+          field(&ControlCenterConfig::CalendarTabConfig::monthWidth, "month_width", Range<std::int64_t>{0, 1600, 1}),
+          field(&ControlCenterConfig::CalendarTabConfig::monthHeight, "month_height", Range<std::int64_t>{0, 1600, 1}),
           field(&ControlCenterConfig::CalendarTabConfig::showEventsCard, "show_events_card"),
           field(&ControlCenterConfig::CalendarTabConfig::showWeekNumbers, "show_week_numbers"),
       };

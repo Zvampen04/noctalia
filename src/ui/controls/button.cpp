@@ -292,6 +292,11 @@ void Button::setGlyph(std::string_view name) {
   m_glyph->setGlyph(name);
 }
 
+void Button::setTextMaxLines(int lines) {
+  m_textMaxLines = std::max(1, lines);
+  if (m_label != nullptr) m_label->setMaxLines(m_textMaxLines);
+}
+
 void Button::setFontSize(float size) {
   ensureLabel();
   m_label->setFontSize(size);
@@ -761,7 +766,7 @@ void Button::applyLabelMaxWidth(bool honorAssignedBox) {
   m_label->setMaxWidth(std::ceil(std::max(0.0F, maxBtnWidth - padding - glyphW)));
   // A budget without a line limit wraps instead of ellipsizing: Pango only draws the ellipsis
   // once the content exceeds an explicit line budget.
-  m_label->setMaxLines(1);
+  m_label->setMaxLines(m_textMaxLines);
   m_label->setEllipsize(TextEllipsize::End);
 }
 

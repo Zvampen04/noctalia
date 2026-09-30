@@ -1909,6 +1909,8 @@ struct ControlCenterConfig {
     bool fadeEdges = false;
     std::int32_t width = 256;
     std::int32_t height = 116;
+    std::int32_t monthWidth = 0;  // zero inherits the ordinary panel width
+    std::int32_t monthHeight = 0; // zero inherits the ordinary panel height
     bool operator==(const CalendarTabConfig&) const = default;
   };
   struct MediaConfig {

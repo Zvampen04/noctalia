@@ -52,6 +52,7 @@ public:
   ~Button() override;
 
   void setText(std::string_view text);
+  void setTextMaxLines(int lines);
   void setGlyph(std::string_view name);
   void setFontSize(float size);
   void setGlyphSize(float size);
@@ -99,6 +100,7 @@ public:
   [[nodiscard]] static ButtonPalette defaultPalette(ButtonVariant variant);
 
 private:
+  int m_textMaxLines = 1;
   void refreshInputAreaEnabled();
   void ensureLabel();
   void ensureGlyph();

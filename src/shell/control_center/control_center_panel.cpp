@@ -91,6 +91,8 @@ ControlCenterPanel::ControlCenterPanel(const ControlCenterServices& services) {
 float ControlCenterPanel::preferredWidth() const {
   const ControlCenterConfig defaults;
   const auto& config = m_config != nullptr ? m_config->config().controlCenter : defaults;
+  if (config.compactSections && pendingOpenContext() == "calendar-month" && config.calendarTab.monthWidth > 0)
+    return scaled(config.calendarTab.monthWidth);
   if (config.compactSections && pendingOpenContext() != "calendar-month") {
     switch (tabFromContext(pendingOpenContext())) {
     case TabId::Calendar: return scaled(config.calendarTab.width);
@@ -102,6 +104,10 @@ float ControlCenterPanel::preferredWidth() const {
 }
 
 float ControlCenterPanel::preferredHeight() const {
+  if (m_config && m_config->config().controlCenter.compactSections
+      && pendingOpenContext() == "calendar-month"
+      && m_config->config().controlCenter.calendarTab.monthHeight > 0)
+    return scaled(m_config->config().controlCenter.calendarTab.monthHeight);
   if (m_config && m_config->config().controlCenter.compactSections && pendingOpenContext() != "calendar-month") {
     const auto& c = m_config->config().controlCenter;
     switch (tabFromContext(pendingOpenContext())) {

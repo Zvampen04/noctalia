@@ -59,6 +59,9 @@ CalendarTab::~CalendarTab() {
 
 std::unique_ptr<Flex> CalendarTab::create() {
   const float scale = contentScale();
+  const bool compactMonth = m_forceMonthView && m_config != nullptr
+      && m_config->config().controlCenter.compactSections
+      && m_config->config().controlCenter.calendarTab.weekStrip;
   if (m_calendar != nullptr && m_calendarCallbackId == 0) {
     m_calendarCallbackId = m_calendar->addChangeCallback([this]() {
       m_eventsDirty = true;
@@ -128,6 +131,12 @@ std::unique_ptr<Flex> CalendarTab::create() {
           },
       })
   );
+  if (compactMonth && m_todayLabel != nullptr) {
+    // The compact week strip already supplied the date. Keep the expanded
+    // month focused on its grid and leave the short panel height for six weeks.
+    m_todayLabel->setVisible(false);
+    m_todayLabel->setParticipatesInLayout(false);
+  }
 
   auto header = ui::row({
       .out = &m_header,
@@ -613,29 +622,42 @@ void CalendarTab::rebuild() {
   }
 
   const float scale = contentScale();
+  const bool compactMonth = m_forceMonthView && m_config != nullptr
+      && m_config->config().controlCenter.compactSections
+      && m_config->config().controlCenter.calendarTab.weekStrip;
   const float innerWidth = std::max(0.0F, m_card->width() - (m_card->paddingLeft() + m_card->paddingRight()));
   const float innerHeight = std::max(0.0F, m_card->height() - (m_card->paddingTop() + m_card->paddingBottom()));
-  const float navWidth = kCalendarNavButtonSize() * scale * 2.0F + Style::spaceSm * scale * 2.0F;
+  const float gridGap = (compactMonth ? std::min(kCalendarGridGap(), 4.0F) : kCalendarGridGap()) * scale;
+  const float navWidth = kCalendarNavButtonSize() * scale * 2.0F + gridGap * 2.0F;
   const float monthWidth = std::max(0.0F, innerWidth - navWidth);
-  const float gridHeightAvailable =
-      std::max(0.0F, innerHeight - kCalendarHeaderHeight() * scale - kCalendarGridGap() * scale);
+  const float headerHeight = std::max(kCalendarHeaderHeight() * scale, m_header != nullptr ? m_header->height() : 0.0F);
+  const float todayHeight = compactMonth || m_todayLabel == nullptr ? 0.0F : m_todayLabel->height();
+  const float cardGapCount = compactMonth ? 1.0F : 2.0F;
+  const float gridHeightAvailable = std::max(0.0F,
+      innerHeight - todayHeight - headerHeight - m_card->gap() * cardGapCount);
   const float weekdayHeight = kCalendarWeekdayRowHeight() * scale;
+  const float dotDiameter = std::round((compactMonth ? 3.0F : 5.0F) * scale);
+  const float dotGap = std::round((compactMonth ? 1.0F : 2.0F) * scale);
+  const float minimumCellHeight = compactMonth
+      ? std::max(20.0F * scale, (Style::fontSizeBody + 2.0F) * scale + dotDiameter + dotGap)
+      : kCalendarCellSizeMin() * scale;
+  const float maximumCellHeight = std::max(minimumCellHeight, kCalendarCellSizeMax() * scale);
   const float dayCellHeight = std::clamp(
-      (gridHeightAvailable - weekdayHeight - kCalendarGridGap() * scale * 6.0F) / 6.0F, kCalendarCellSizeMin() * scale,
-      kCalendarCellSizeMax() * scale
+      (gridHeightAvailable - weekdayHeight - gridGap * 6.0F) / 6.0F, minimumCellHeight,
+      maximumCellHeight
   );
 
   // The week-number column takes its share of the row before the day columns split the rest. It is
   // inset from the divider by one grid gap, which reads as balanced against the card padding on its
   // other side without spending a full card padding's worth of width on a two-digit number.
-  const float weekLaneInset = m_showWeekNumbers ? kCalendarGridGap() * scale : 0.0F;
+  const float weekLaneInset = m_showWeekNumbers ? gridGap : 0.0F;
   const float weekDividerWidth = m_showWeekNumbers ? std::round(1.0F * scale) : 0.0F;
-  const float weekLaneOverhead = m_showWeekNumbers ? weekLaneInset + weekDividerWidth + kCalendarGridGap() * scale : 0.0F;
+  const float weekLaneOverhead = m_showWeekNumbers ? weekLaneInset + weekDividerWidth + gridGap : 0.0F;
   // Solve for a day column that leaves the week column its fraction, then floor the week column at the
   // width of its text and give the day grid whatever is actually left.
   const float provisionalDayColumn = std::max(
       0.0F,
-      (innerWidth - kCalendarGridGap() * scale * 6.0F - weekLaneOverhead)
+      (innerWidth - gridGap * 6.0F - weekLaneOverhead)
           / (m_showWeekNumbers ? 7.0F + kCalendarWeekColumnRatio : 7.0F)
   );
   const float weekColumnWidth = m_showWeekNumbers
@@ -645,22 +667,20 @@ void CalendarTab::rebuild() {
         )
       : 0.0F;
   const float dayGridWidth = std::max(0.0F, innerWidth - weekColumnWidth - weekLaneOverhead);
-  const float dayColumnWidth = std::max(0.0F, (dayGridWidth - kCalendarGridGap() * scale * 6.0F) / 7.0F);
+  const float dayColumnWidth = std::max(0.0F, (dayGridWidth - gridGap * 6.0F) / 7.0F);
   // Reserve a fixed strip under each day number for event indicator dots so all cells stay aligned.
-  const float dotDiameter = std::round(5.0F * scale);
-  const float dotGap = std::round(2.0F * scale);
   const float dotStripHeight = dotDiameter;
   const float buttonBudget = std::max(0.0F, dayCellHeight - dotStripHeight - dotGap);
   const float dayButtonSize = std::floor(std::min({buttonBudget, dayColumnWidth, kCalendarDayButtonSizeMax() * scale}));
 
   if (m_header != nullptr) {
-    m_header->setSize(innerWidth, kCalendarHeaderHeight() * scale);
+    m_header->setSize(innerWidth, headerHeight);
   }
   if (m_previousSlot != nullptr) {
-    m_previousSlot->setSize(kCalendarNavButtonSize() * scale, kCalendarHeaderHeight() * scale);
+    m_previousSlot->setSize(kCalendarNavButtonSize() * scale, headerHeight);
   }
   if (m_nextSlot != nullptr) {
-    m_nextSlot->setSize(kCalendarNavButtonSize() * scale, kCalendarHeaderHeight() * scale);
+    m_nextSlot->setSize(kCalendarNavButtonSize() * scale, headerHeight);
   }
   if (m_previousButton != nullptr) {
     m_previousButton->setSize(kCalendarNavButtonSize() * scale, kCalendarNavButtonSize() * scale);
@@ -669,7 +689,7 @@ void CalendarTab::rebuild() {
     m_nextButton->setSize(kCalendarNavButtonSize() * scale, kCalendarNavButtonSize() * scale);
   }
   if (m_monthWrap != nullptr) {
-    m_monthWrap->setSize(monthWidth, kCalendarHeaderHeight() * scale);
+    m_monthWrap->setSize(monthWidth, headerHeight);
   }
   m_monthLabel->setMaxWidth(monthWidth);
   if (m_todayLabel != nullptr) {
@@ -691,13 +711,13 @@ void CalendarTab::rebuild() {
               .weekdayHeight = weekdayHeight,
               .dayCellHeight = dayCellHeight,
               .dayButtonSize = dayButtonSize,
-              .gap = kCalendarGridGap() * scale,
+              .gap = gridGap,
               .dotDiameter = dotDiameter,
               .dotGap = dotGap,
               .weekColumnWidth = weekColumnWidth,
               .weekLaneInset = weekLaneInset,
               .weekDividerWidth = weekDividerWidth,
-              .weekDaysGap = m_showWeekNumbers ? kCalendarGridGap() * scale : 0.0F,
+              .weekDaysGap = m_showWeekNumbers ? gridGap : 0.0F,
           },
       .onDateSelected =
           [this](calendar_view::Date date, int monthShift) {

@@ -28,6 +28,10 @@ The resulting fixes address:
   slider glyphs center vertically and retain contrast on both sides of the
   fill. Segmented controls retain all four paddings. Card opacity updates reach
   nested media and notification cards without rebuilding them.
+- Compact month calendars have public width and height settings and a dense
+  month layout. The recipe uses a single calendar card instead of squeezing an
+  events column into the same space. Session action labels can wrap onto two
+  centered lines rather than truncating the action name.
 
 ## Verification
 
