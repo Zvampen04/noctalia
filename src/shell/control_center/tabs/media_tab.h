@@ -45,6 +45,7 @@ public:
 private:
   void doLayout(Renderer& renderer, float contentWidth, float bodyHeight) override;
   void doUpdate(Renderer& renderer) override;
+  void onPanelCardOpacityChanged(float opacity) override;
   void refresh(Renderer& renderer);
   void clearArt(Renderer& renderer);
   void commitPendingSeek(double valueSeconds);

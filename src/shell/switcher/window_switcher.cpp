@@ -573,6 +573,11 @@ struct WindowSwitcher::Instance {
   std::unique_ptr<WindowSwitcherGridAdapter> adapter;
   SwitcherGridMetrics gridMetrics;
   bool pointerInside = false;
+  bool closing = false;
+  float reveal = 0.0F;
+  AnimationManager::Id revealAnimId = 0;
+  std::uint64_t closeEpoch = 0;
+  std::shared_ptr<void> alive = std::make_shared<int>(0);
 };
 
 void WindowSwitcher::initialize(
@@ -684,6 +689,23 @@ void WindowSwitcher::show(wl_output* output) {
   }
   m_active = true;
 
+  if (m_instance != nullptr && m_instance->closing && m_instance->output == output) {
+    auto& inst = *m_instance;
+    inst.closing = false;
+    ++inst.closeEpoch;
+    if (inst.revealAnimId != 0) inst.animations.cancel(inst.revealAnimId);
+    inst.surface->setKeyboardInteractivity(LayerShellKeyboard::Exclusive);
+    inst.surface->setInputRegion({{0, 0, static_cast<int>(inst.surface->width()), static_cast<int>(inst.surface->height())}});
+    const float from = inst.reveal;
+    inst.revealAnimId = inst.animations.animate(
+        from, 1.0F, Style::animFast * (1.0F - from), Easing::EaseOutCubic,
+        [&inst](float value) {
+          inst.reveal = value;
+          if (inst.sceneRoot != nullptr) inst.sceneRoot->setOpacity(value);
+        }, [&inst]() { inst.revealAnimId = 0; }, &inst);
+    inst.inputDispatcher.setSceneRoot(inst.sceneRoot.get());
+  }
+
   ensureSurface();
   if (m_instance == nullptr) {
     hide();
@@ -699,10 +721,36 @@ void WindowSwitcher::hide() {
 
   m_active = false;
   m_output = nullptr;
-  m_windows.clear();
   m_selectedIndex = 0;
   m_gridColumns = kGridColumns;
-  destroySurface();
+  if (m_instance == nullptr || m_instance->sceneRoot == nullptr) {
+    destroySurface();
+    m_windows.clear();
+    return;
+  }
+  auto& inst = *m_instance;
+  if (inst.closing) return;
+  inst.closing = true;
+  const auto closeEpoch = ++inst.closeEpoch;
+  inst.inputDispatcher.setSceneRoot(nullptr);
+  inst.surface->setInputRegion({});
+  inst.surface->setKeyboardInteractivity(LayerShellKeyboard::None);
+  if (inst.revealAnimId != 0) inst.animations.cancel(inst.revealAnimId);
+  const float from = inst.reveal;
+  inst.revealAnimId = inst.animations.animate(
+      from, 0.0F, Style::animFast * from, Easing::EaseOutCubic,
+      [&inst](float value) {
+        inst.reveal = value;
+        if (inst.sceneRoot != nullptr) inst.sceneRoot->setOpacity(value);
+      }, [this, raw = &inst, alive = std::weak_ptr<void>(inst.alive), closeEpoch]() {
+        DeferredCall::callLater([this, raw, alive, closeEpoch]() {
+          if (alive.expired()) return;
+          if (m_instance != raw || !raw->closing || raw->closeEpoch != closeEpoch) return;
+          destroySurface();
+          m_windows.clear();
+        });
+      }, &inst);
+  inst.surface->requestRedraw();
 }
 
 void WindowSwitcher::refreshWindows() {
@@ -794,7 +842,12 @@ void WindowSwitcher::activateSelected() {
   // keyboard layer-shell surface is mapped (hyprwm/Hyprland#4829). Snapshot the
   // selection, tear the overlay down, then activate on the next loop tick.
   CompositorPlatform* platform = m_platform;
-  hide();
+  m_active = false;
+  m_output = nullptr;
+  m_selectedIndex = 0;
+  m_gridColumns = kGridColumns;
+  destroySurface();
+  m_windows.clear();
   DeferredCall::callLater([platform, entry]() { activateWindowSwitcherEntry(*platform, entry); });
 }
 
@@ -1080,7 +1133,15 @@ void WindowSwitcher::ensureSurface() {
     }
     prepareFrame(*instPtr, needsUpdate, needsLayout);
   });
-  inst->surface->setClosedCallback([this]() { DeferredCall::callLater([this]() { hide(); }); });
+  inst->surface->setClosedCallback([this, alive = std::weak_ptr<void>(inst->alive)]() {
+    DeferredCall::callLater([this, alive]() {
+      if (alive.expired()) return;
+      m_active = false;
+      m_output = nullptr;
+      destroySurface();
+      m_windows.clear();
+    });
+  });
 
   if (!inst->surface->initialize(m_output)) {
     kLog.warn("failed to initialize window switcher overlay");
@@ -1108,9 +1169,10 @@ void WindowSwitcher::destroySurface() {
 }
 
 void WindowSwitcher::prepareFrame(Instance& instance, bool /*needsUpdate*/, bool /*needsLayout*/) {
-  if (!m_active || m_renderContext == nullptr || instance.surface == nullptr) {
+  if ((!m_active && !instance.closing) || m_renderContext == nullptr || instance.surface == nullptr) {
     return;
   }
+  if (instance.closing) return;
 
   const auto width = instance.surface->width();
   const auto height = instance.surface->height();
@@ -1160,6 +1222,7 @@ void WindowSwitcher::buildScene(Instance& instance, std::uint32_t width, std::ui
   Renderer& renderer = instance.surface->renderTarget().renderer();
   instance.sceneRoot = ui::node({});
   instance.sceneRoot->setSize(w, h);
+  instance.sceneRoot->setOpacity(instance.reveal);
 
   auto input = ui::inputArea({});
   input->setFrameSize(w, h);
@@ -1260,6 +1323,15 @@ void WindowSwitcher::buildScene(Instance& instance, std::uint32_t width, std::ui
   positionGrid(instance, w, h);
 
   instance.surface->setSceneRoot(instance.sceneRoot.get());
+  if (instance.revealAnimId == 0 && instance.reveal < 1.0F) {
+    auto* raw = &instance;
+    instance.revealAnimId = instance.animations.animate(
+        instance.reveal, 1.0F, Style::animFast * (1.0F - instance.reveal), Easing::EaseOutCubic,
+        [raw](float value) {
+          raw->reveal = value;
+          if (raw->sceneRoot != nullptr) raw->sceneRoot->setOpacity(value);
+        }, [raw]() { raw->revealAnimId = 0; }, raw);
+  }
   instance.inputDispatcher.setSceneRoot(instance.sceneRoot.get());
   instance.inputDispatcher.setCursorShapeCallback([this](std::uint32_t serial, std::uint32_t shape) {
     if (m_wayland != nullptr) {

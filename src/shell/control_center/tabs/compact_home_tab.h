@@ -25,6 +25,9 @@ public:
 private:
   void doLayout(Renderer&, float width, float height) override;
   void doUpdate(Renderer&) override;
+  void onPanelCardOpacityChanged(float opacity) override;
+  void layoutSliderGlyphs(Renderer& renderer);
+  void updateSliderGlyphClips();
   ControlCenterServices m_services;
   std::unique_ptr<TrayWidget> m_tray;
   MediaTab m_media;
@@ -42,6 +45,7 @@ private:
   };
   std::vector<Action> m_actions;
   std::vector<Style::MaterialTargetRegistration> m_materialRegistrations;
+  std::vector<Flex*> m_cardSurfaces;
   Label* m_wifiDetail = nullptr;
   Label* m_bluetoothDetail = nullptr;
   Button* m_wifi = nullptr;
@@ -50,6 +54,10 @@ private:
   Slider* m_volume = nullptr;
   Glyph* m_brightnessGlyph = nullptr;
   Glyph* m_volumeGlyph = nullptr;
+  Glyph* m_brightnessFilledGlyph = nullptr;
+  Glyph* m_volumeFilledGlyph = nullptr;
+  Node* m_brightnessGlyphClip = nullptr;
+  Node* m_volumeGlyphClip = nullptr;
   struct LayoutBlock { compact_layout::Cell cell; Node* node = nullptr; };
   std::vector<LayoutBlock> m_layoutBlocks;
   ScrollView* m_layoutScroll = nullptr;

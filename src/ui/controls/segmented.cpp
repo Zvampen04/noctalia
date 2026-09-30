@@ -138,17 +138,17 @@ void Segmented::setCompact(bool compact) {
 }
 
 void Segmented::setPadding(float padding) {
-  m_outerPadding = padding;
+  m_outerPadding = {padding, padding, padding, padding};
   Flex::setPadding(padding);
 }
 
 void Segmented::setPadding(float vertical, float horizontal) {
-  m_outerPadding = vertical;
+  m_outerPadding = {vertical, horizontal, vertical, horizontal};
   Flex::setPadding(vertical, horizontal);
 }
 
 void Segmented::setPadding(float top, float right, float bottom, float left) {
-  m_outerPadding = top;
+  m_outerPadding = {top, right, bottom, left};
   Flex::setPadding(top, right, bottom, left);
 }
 
@@ -317,7 +317,7 @@ void Segmented::refreshVariants() {
 }
 
 void Segmented::applyOuterStyle() {
-  Flex::setPadding(m_outerPadding);
+  Flex::setPadding(m_outerPadding[0], m_outerPadding[1], m_outerPadding[2], m_outerPadding[3]);
   setFill(colorSpecFromRole(m_surfaceRole, m_surfaceOpacity));
   clearBorder();
   setRadius(Style::controls().segmented_variant == Style::SegmentedTreatment::Floating

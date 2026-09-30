@@ -1157,6 +1157,8 @@ namespace {
     std::vector<InputRect> regions;
     for (const auto& section : instance.dynamicSections) {
       appendBackgroundRegion(regions, section.background);
+      if (section.activityRoute.material == TransientActivityMaterial::Surface)
+        appendBackgroundRegion(regions, section.activityBackground);
       if (stableInputEnvelope) appendBackgroundRegion(regions, section.inputEnvelope);
       appendCapsuleRegions(regions, section.capsuleRuns);
     }
@@ -1247,7 +1249,8 @@ namespace {
 
   void layoutBarSections(
       BarInstance& instance, Renderer& renderer, float barAreaW, float barAreaH, float padding, bool isVertical,
-      float mainSpan, float mainInsetStart, float mainInsetEnd
+      float mainSpan, float mainInsetStart, float mainInsetEnd,
+      const ShellConfig::ShadowConfig& shadowConfig
   ) {
     const float slotCross = isVertical ? barAreaW : barAreaH;
     const std::array<Flex*, 3> sectionNodes{instance.startSection, instance.centerSection, instance.endSection};
@@ -1642,20 +1645,48 @@ namespace {
                                        height + (isVertical ? 2.0F * maxGrow : 2.0F * (maxGrow + maxOffset)));
         section.inputEnvelope->setRadius(std::max(0.0F, static_cast<float>(instance.barConfig.radius)));
         section.inputEnvelope->setVisible(paintsOwnBackground && length > 0.0F);
-        section.compactSource = {
-            .section = AttachedPanelSourceSection::Unknown,
-            .sectionId = section.config.id,
-            // Source geometry is local to contentClip; the public provider
-            // adds that node's origin exactly once.
-            .x = isVertical ? section.config.crossOffset : compactExtents[i].start,
-            .y = isVertical ? compactExtents[i].start : section.config.crossOffset,
-            .width = isVertical ? slotCross : compactExtents[i].end - compactExtents[i].start,
-            .height = isVertical ? compactExtents[i].end - compactExtents[i].start : slotCross,
-            .radii = section.background->style().radius,
-            .contentOffset = AttachedPanelSource::ContentOffset{
-                ((isVertical ? slotCross : compactExtents[i].end - compactExtents[i].start) - section.content->width()) * 0.5F,
-                ((isVertical ? compactExtents[i].end - compactExtents[i].start : slotCross) - section.content->height()) * 0.5F}};
+        // Source geometry is local to contentClip; the public provider adds
+        // that node's origin exactly once.
+        section.compactSource = noctalia::bar::dynamic_sections::compactSource(
+            section.config, compactExtents[i], slotCross,
+            section.content->width(), section.content->height(),
+            section.background->style().radius, isVertical);
         section.hoverSource = section.compactSource;
+        if (section.shadow != nullptr) {
+          const bool shadowVisible = instance.barConfig.shadow
+              && shell::surface_shadow::enabled(true, shadowConfig)
+              && paintsOwnBackground && length > 0.0F
+              && (!section.activityRoot || section.activityInheritsMaterial);
+          section.shadow->setVisible(shadowVisible);
+          if (shadowVisible) {
+            const float shadowOpacity = std::clamp(opacity, 0.0F, 1.0F);
+            section.shadow->setStyle(shell::surface_shadow::style(
+                shadowConfig, shadowOpacity,
+                shell::surface_shadow::Shape{.radius = section.background->style().radius}));
+            const auto shadowOffset = shadowDirectionOffset(shadowConfig.direction);
+            float sourceX = panelOwnsSection ? instance.contentClip->x() + section.compactSource.x : absoluteX;
+            float sourceY = panelOwnsSection ? instance.contentClip->y() + section.compactSource.y : absoluteY;
+            float shadowWidth = panelOwnsSection ? section.compactSource.width : width;
+            float shadowHeight = panelOwnsSection ? section.compactSource.height : height;
+            // The panel opens from the currently hovered paint, which can be
+            // larger and shifted from the compact close destination. Keep its
+            // fading bar shadow under that same opening silhouette.
+            if (panelOwnsSection && !instance.attachedPanelClosing) {
+              const auto& source = instance.attachedPanelGeometry->source;
+              if (source.paintedSeed && source.paintedSeed->valid()) {
+                sourceX += source.paintedSeed->x - source.x;
+                sourceY += source.paintedSeed->y - source.y;
+                shadowWidth = source.paintedSeed->width;
+                shadowHeight = source.paintedSeed->height;
+              }
+            }
+            section.shadow->setPosition(sourceX + shadowOffset.x, sourceY + shadowOffset.y);
+            section.shadow->setSize(shadowWidth, shadowHeight);
+            section.shadow->setOpacity(panelOwnsSection
+                ? 1.0F - std::clamp(instance.attachedPanelGeometry->revealProgress, 0.0F, 1.0F)
+                : 1.0F);
+          }
+        }
       }
       return;
     }
@@ -2952,6 +2983,21 @@ std::optional<AttachedPanelSource> Bar::attachedSourceGeometry(
     if (it == instance->dynamicSections.end()) return std::nullopt;
     source = it->compactSource;
     source.usageRing = ringFor(it->widgets);
+    const bool panelOwnsSource = instance->attachedPanelGeometry
+        && instance->attachedPanelGeometry->panelOwnsSource
+        && instance->attachedPanelGeometry->source.sectionId == it->config.id;
+    if (!panelOwnsSource && it->background != nullptr && it->background->visible()
+        && it->content != nullptr) {
+      float paintedX = 0.0F, paintedY = 0.0F, contentX = 0.0F, contentY = 0.0F;
+      Node::absolutePosition(it->background, paintedX, paintedY);
+      Node::absolutePosition(it->content, contentX, contentY);
+      AttachedPanelSource::PaintedSeed painted{
+          .x = paintedX, .y = paintedY,
+          .width = it->background->width(), .height = it->background->height(),
+          .radii = it->background->style().radius,
+          .contentOffset = {contentX - paintedX, contentY - paintedY}};
+      if (painted.valid()) source.paintedSeed = painted;
+    }
   } else {
     const auto index = sourceSectionIndex(requested.section);
     if (!index) return std::nullopt;
@@ -2966,6 +3012,11 @@ std::optional<AttachedPanelSource> Bar::attachedSourceGeometry(
   const auto [surfaceX, surfaceY] = surfaceOriginForOutputLocal(*instance, *info);
   source.x += clipX + surfaceX;
   source.y += clipY + surfaceY;
+  if (source.paintedSeed) {
+    // Painted positions are already scene-root-local, unlike compactSource.
+    source.paintedSeed->x += surfaceX;
+    source.paintedSeed->y += surfaceY;
+  }
   return source;
 }
 
@@ -3005,6 +3056,12 @@ void Bar::setAttachedPanelGeometry(
       geometry->finalOutputX -= surfaceX;
       geometry->finalOutputY -= surfaceY;
     }
+  }
+  if (!geometry) {
+    instance->attachedPanelClosing = false;
+  } else if (instance->attachedPanelGeometry
+      && geometry->revealProgress + 0.0001F < instance->attachedPanelGeometry->revealProgress) {
+    instance->attachedPanelClosing = true;
   }
   instance->attachedPanelGeometry = geometry;
   syncBarSurfaceChrome(*instance);
@@ -3875,11 +3932,7 @@ void Bar::attachWidgetsToSections(BarInstance& instance) {
   attach(instance.centerWidgets, instance.centerCapsuleRuns, instance.centerSection, AttachedPanelSourceSection::Center);
   attach(instance.endWidgets, instance.endCapsuleRuns, instance.endSection, AttachedPanelSourceSection::End);
   for (auto& section : instance.dynamicSections) {
-    const auto sourceSection = section.config.anchor == BarCenterAlignment::Start
-        ? AttachedPanelSourceSection::Start
-        : section.config.anchor == BarCenterAlignment::End
-        ? AttachedPanelSourceSection::End
-        : AttachedPanelSourceSection::Center;
+    const auto sourceSection = noctalia::bar::dynamic_sections::sourceSection(section.config.anchor);
     attach(section.widgets, section.capsuleRuns, section.content, sourceSection, section.config.id);
   }
 }
@@ -4483,7 +4536,7 @@ void Bar::buildScene(BarInstance& instance, std::uint32_t width, std::uint32_t h
       ? std::max(0.0F, mainSpan - mainInsetStart - (isVertical ? barAreaH : barAreaW))
       : 0.0F;
   layoutBarSections(
-      instance, renderer, barAreaW, barAreaH, padding, isVertical, mainSpan, mainInsetStart, mainInsetEnd
+      instance, renderer, barAreaW, barAreaH, padding, isVertical, mainSpan, mainInsetStart, mainInsetEnd, shadowConfig
   );
   syncTransientActivityGeometry(instance, &renderer);
 
@@ -4553,7 +4606,7 @@ void Bar::updateWidgets(BarInstance& instance) {
   const float mainInsetEnd = usesStableIslandMorphSurface(instance.barConfig)
       ? std::max(0.0F, mainSpan - mainInsetStart - (isVertical ? barAreaH : barAreaW)) : 0.0F;
   layoutBarSections(
-      instance, renderer, barAreaW, barAreaH, padding, isVertical, mainSpan, mainInsetStart, mainInsetEnd
+      instance, renderer, barAreaW, barAreaH, padding, isVertical, mainSpan, mainInsetStart, mainInsetEnd, shadowConfig
   );
   syncTransientActivityGeometry(instance, &renderer);
   if (instance.barConfig.sectionBackgrounds || !instance.dynamicSections.empty()) syncBarSurfaceChrome(instance);
@@ -4658,6 +4711,84 @@ bool Bar::presentTransientActivity(
     const TransientActivityViewModel& activity, const TransientActivityRoute& route
 ) {
   if (!canPresentTransientActivity(route)) return false;
+  // A level change republishes the same activity serial. Keep its mounted node
+  // and animation clock when its route and content structure still match.
+  std::vector<std::pair<BarInstance*, DynamicBarSection*>> reusable;
+  bool anyExisting = false;
+  bool canReuse = true;
+  std::size_t expectedCount = 0;
+  const wl_output* focusedForReuse = m_platform != nullptr ? m_platform->preferredInteractiveOutput() : nullptr;
+  const bool wantsBody = !activity.showProgress && route.showBody && !activity.body.empty();
+  const bool wantsValue = !activity.value.empty() && (activity.showProgress || !activity.title.empty());
+  for (auto& owned : m_instances) {
+    if (!owned) continue;
+    const bool outputSelected = instanceEffectivelyVisible(*owned)
+        && (route.bar.empty() || owned->barConfig.name == route.bar)
+        && (route.output != "focused" || owned->output == focusedForReuse)
+        && (route.output == "focused" || route.output == "all" || [&] {
+          const auto out = std::ranges::find(m_platform->outputs(), owned->output, &WaylandOutput::output);
+          return out != m_platform->outputs().end() && outputMatchesSelector(route.output, *out);
+        }());
+    for (auto& section : owned->dynamicSections) {
+      if (outputSelected && section.config.id == route.section && section.background != nullptr
+          && section.compactSource.valid()) ++expectedCount;
+      if (section.activityRoot == nullptr || section.activitySerial != activity.serial) continue;
+      anyExisting = true;
+      const bool selected = outputSelected && section.config.id == route.section;
+      if (!selected || section.activityClosing || section.activityRoute != route
+          || section.activityKind != activity.kind
+          || (section.activitySlider != nullptr || section.activityProgress != nullptr) != activity.showProgress
+          || (section.activitySlider != nullptr) != (activity.showProgress && static_cast<bool>(activity.setProgress))
+          || (section.activityBody != nullptr) != wantsBody
+          || (section.activityValue != nullptr) != wantsValue) {
+        canReuse = false;
+      } else {
+        reusable.emplace_back(owned.get(), &section);
+      }
+    }
+  }
+  if (canReuse && anyExisting && reusable.size() == expectedCount && !reusable.empty()) {
+    for (const auto& [owned, section] : reusable) {
+      const ColorRole accentRole = activity.overLimit ? ColorRole::Error
+          : activity.inactive ? ColorRole::OnSurfaceVariant : ColorRole::Primary;
+      const ColorRole valueRole = activity.overLimit ? ColorRole::Error
+          : activity.inactive ? ColorRole::OnSurfaceVariant : ColorRole::OnSurface;
+      section->activityGlyph->setGlyph(activity.icon.empty() ? "bell" : activity.icon);
+      section->activityGlyph->setColor(colorSpecFromRole(accentRole));
+      if (section->activityTitle)
+        section->activityTitle->setText(activity.title.empty() ? activity.value : activity.title);
+      if (section->activityBody) section->activityBody->setText(activity.body);
+      if (section->activityValue) {
+        section->activityValue->setText(activity.value);
+        section->activityValue->setColor(colorSpecFromRole(valueRole));
+      }
+      if (section->activityProgress) {
+        section->activityProgress->setProgress(std::clamp(activity.progress, 0.0F, 1.0F));
+        section->activityProgress->setFill(colorSpecFromRole(accentRole));
+      }
+      if (section->activitySlider) {
+        section->activitySlider->setOnValueChanged({});
+        section->activitySlider->setValue(std::clamp(activity.progress, 0.0F, 1.0F));
+        section->activitySlider->setOnValueChanged([setProgress = activity.setProgress](double value) {
+          setProgress(static_cast<float>(value));
+        });
+      }
+      section->activityRoot->setOnEnter(activity.hoverChanged
+          ? InputArea::PointerCallback{[hoverChanged = activity.hoverChanged](const InputArea::PointerData&) {
+              hoverChanged(true);
+            }} : InputArea::PointerCallback{});
+      section->activityRoot->setOnLeave(activity.hoverChanged
+          ? InputArea::VoidCallback{[hoverChanged = activity.hoverChanged]() { hoverChanged(false); }}
+          : InputArea::VoidCallback{});
+      section->activityRoot->setOnClick([activate = activity.activate, dismiss = activity.dismiss]
+          (const InputArea::PointerData& data) {
+            if (data.button == BTN_RIGHT && dismiss) dismiss();
+            else if (data.button == BTN_LEFT && activate) activate();
+          });
+      owned->surface->requestLayout();
+    }
+    return true;
+  }
   std::unordered_map<std::uint32_t,std::array<float,3>> previousReveal;
   for (const auto& instance : m_instances) if (instance)
     for (const auto& section : instance->dynamicSections)
@@ -4737,7 +4868,8 @@ bool Bar::presentTransientActivity(
         .ellipsize = TextEllipsize::End,
       }));
       if (route.showBody && !activity.body.empty()) text->addChild(ui::label({
-        .text = activity.body, .fontSize = Style::fontSizeCaption, .maxLines = 1, .ellipsize = TextEllipsize::End}));
+        .out = &section->activityBody, .text = activity.body, .fontSize = Style::fontSizeCaption,
+        .maxLines = 1, .ellipsize = TextEllipsize::End}));
       row->addChild(std::move(text));
     }
     if (activity.showProgress && activity.setProgress) {
@@ -4774,12 +4906,21 @@ bool Bar::presentTransientActivity(
           .maxLines = 1,
       }));
     }
+    const ColorRole accentRole = activity.overLimit ? ColorRole::Error
+        : activity.inactive ? ColorRole::OnSurfaceVariant : ColorRole::Primary;
+    const ColorRole valueRole = activity.overLimit ? ColorRole::Error
+        : activity.inactive ? ColorRole::OnSurfaceVariant : ColorRole::OnSurface;
+    section->activityGlyph->setColor(colorSpecFromRole(accentRole));
+    if (section->activityProgress) section->activityProgress->setFill(colorSpecFromRole(accentRole));
+    if (section->activityValue) section->activityValue->setColor(colorSpecFromRole(valueRole));
     root->addChild(std::move(row));
     auto ring = std::make_unique<CountdownRingNode>();
     ring->setHitTestVisible(false); ring->setParticipatesInLayout(false); ring->setZIndex(100);
     section->activityRing = static_cast<CountdownRingNode*>(root->addChild(std::move(ring)));
     section->activityRoot = static_cast<InputArea*>(owned->slideRoot->addChild(std::move(root)));
     section->activitySerial = activity.serial;
+    section->activityKind = activity.kind;
+    section->activityRoute = route;
     section->activityWidth = route.width;
     section->activityHeight = route.height;
     section->activityClosing = false;
@@ -4849,7 +4990,7 @@ void Bar::withdrawTransientActivity(std::uint64_t serial) {
       if (section.activityMotionEnabled && section.activityClosing) continue;
       auto* oldRoot=section.activityRoot;
       section.activityRoot=nullptr; section.activityRing=nullptr; section.activityBackground=nullptr; section.activityContent=nullptr;
-      section.activityGlyph=nullptr; section.activityTitle=nullptr; section.activityValue=nullptr;
+      section.activityGlyph=nullptr; section.activityTitle=nullptr; section.activityBody=nullptr; section.activityValue=nullptr;
       section.activityProgress=nullptr; section.activitySlider=nullptr;
       section.activityReveal=0.F; section.activityClosing=false; section.activityMotionEnabled=false; section.activitySerial=0;
       (void)owned->slideRoot->removeChild(oldRoot);
@@ -4931,7 +5072,8 @@ void Bar::prepareFrame(BarInstance& instance, bool needsUpdate, bool needsLayout
     const float mainInsetEnd = usesStableIslandMorphSurface(instance.barConfig)
         ? std::max(0.0F, mainSpan - mainInsetStart - (isVertical ? barAreaH : barAreaW)) : 0.0F;
     layoutBarSections(
-        instance, renderer, barAreaW, barAreaH, padding, isVertical, mainSpan, mainInsetStart, mainInsetEnd
+        instance, renderer, barAreaW, barAreaH, padding, isVertical, mainSpan, mainInsetStart, mainInsetEnd,
+        m_config->config().shell.shadow
     );
     syncTransientActivityGeometry(instance, &renderer);
   }

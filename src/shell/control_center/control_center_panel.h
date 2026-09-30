@@ -203,5 +203,8 @@ private:
   float m_tabTransitionProgress = 1.0F;
   int m_tabTransitionDirection = 1;
   bool m_tabTransitionActive = false;
+  std::array<float, kTabCount> m_tabStartOffsets{};
+  std::array<float, kTabCount> m_tabStartOpacities{};
+  std::array<float, kTabCount> m_tabEndOffsets{};
   bool m_firstOpenAfterCreate = false;
 };

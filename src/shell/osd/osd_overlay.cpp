@@ -882,6 +882,7 @@ void OsdOverlay::applyReveal(Instance& inst, float reveal) {
   const float baseX = cardBaseX(inst.sceneRoot->width(), cw);
   const float baseY = cardBaseYForPosition(m_lastPosition, inst.sceneRoot->height(), ch);
   const float r = std::clamp(reveal, 0.0F, 1.0F);
+  inst.reveal = r;
 
   if (inst.row != nullptr) {
     inst.row->setOpacity(osdContentOpacity(r));
@@ -942,22 +943,21 @@ void OsdOverlay::animateInstance(Instance& inst) {
     inst.hideAnimId = 0;
   }
 
-  if (!inst.visible) {
-    // During fast updates (e.g. slider drag), don't restart the show animation
-    // every tick; keep the current show motion and only extend hide timing.
-    if (inst.showAnimId == 0) {
-      inst.sceneRoot->setOpacity(1.0F);
-      applyReveal(inst, 0.0F);
-      inst.showAnimId = inst.animations.animate(
-          0.0F, 1.0F, Style::animNormal, Easing::EaseOutCubic, [this, &inst](float v) { applyReveal(inst, v); },
-          [&inst]() {
-            inst.showAnimId = 0;
-            inst.visible = true;
-          }
-      );
-    }
-  } else {
-    applyReveal(inst, 1.0F);
+  // A new level update can arrive while the card is closing. Retarget the
+  // opening from the painted fraction; forcing a fully open card here causes
+  // a visible jump. While already opening, keep that animation in flight.
+  if (inst.showAnimId == 0 && (!inst.visible || inst.reveal < 0.999F)) {
+    const float from = !inst.visible && inst.reveal >= 0.999F ? 0.0F : inst.reveal;
+    inst.sceneRoot->setOpacity(1.0F);
+    applyReveal(inst, from);
+    inst.showAnimId = inst.animations.animate(
+        from, 1.0F, Style::animNormal * (1.0F - from), Easing::EaseOutCubic,
+        [this, &inst](float v) { applyReveal(inst, v); },
+        [&inst]() {
+          inst.showAnimId = 0;
+          inst.visible = true;
+        }
+    );
   }
 
   inst.hideAnimId = inst.animations.animateTimer(

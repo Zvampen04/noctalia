@@ -108,6 +108,7 @@ private:
     float rowBaseY = 0.0F;
     AnimationManager::Id showAnimId = 0;
     AnimationManager::Id hideAnimId = 0;
+    float reveal = 0.0F;
     bool showPending = false;
     bool visible = false;
     float appliedCornerRadiusScale = -1.0F;

@@ -3,6 +3,7 @@
 #include "compositors/compositor_platform.h"
 #include "config/config_service.h"
 #include "core/log.h"
+#include "core/deferred_call.h"
 #include "core/ui_phase.h"
 #include "render/render_context.h"
 #include "render/scene/node.h"
@@ -57,7 +58,8 @@ void PersistentPanelHost::unregisterPanel(const std::string& id) {
   if (it == m_panels.end()) {
     return;
   }
-  close(id);
+  if (auto instance = std::ranges::find_if(m_instances, [&](const auto& value) { return value->id == id; });
+      instance != m_instances.end()) destroyInstance(instance);
   m_panels.erase(it);
 }
 
@@ -121,7 +123,33 @@ void PersistentPanelHost::open(const std::string& id, wl_output* output, std::st
   if (panelIt == m_panels.end()) {
     return;
   }
-  if (isOpen(id)) {
+  if (auto* existing = findInstance(id); existing != nullptr) {
+    if (existing->closing) {
+      if (output != nullptr && output != existing->output) {
+        existing->reopenContext = std::string(context);
+        existing->reopenOutput = output;
+        return;
+      }
+      existing->closing = false;
+      ++existing->closeEpoch;
+      existing->reopenContext.reset();
+      existing->reopenOutput = nullptr;
+      if (existing->revealAnimId != 0) existing->animations.cancel(existing->revealAnimId);
+      existing->inputDispatcher.setSceneRoot(existing->sceneRoot.get());
+      existing->surface->setInputRegion({InputRect{
+          existing->insetX, existing->insetY,
+          static_cast<int>(existing->visualWidth), static_cast<int>(existing->visualHeight)}});
+      if (auto* focus = existing->panel->initialFocusArea(); focus != nullptr)
+        existing->inputDispatcher.setFocus(focus);
+      const float from = existing->reveal;
+      existing->revealAnimId = existing->animations.animate(
+          from, 1.0F, Style::animFast * (1.0F - from), Easing::EaseOutCubic,
+          [existing](float value) {
+            existing->reveal = value;
+            if (existing->sceneRoot != nullptr) existing->sceneRoot->setOpacity(value);
+          }, [existing]() { existing->revealAnimId = 0; }, existing);
+      existing->surface->requestRedraw();
+    }
     return;
   }
   if (output == nullptr) {
@@ -251,6 +279,13 @@ void PersistentPanelHost::open(const std::string& id, wl_output* output, std::st
       raw->panel->onFrameTick(deltaMs);
     }
   });
+  instance->surface->setClosedCallback([this, raw, alive = std::weak_ptr<void>(instance->alive)]() {
+    DeferredCall::callLater([this, raw, alive]() {
+      if (alive.expired()) return;
+      const auto it = std::ranges::find_if(m_instances, [raw](const auto& value) { return value.get() == raw; });
+      if (it != m_instances.end()) destroyInstance(it);
+    });
+  });
 
   if (!instance->surface->initialize(output)) {
     kLog.warn("failed to initialize surface for \"{}\"", id);
@@ -272,7 +307,44 @@ void PersistentPanelHost::close(const std::string& id) {
   if (it == m_instances.end()) {
     return;
   }
-  destroyInstance(it);
+  Instance& instance = **it;
+  if (instance.closing) {
+    instance.reopenContext.reset();
+    return;
+  }
+  if (instance.sceneRoot == nullptr || instance.surface == nullptr || !instance.panel->wantsCloseAnimation()) {
+    destroyInstance(it);
+    return;
+  }
+  instance.closing = true;
+  const auto closeEpoch = ++instance.closeEpoch;
+  if (instance.revealAnimId != 0) instance.animations.cancel(instance.revealAnimId);
+  instance.revealAnimId = 0;
+  instance.inputDispatcher.setSceneRoot(nullptr);
+  instance.surface->setInputRegion({});
+  const std::weak_ptr<void> alive = instance.alive;
+  auto* raw = &instance;
+  instance.revealAnimId = instance.animations.animate(
+      instance.reveal, 0.0F, Style::animFast * instance.reveal, Easing::EaseOutCubic,
+      [raw](float value) {
+        raw->reveal = value;
+        if (raw->sceneRoot != nullptr) raw->sceneRoot->setOpacity(value);
+      },
+      [this, raw, alive, closeEpoch]() {
+        DeferredCall::callLater([this, raw, alive, closeEpoch]() {
+          if (alive.expired()) return;
+          auto it = std::ranges::find_if(m_instances, [raw](const auto& value) { return value.get() == raw; });
+          if (it == m_instances.end() || !raw->closing || raw->closeEpoch != closeEpoch) return;
+          auto context = std::move(raw->reopenContext);
+          auto* output = raw->reopenOutput;
+          const auto id = raw->id;
+          destroyInstance(it);
+          if (context && output != nullptr && m_panels.contains(id)
+              && m_platform != nullptr && m_platform->findOutputByWl(output) != nullptr)
+            open(id, output, *context);
+        });
+      }, raw);
+  instance.surface->requestRedraw();
 }
 
 void PersistentPanelHost::closeAll() {
@@ -297,6 +369,7 @@ void PersistentPanelHost::destroyInstance(std::vector<std::unique_ptr<Instance>>
   instance->bgNode = nullptr;
   instance->shadowNode = nullptr;
   instance->sceneRoot.reset();
+  instance->surface->setClosedCallback(nullptr);
   instance->surface.reset();
   if (m_platform != nullptr) {
     m_platform->stopKeyRepeat();
@@ -308,6 +381,10 @@ void PersistentPanelHost::destroyInstance(std::vector<std::unique_ptr<Instance>>
 }
 
 void PersistentPanelHost::toggle(const std::string& id, wl_output* output, std::string_view context) {
+  if (auto* instance = findInstance(id); instance != nullptr && instance->closing) {
+    open(id, output != nullptr ? output : instance->output, context);
+    return;
+  }
   if (isOpen(id)) {
     close(id);
     return;
@@ -325,6 +402,8 @@ void PersistentPanelHost::buildScene(Instance& instance, std::uint32_t width, st
   instance.sceneRoot = ui::node({});
   instance.sceneRoot->setAnimationManager(&instance.animations);
   instance.sceneRoot->setSize(static_cast<float>(width), static_cast<float>(height));
+  instance.reveal = 0.0F;
+  instance.sceneRoot->setOpacity(0.0F);
 
   const auto& shadowConfig = m_config->config().shell.shadow;
   if (hasDecoration && shell::surface_shadow::enabled(true, shadowConfig)) {
@@ -375,6 +454,12 @@ void PersistentPanelHost::buildScene(Instance& instance, std::uint32_t width, st
   });
 
   instance.surface->setSceneRoot(instance.sceneRoot.get());
+  instance.revealAnimId = instance.animations.animate(
+      0.0F, 1.0F, Style::animFast, Easing::EaseOutCubic,
+      [raw](float value) {
+        raw->reveal = value;
+        if (raw->sceneRoot != nullptr) raw->sceneRoot->setOpacity(value);
+      }, [raw]() { raw->revealAnimId = 0; }, raw);
 
   if (auto* focusArea = instance.panel->initialFocusArea(); focusArea != nullptr) {
     instance.inputDispatcher.setFocus(focusArea);
@@ -463,6 +548,7 @@ void PersistentPanelHost::prepareFrame(Instance& instance, bool needsUpdate, boo
   if (m_renderContext == nullptr || instance.surface == nullptr || instance.panel == nullptr) {
     return;
   }
+  if (instance.closing) return;
   m_renderContext->makeCurrent(instance.surface->renderTarget());
   Renderer& renderer = instance.surface->renderTarget().renderer();
 
@@ -511,6 +597,7 @@ bool PersistentPanelHost::onPointerEvent(const PointerEvent& event) {
   if (instance == nullptr) {
     return false;
   }
+  if (instance->closing) return true;
 
   switch (event.type) {
   case PointerEvent::Type::Enter:
@@ -567,6 +654,7 @@ bool PersistentPanelHost::onKeyboardEvent(const KeyboardEvent& event) {
   if (instance == nullptr || instance->panel == nullptr) {
     return false;
   }
+  if (instance->closing) return true;
 
   if (instance->panel->handleGlobalKey(event.sym, event.modifiers, event.pressed, event.preedit)) {
     if (instance->sceneRoot != nullptr && (instance->sceneRoot->paintDirty() || instance->sceneRoot->layoutDirty())) {

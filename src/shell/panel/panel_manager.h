@@ -272,6 +272,15 @@ private:
   std::function<std::vector<wl_surface*>()> m_focusGrabBarSurfacesProvider;
   std::function<void()> m_panelClosedCallback;
   std::function<void()> m_afterCloseCallback;
+  struct PendingPanelOpen {
+    std::string id;
+    PanelOpenRequest request;
+    std::string context;
+    std::string sourceBarName;
+  };
+  // A single active panel owns the surface. Keep only the latest replacement
+  // request while its closing reveal returns to the bar.
+  std::optional<PendingPanelOpen> m_pendingPanelOpen;
   std::function<void()> m_panelOpenedCallback;
   std::function<bool(wl_output*, std::string_view)> m_attachedPanelAvailabilityCallback;
   std::function<std::optional<std::string>(wl_output*, std::string_view)> m_attachedPanelLayerProvider;
@@ -347,6 +356,10 @@ private:
   float m_attachedAnchorY = 0.0F;
   std::string m_sourceBarName;       // resolved bar currently owning the attached join
   AttachedPanelSource m_attachedSource;
+  std::optional<AttachedPanelSource::PaintedSeed> m_attachedOpeningSource;
+  std::optional<attached_panel::MorphGeometry> m_islandCloseStart;
+  std::optional<AttachedPanelSource::ContentOffset> m_islandCloseOpenerPosition;
+  float m_islandCloseStartReveal = 1.0F;
   bool m_islandMorph = false;
   std::optional<AttachedPanelGeometry> m_attachedPanelGeometry;
   bool m_pointerInside = false;
@@ -359,4 +372,5 @@ private:
   ContextMenuPopup* m_activePopup = nullptr;
   std::unique_ptr<SelectDropdownPopup> m_selectPopup;
   std::uint64_t m_destroyGeneration = 0; // invalidates stale deferred destroyPanel calls
+  std::shared_ptr<void> m_alive = std::make_shared<int>(0);
 };

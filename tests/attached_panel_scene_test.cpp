@@ -290,7 +290,7 @@ public:
       TEST_CHECK(published && published->panelOwnsSource && published->bulgeRadius==0);
       TEST_CHECK(manager.m_islandOpenerProxy && manager.m_islandOpenerProxy->source()==opener.get());
       TEST_CHECK(near(manager.m_islandOpenerProxy->opacity(),.75F));
-      TEST_CHECK(near(manager.m_contentNode->opacity(),.25F));
+      TEST_CHECK(near(manager.m_contentNode->opacity(),0.F));
       TEST_CHECK(static_cast<Box*>(manager.m_bgNode)->style().corners==CornerShapes{});
       TEST_CHECK(static_cast<Box*>(manager.m_bgNode)->style().logicalInset==RectInsets{});
       TEST_CHECK(!manager.m_islandOpenerProxy->hitTestVisible());
@@ -312,10 +312,30 @@ public:
       manager.applyAttachedReveal(.75F);
       TEST_CHECK(manager.m_islandOpenerProxy->source()==opener.get());
       TEST_CHECK(near(manager.m_islandOpenerProxy->opacity(),.25F));
+      TEST_CHECK(manager.m_contentNode->opacity()>0.F && manager.m_contentNode->opacity()<.25F);
       manager.applyAttachedReveal(1.F);
       TEST_CHECK(!manager.m_islandOpenerProxy->visible());
       manager.applyAttachedReveal(.25F);
       TEST_CHECK(manager.m_islandOpenerProxy->visible());
+      // Opening starts from the painted hover shape; an interrupted close
+      // starts at that exact frame and still ends at the resting island.
+      const auto& endpoint=*manager.m_attachedPanelGeometry;
+      manager.m_attachedOpeningSource=AttachedPanelSource::PaintedSeed{
+          .x=manager.m_attachedSource.x-8,.y=manager.m_attachedSource.y+7,
+          .width=manager.m_attachedSource.width+16,.height=manager.m_attachedSource.height+8,
+          .radii={18,18,18,18}};
+      const auto hovered=manager.attachedMorphGeometry(0);
+      TEST_CHECK(near(hovered.body.x,manager.m_attachedOpeningSource->x-endpoint.finalOutputX+manager.m_panelInsetX));
+      TEST_CHECK(near(hovered.body.width,manager.m_attachedOpeningSource->width));
+      const auto interrupted=manager.attachedMorphGeometry(.4F);
+      manager.m_islandCloseStart=interrupted;manager.m_islandCloseStartReveal=.4F;manager.m_closing=true;
+      const auto closingStart=manager.attachedMorphGeometry(.4F);
+      TEST_CHECK(near(closingStart.body.x,interrupted.body.x) && near(closingStart.body.y,interrupted.body.y));
+      TEST_CHECK(near(closingStart.body.width,interrupted.body.width) && closingStart.radii==interrupted.radii);
+      const auto closed=manager.attachedMorphGeometry(0);
+      TEST_CHECK(near(closed.body.x,manager.m_attachedSource.x-endpoint.finalOutputX+manager.m_panelInsetX));
+      TEST_CHECK(near(closed.body.width,manager.m_attachedSource.width));
+      manager.m_closing=false;manager.m_attachedOpeningSource.reset();manager.m_islandCloseStart.reset();
       // Theme/output relayout refreshes the compact reverse-animation target.
       currentSource->x=740;currentSource->width=100;currentSource->radii={8,10,12,14};
       manager.onConfigReloaded();applyPending();

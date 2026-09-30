@@ -47,6 +47,9 @@ Slider::Slider() {
   auto thumb = std::make_unique<RectNode>();
   m_thumb = static_cast<RectNode*>(addChild(std::move(thumb)));
 
+  auto focusRing = std::make_unique<RectNode>();
+  m_focusRing = static_cast<RectNode*>(addChild(std::move(focusRing)));
+
   auto area = std::make_unique<InputArea>();
   area->setOnEnter([this](const InputArea::PointerData& /*data*/) {
     applyVisualState();
@@ -213,8 +216,11 @@ void Slider::setTrackHeight(float height) {
 }
 
 void Slider::setThumbSize(float size) {
-  m_thumbSizePx = std::max(1.0F, size);
+  // Zero deliberately hides the thumb (for filled tracks with an embedded icon).
+  // The input area remains the full control size, including its keyboard focus target.
+  m_thumbSizePx = std::max(0.0F, size);
   updateGeometry();
+  applyVisualState();
   markLayoutDirty();
 }
 
@@ -258,6 +264,8 @@ void Slider::updateGeometry() {
 
   m_track->setPosition(trackX, trackY);
   m_track->setFrameSize(trackW, m_trackHeight);
+  m_focusRing->setPosition(trackX, trackY);
+  m_focusRing->setFrameSize(trackW, m_trackHeight);
 
   const float fillX = Style::rtl() ? thumbX : trackX;
   const float fillWidth = Style::rtl() ? trackX + trackW - thumbX : thumbX - trackX;
@@ -295,7 +303,8 @@ void Slider::applyVisualState() {
   Color thumbColor = resolved(ColorRole::OnPrimary);
   Color thumbBorder = resolved(ColorRole::Outline);
 
-  m_thumb->setVisible(m_enabled);
+  m_thumb->setVisible(m_enabled && m_thumbSizePx > 0.0F);
+  m_focusRing->setVisible(m_enabled && m_thumbSizePx == 0.0F && focused);
 
   if (!m_enabled) {
     trackColor = resolved(ColorRole::Outline, Style::disabledOutlineAlpha);
@@ -313,6 +322,12 @@ void Slider::applyVisualState() {
 
   auto fillStyle = solidStyle(fillColor, m_trackHeight * 0.5F);
   m_fill->setStyle(SurfaceMaterial::styled(*m_fill, fillStyle, -0.35F, MaterialBackdrop::Inherited, "slider"));
+
+  // This outline sits above both track and fill, so focus remains visible at 100%.
+  auto focusStyle = solidStyle(rgba(0.0F, 0.0F, 0.0F, 0.0F), m_trackHeight * 0.5F);
+  focusStyle.border = resolveColorSpec(focusRingColorSpec());
+  focusStyle.borderWidth = Style::focusRingWidth;
+  m_focusRing->setStyle(focusStyle);
 
   auto thumbStyle = solidStyle(thumbColor, m_thumbSizePx * 0.5F);
   thumbStyle.cornerPower = 2.0F;

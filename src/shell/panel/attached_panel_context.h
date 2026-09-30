@@ -40,6 +40,27 @@ struct AttachedPanelSource {
   // Original section origin relative to the compact painted island, before
   // clipping/reflow. A clipped end lane can legitimately have a negative offset.
   std::optional<ContentOffset> contentOffset;
+  // A hover animation can enlarge or displace the painted opener before a
+  // panel starts. This is an optional opening snapshot; x/y are output-local.
+  // The enclosing source remains the stable compact close destination.
+  struct PaintedSeed {
+    float x = 0.0F;
+    float y = 0.0F;
+    float width = 0.0F;
+    float height = 0.0F;
+    Radii radii{};
+    ContentOffset contentOffset{};
+
+    [[nodiscard]] bool valid() const noexcept {
+      return std::isfinite(x) && std::isfinite(y) && std::isfinite(width) && std::isfinite(height)
+          && width > 0.0F && height > 0.0F
+          && std::isfinite(radii.tl) && std::isfinite(radii.tr)
+          && std::isfinite(radii.br) && std::isfinite(radii.bl)
+          && std::isfinite(contentOffset.x) && std::isfinite(contentOffset.y);
+    }
+    bool operator==(const PaintedSeed&) const = default;
+  };
+  std::optional<PaintedSeed> paintedSeed;
   std::optional<CountdownRingStyle> usageRing;
 
   [[nodiscard]] bool valid() const noexcept {

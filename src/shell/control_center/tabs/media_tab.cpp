@@ -909,6 +909,16 @@ bool MediaTab::dismissTransientUi() {
   return true;
 }
 
+void MediaTab::onPanelCardOpacityChanged(float opacity) {
+  if (m_nowCard) {
+    control_center::applySectionCardStyle(*m_nowCard, contentScale(), opacity);
+    m_nowCard->setPadding((m_compactMini ? 10.0F : 16.0F) * contentScale());
+    m_nowCard->setRadius(22.0F * contentScale());
+    m_nowCard->setGap(0.0F);
+  }
+  if (m_visualizerColumn) control_center::applySectionCardStyle(*m_visualizerColumn, contentScale(), opacity);
+}
+
 void MediaTab::clearArt(Renderer& renderer) {
   if (m_artBackdrop) m_artBackdrop->clear(renderer);
   if (m_artwork != nullptr) {

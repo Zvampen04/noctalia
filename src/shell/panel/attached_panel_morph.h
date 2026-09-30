@@ -56,7 +56,7 @@ inline MorphGeometry morphGeometry(MorphRect finalBody, float fullRadius,
 // A detached island owns its whole silhouette, including the compact opener.
 // Progress has already been eased by the one panel animation clock.
 inline MorphGeometry islandMorphGeometry(MorphRect source, Radii sourceRadii,
-    MorphRect finalBody, float fullRadius, float progress) {
+    MorphRect finalBody, Radii finalRadii, float progress) {
   const float t=std::clamp(std::isfinite(progress)?progress:0.F,0.F,1.F);
   const auto mix=[t](float a,float b){return std::lerp(a,b,t);};
   MorphGeometry result;
@@ -64,9 +64,10 @@ inline MorphGeometry islandMorphGeometry(MorphRect source, Radii sourceRadii,
       std::max(0.F,mix(source.width,finalBody.width)),std::max(0.F,mix(source.height,finalBody.height))};
   result.background=result.body;
   const float limit=std::min(result.body.width,result.body.height)*.5F;
-  const auto radius=[&](float r){return std::clamp(mix(std::isfinite(r)?r:0.F,
-      std::isfinite(fullRadius)?fullRadius:0.F),0.F,limit);};
-  result.radii={radius(sourceRadii.tl),radius(sourceRadii.tr),radius(sourceRadii.br),radius(sourceRadii.bl)};
+  const auto radius=[&](float from,float to){return std::clamp(mix(std::isfinite(from)?from:0.F,
+      std::isfinite(to)?to:0.F),0.F,limit);};
+  result.radii={radius(sourceRadii.tl,finalRadii.tl),radius(sourceRadii.tr,finalRadii.tr),
+      radius(sourceRadii.br,finalRadii.br),radius(sourceRadii.bl,finalRadii.bl)};
   result.radius=std::max({result.radii.tl,result.radii.tr,result.radii.br,result.radii.bl});
   const float guard=result.radius*(1.F-std::sqrt(.5F));
   result.contentClip={result.body.x+guard,result.body.y+guard,
@@ -75,5 +76,10 @@ inline MorphGeometry islandMorphGeometry(MorphRect source, Radii sourceRadii,
   result.contentX=result.body.x-finalBody.x;
   result.contentY=result.body.y-finalBody.y;
   return result;
+}
+inline MorphGeometry islandMorphGeometry(MorphRect source, Radii sourceRadii,
+    MorphRect finalBody, float fullRadius, float progress) {
+  return islandMorphGeometry(source,sourceRadii,finalBody,
+      Radii{fullRadius,fullRadius,fullRadius,fullRadius},progress);
 }
 }

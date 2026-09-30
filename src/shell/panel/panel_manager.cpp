@@ -370,6 +370,9 @@ namespace {
 PanelManager::PanelManager() { s_instance = this; }
 
 PanelManager::~PanelManager() {
+  ++m_destroyGeneration;
+  m_pendingPanelOpen.reset();
+  m_alive.reset();
   m_persistentHost.setPanelClosedCallback(nullptr);
   if (s_instance == this) {
     s_instance = nullptr;
@@ -515,6 +518,7 @@ void PanelManager::registerPanel(const std::string& id, std::unique_ptr<Panel> c
 }
 
 void PanelManager::unregisterPanel(const std::string& id) {
+  if (m_pendingPanelOpen && m_pendingPanelOpen->id == id) m_pendingPanelOpen.reset();
   if (m_persistentHost.hasPanel(id)) {
     m_persistentHost.unregisterPanel(id);
     return;
@@ -559,9 +563,11 @@ void PanelManager::openPanel(const std::string& panelId, PanelOpenRequest reques
       //
       // The open is deferred past this call, so the request's string_view fields
       // are copied into owned storage the continuation keeps alive.
+      const std::weak_ptr<void> alive = m_alive;
       m_platform->probeFocusedOutput(
-          [this, panelId, request, context = std::string(request.context),
+          [this, alive, panelId, request, context = std::string(request.context),
            sourceBarName = std::string(request.sourceBarName)](wl_output* probed) mutable {
+            if (alive.expired()) return;
             request.output =
                 probed != nullptr ? probed : m_platform->preferredInteractiveOutput(std::chrono::milliseconds(1200));
             if (request.output == nullptr) {
@@ -580,6 +586,7 @@ void PanelManager::openPanel(const std::string& panelId, PanelOpenRequest reques
   // Persistent panels live in their own host: opening one must leave the active
   // panel (and any other persistent panel) alone.
   if (m_persistentHost.hasPanel(panelId)) {
+    m_pendingPanelOpen.reset();
     m_persistentHost.open(panelId, request.output, request.context);
     return;
   }
@@ -588,17 +595,24 @@ void PanelManager::openPanel(const std::string& panelId, PanelOpenRequest reques
     m_closeDesktopWidgetsEditor();
   }
 
-  // If a panel is open or closing, destroy it immediately with no close animation.
-  // Bump the generation first so any in-flight deferred destroyPanel is a no-op.
-  if (isOpen() || m_closing) {
-    ++m_destroyGeneration;
-    m_closing = false;
-    destroyPanel();
-  }
-
   auto it = m_panels.find(panelId);
   if (it == m_panels.end()) {
     kLog.warn("panel manager: unknown panel \"{}\"", panelId);
+    return;
+  }
+
+  if (isOpen() || m_closing) {
+    // PanelOpenRequest contains string_views owned by its caller. Copy those
+    // before the exit animation and replace an older pending request on rapid
+    // bar clicks. The close callback may also have work (such as launcher paste)
+    // that must run before the next panel maps.
+    m_pendingPanelOpen = PendingPanelOpen{
+        .id = panelId,
+        .request = request,
+        .context = std::string(request.context),
+        .sourceBarName = std::string(request.sourceBarName),
+    };
+    if (!m_closing) closePanel();
     return;
   }
 
@@ -646,6 +660,10 @@ void PanelManager::openPanel(const std::string& panelId, PanelOpenRequest reques
       m_attachedSource = *source;
   }
   m_islandMorph = barConfig.sectionBackgrounds && barConfig.islandMorph && m_attachedSource.valid();
+  m_attachedOpeningSource = m_attachedSource.paintedSeed;
+  if (m_attachedOpeningSource && !m_attachedOpeningSource->valid()) m_attachedOpeningSource.reset();
+  m_islandCloseStart.reset();
+  m_islandCloseOpenerPosition.reset();
   m_openingSourceBarName = std::string(request.sourceBarName);
   m_attachedAnchorAvailable = request.hasAnchorPosition;
   m_attachedAnchorX = request.anchorX;
@@ -948,6 +966,18 @@ void PanelManager::openPanel(const std::string& panelId, PanelOpenRequest reques
   };
 
   const auto configureSurfaceCallbacks = [this](Surface& surface) {
+    auto* layerSurface = static_cast<LayerSurface*>(&surface);
+    const std::weak_ptr<void> alive = m_alive;
+    layerSurface->setClosedCallback([this, layerSurface, alive]() {
+      if (alive.expired()) return;
+      const auto generation = m_destroyGeneration;
+      // Wayland is still dispatching the closed event. Retire the panel on the
+      // next loop turn so its surface is never destroyed within that callback.
+      DeferredCall::callLater([this, layerSurface, alive, generation]() {
+        if (alive.expired() || m_destroyGeneration != generation || m_layerSurface != layerSurface) return;
+        closePanel(false);
+      });
+    });
     surface.setRenderContext(m_renderContext);
     surface.setConfigureCallback([this](std::uint32_t, std::uint32_t) { onSurfaceConfigured(); });
     surface.setPrepareFrameCallback([this](bool needsUpdate, bool needsLayout) {
@@ -991,6 +1021,9 @@ void PanelManager::openPanel(const std::string& panelId, PanelOpenRequest reques
     m_attachedBarPosition.clear();
     m_sourceBarName.clear();
     m_attachedSource = {};
+    m_attachedOpeningSource.reset();
+    m_islandCloseStart.reset();
+    m_islandCloseOpenerPosition.reset();
     m_attachedPanelGeometry.reset();
     m_attachedToBar = false;
     m_screenEdgeAttachment = false;
@@ -1428,9 +1461,17 @@ void PanelManager::deactivateOutsideClickHandlers() {
 }
 
 void PanelManager::closePanel(bool animateClose, std::function<void()> afterClosed) {
+  if (!animateClose || m_closing) m_pendingPanelOpen.reset();
   if(m_resizeAnimationId)m_animations.cancel(m_resizeAnimationId);
   m_resizeAnimationId=0;m_resizeSize.reset();m_resizeTarget.reset();
-  if (!isOpen() || m_inTransition || m_closing) {
+  if (m_closing) {
+    if (!animateClose) {
+      ++m_destroyGeneration;
+      destroyPanel();
+    }
+    return;
+  }
+  if (!isOpen() || m_inTransition) {
     return;
   }
 
@@ -1442,38 +1483,47 @@ void PanelManager::closePanel(bool animateClose, std::function<void()> afterClos
 
   // Disable input during close animation
   m_inputDispatcher.setSceneRoot(nullptr);
+  if (m_surface != nullptr) m_surface->setInputRegion({});
+  if (m_islandMorph && m_attachedPanelGeometry) {
+    m_islandCloseStart = attachedMorphGeometry(m_attachedRevealProgress);
+    m_islandCloseStartReveal = m_attachedRevealProgress;
+    if (m_islandOpenerProxy) m_islandCloseOpenerPosition=AttachedPanelSource::ContentOffset{
+        m_islandOpenerProxy->x(),m_islandOpenerProxy->y()};
+  }
   m_closing = true;
   m_afterCloseCallback = std::move(afterClosed);
   m_attachedOpenAnimationPending = false;
 
   if (animateClose && m_sceneRoot != nullptr && m_activePanel != nullptr && m_activePanel->wantsCloseAnimation()) {
     const std::uint64_t gen = ++m_destroyGeneration;
+    const std::weak_ptr<void> alive = m_alive;
+    const auto finishClose = [this, gen, alive]() {
+      DeferredCall::callLater([this, gen, alive]() {
+        if (!alive.expired() && m_destroyGeneration == gen) destroyPanel();
+      });
+    };
     if (m_attachedToBar && m_attachedRevealClipNode != nullptr) {
       m_animations.cancelForOwner(m_attachedRevealClipNode);
+      const float from = std::clamp(m_attachedRevealProgress, 0.0F, 1.0F);
+      if (from <= 0.001F) {
+        finishClose();
+        return;
+      }
       m_animations.animate(
-          m_attachedRevealProgress, 0.0F, attachedAnimationDuration(), Easing::EaseInOutQuad,
-          [this](float v) { applyAttachedReveal(v); },
-          [this, gen]() {
-            DeferredCall::callLater([this, gen]() {
-              if (m_destroyGeneration == gen) {
-                destroyPanel();
-              }
-            });
-          },
+          from, 0.0F, attachedAnimationDuration() * from, Easing::EaseInOutQuad,
+          [this](float v) { applyAttachedReveal(v); }, finishClose,
           m_attachedRevealClipNode
       );
     } else {
       m_animations.cancelForOwner(m_sceneRoot.get());
+      const float from = std::clamp(m_detachedRevealProgress, 0.0F, 1.0F);
+      if (from <= 0.001F) {
+        finishClose();
+        return;
+      }
       m_animations.animate(
-          m_detachedRevealProgress, 0.0F, Style::animNormal, Easing::EaseInQuad,
-          [this](float v) { applyDetachedReveal(v); },
-          [this, gen]() {
-            DeferredCall::callLater([this, gen]() {
-              if (m_destroyGeneration == gen) {
-                destroyPanel();
-              }
-            });
-          },
+          from, 0.0F, Style::animNormal * from, Easing::EaseInQuad,
+          [this](float v) { applyDetachedReveal(v); }, finishClose,
           m_sceneRoot.get()
       );
     }
@@ -1546,6 +1596,9 @@ void PanelManager::destroyPanel() {
   m_attachedBarPosition.clear();
   m_sourceBarName.clear();
   m_attachedSource = {};
+  m_attachedOpeningSource.reset();
+  m_islandCloseStart.reset();
+  m_islandCloseOpenerPosition.reset();
   m_attachedPanelGeometry.reset();
   m_attachedToBar = false;
   m_screenEdgeAttachment = false;
@@ -1566,11 +1619,26 @@ void PanelManager::destroyPanel() {
   if (afterClosed) {
     afterClosed();
   }
+  // A close callback can open a panel itself. Only dispatch a queued bar click
+  // when the single-panel host is still empty; never resurrect an unregistered
+  // panel or a request pinned to an output that disappeared during the fade.
+  auto pending = std::move(m_pendingPanelOpen);
+  m_pendingPanelOpen.reset();
+  if (pending && !isOpen() && m_panels.contains(pending->id)) {
+    auto request = pending->request;
+    if (request.output == nullptr || (m_platform != nullptr && m_platform->findOutputByWl(request.output) != nullptr)) {
+      request.context = pending->context;
+      request.sourceBarName = pending->sourceBarName;
+      openPanel(pending->id, request);
+    }
+  }
 }
 
 void PanelManager::navigatePanelContext(const std::string& panelId, std::string context) {
   const auto generation = m_destroyGeneration;
-  DeferredCall::callLater([this, panelId, context = std::move(context), generation] {
+  const std::weak_ptr<void> alive = m_alive;
+  DeferredCall::callLater([this, alive, panelId, context = std::move(context), generation] {
+    if (alive.expired()) return;
     if (generation != m_destroyGeneration) return;
     if (!isOpenPanel(panelId) || m_closing || !m_contentNode) {
       openPanel(panelId, {.context = context});
@@ -1587,10 +1655,22 @@ void PanelManager::navigatePanelContext(const std::string& panelId, std::string 
     m_activePanel->setPendingOpenContext(context);
     m_activePanel->create();
     m_activePanel->onOpen(context);
-    if (m_activePanel->root()) m_contentNode->addChild(m_activePanel->releaseRoot());
+    Node* page = nullptr;
+    if (m_activePanel->root()) page = m_contentNode->addChild(m_activePanel->releaseRoot());
     m_inputDispatcher.setSceneRoot(m_sceneRoot.get());
     if (auto* focus = m_activePanel->initialFocusArea()) m_inputDispatcher.setFocus(focus);
     relayoutActivePanelPreferredSize();
+    // Reveal a resized page after the body has begun growing. The page owns
+    // this animation, so another navigation safely cancels its callbacks.
+    if (page != nullptr && m_resizeAnimationId != 0 && MotionService::instance().enabled()) {
+      page->setAnimationManager(&m_animations);
+      page->setOpacity(0.0F);
+      const float duration = m_config ? m_config->config().shell.panel.resizeDurationMs : 180.0F;
+      m_animations.animate(0.0F, 1.0F, duration, Easing::EaseOutCubic,
+          [page](float progress) { page->setOpacity(std::clamp((progress - .35F) / .65F, 0.0F, 1.0F)); },
+          {}, page);
+      requestFrameTick();
+    }
     m_surface->requestUpdate();
     m_surface->requestLayout();
   });
@@ -1599,7 +1679,7 @@ void PanelManager::navigatePanelContext(const std::string& panelId, std::string 
 void PanelManager::togglePanel(const std::string& panelId, PanelOpenRequest request) {
   if (m_persistentHost.hasPanel(panelId)) {
     if (m_persistentHost.isOpen(panelId)) {
-      m_persistentHost.close(panelId);
+      m_persistentHost.toggle(panelId, request.output, request.context);
       return;
     }
     openPanel(panelId, request);
@@ -1631,7 +1711,7 @@ void PanelManager::togglePanel(const std::string& panelId, PanelOpenRequest requ
 void PanelManager::togglePanel(const std::string& panelId) {
   if (m_persistentHost.hasPanel(panelId)) {
     if (m_persistentHost.isOpen(panelId)) {
-      m_persistentHost.close(panelId);
+      m_persistentHost.toggle(panelId, nullptr, {});
       return;
     }
     openPanel(panelId, PanelOpenRequest{});
@@ -2228,10 +2308,24 @@ float PanelManager::attachedAnimationDuration() const {
 attached_panel::MorphGeometry PanelManager::attachedMorphGeometry(float progress) const {
   if (m_islandMorph && m_attachedSource.valid() && m_attachedPanelGeometry) {
     const auto& final=*m_attachedPanelGeometry;
+    const attached_panel::MorphRect compact{
+        m_attachedSource.x-final.finalOutputX+m_panelInsetX,
+        m_attachedSource.y-final.finalOutputY+m_panelInsetY,m_attachedSource.width,m_attachedSource.height};
+    if (m_closing && m_islandCloseStart) {
+      auto result = attached_panel::islandMorphGeometry(compact,m_attachedSource.radii,
+          m_islandCloseStart->body,m_islandCloseStart->radii,
+          m_islandCloseStartReveal > 0.0F ? progress/m_islandCloseStartReveal : 0.0F);
+      result.contentX=result.body.x-m_panelInsetX;
+      result.contentY=result.body.y-m_panelInsetY;
+      return result;
+    }
+    const auto source = m_attachedOpeningSource
+        ? attached_panel::MorphRect{m_attachedOpeningSource->x-final.finalOutputX+m_panelInsetX,
+            m_attachedOpeningSource->y-final.finalOutputY+m_panelInsetY,
+            m_attachedOpeningSource->width,m_attachedOpeningSource->height}
+        : compact;
     return attached_panel::islandMorphGeometry(
-        {m_attachedSource.x-final.finalOutputX+m_panelInsetX,
-         m_attachedSource.y-final.finalOutputY+m_panelInsetY,m_attachedSource.width,m_attachedSource.height},
-        m_attachedSource.radii,
+        source, m_attachedOpeningSource ? m_attachedOpeningSource->radii : m_attachedSource.radii,
         {static_cast<float>(m_panelInsetX),static_cast<float>(m_panelInsetY),
          static_cast<float>(m_panelVisualWidth),static_cast<float>(m_panelVisualHeight)},
         m_activePanel?Style::scaledRadiusXl(m_activePanel->contentScale()):0.F,progress);
@@ -2274,8 +2368,18 @@ void PanelManager::applyAttachedMorph(float progress) {
       const auto offset = m_attachedSource.contentOffset.value_or(AttachedPanelSource::ContentOffset{
           (m_attachedSource.width-source->width())*.5F,
           (m_attachedSource.height-source->height())*.5F});
-      m_islandOpenerProxy->setPosition(m_attachedSource.x-final.finalOutputX+m_panelInsetX+offset.x,
-          m_attachedSource.y-final.finalOutputY+m_panelInsetY+offset.y);
+      float x=m_attachedSource.x-final.finalOutputX+m_panelInsetX+offset.x;
+      float y=m_attachedSource.y-final.finalOutputY+m_panelInsetY+offset.y;
+      if (m_closing && m_islandCloseOpenerPosition) {
+        const float t=m_islandCloseStartReveal>0.0F
+            ?std::clamp(progress/m_islandCloseStartReveal,0.0F,1.0F):0.0F;
+        x=std::lerp(x,m_islandCloseOpenerPosition->x,t);
+        y=std::lerp(y,m_islandCloseOpenerPosition->y,t);
+      } else if (m_attachedOpeningSource) {
+        x=m_attachedOpeningSource->x-final.finalOutputX+m_panelInsetX+m_attachedOpeningSource->contentOffset.x;
+        y=m_attachedOpeningSource->y-final.finalOutputY+m_panelInsetY+m_attachedOpeningSource->contentOffset.y;
+      }
+      m_islandOpenerProxy->setPosition(x,y);
       m_islandOpenerProxy->setFrameSize(source->width(),source->height());
       m_islandOpenerProxy->setOpacity(1.F-std::clamp(progress,0.F,1.F));
     }
@@ -2288,15 +2392,44 @@ void PanelManager::applyAttachedMorph(float progress) {
     m_islandUsageRing = static_cast<CountdownRingNode*>(m_attachedRevealContentNode->addChild(std::move(ring)));
   }
   if (m_islandUsageRing) {
-    m_islandUsageRing->setVisible(m_islandMorph && m_attachedSource.usageRing.has_value());
-    if (m_attachedSource.usageRing) {
+    // The countdown belongs to the compact opener. Stretching its frame with
+    // the panel turns a short arc into a border around the expanded panel.
+    const float ringOpacity=std::clamp(1.F-4.F*progress,0.F,1.F);
+    m_islandUsageRing->setVisible(m_islandMorph && m_attachedSource.usageRing.has_value()
+        && m_attachedPanelGeometry.has_value() && ringOpacity>0.F);
+    if (m_attachedSource.usageRing && m_attachedPanelGeometry) {
       auto style = *m_attachedSource.usageRing;
+      const auto& final=*m_attachedPanelGeometry;
+      const float paintedWeight=m_attachedOpeningSource
+          ?(m_closing
+              ?(m_islandCloseStartReveal>0.F
+                  ?std::clamp(progress/m_islandCloseStartReveal,0.F,1.F):0.F)
+              :1.F):0.F;
+      const auto blend=[paintedWeight](float compact,float painted) {
+        return std::lerp(compact,painted,paintedWeight);
+      };
+      const float sourceX=blend(m_attachedSource.x,
+          m_attachedOpeningSource?m_attachedOpeningSource->x:m_attachedSource.x)
+          -final.finalOutputX+m_panelInsetX;
+      const float sourceY=blend(m_attachedSource.y,
+          m_attachedOpeningSource?m_attachedOpeningSource->y:m_attachedSource.y)
+          -final.finalOutputY+m_panelInsetY;
+      const float sourceWidth=blend(m_attachedSource.width,
+          m_attachedOpeningSource?m_attachedOpeningSource->width:m_attachedSource.width);
+      const float sourceHeight=blend(m_attachedSource.height,
+          m_attachedOpeningSource?m_attachedOpeningSource->height:m_attachedSource.height);
+      const auto& compactRadii=m_attachedSource.radii;
+      const auto& paintedRadii=m_attachedOpeningSource
+          ?m_attachedOpeningSource->radii:compactRadii;
       const float inset = style.thickness * 2.5F;
-      style.radius = std::max(0.0F, geometry.radius - inset);
+      style.radius = std::max(0.F,std::min({blend(compactRadii.tl,paintedRadii.tl),
+          blend(compactRadii.tr,paintedRadii.tr),blend(compactRadii.br,paintedRadii.br),
+          blend(compactRadii.bl,paintedRadii.bl),sourceWidth*.5F,sourceHeight*.5F})-inset);
       m_islandUsageRing->setStyle(style);
-      m_islandUsageRing->setPosition(bounds.x + inset, bounds.y + inset);
-      m_islandUsageRing->setFrameSize(std::max(0.0F, bounds.width - 2.0F * inset),
-                                    std::max(0.0F, bounds.height - 2.0F * inset));
+      m_islandUsageRing->setPosition(sourceX+inset,sourceY+inset);
+      m_islandUsageRing->setFrameSize(std::max(0.F,sourceWidth-2.F*inset),
+          std::max(0.F,sourceHeight-2.F*inset));
+      m_islandUsageRing->setOpacity(ringOpacity);
     }
   }
   applyAttachedDecorationStyle();
@@ -2329,7 +2462,11 @@ void PanelManager::applyAttachedMorph(float progress) {
     m_panelContactShadowNode->setOpacity(progress);
   }
   if (m_attachedContentClipNode && m_contentNode) {
-    m_contentNode->setOpacity(m_islandMorph?std::clamp(progress,0.F,1.F):1.F);
+    // The content keeps its final layout while the island contour grows. Let
+    // most of that contour form before revealing controls at their full size.
+    constexpr float contentRevealStart=.7F;
+    m_contentNode->setOpacity(m_islandMorph
+        ?std::clamp((progress-contentRevealStart)/(1.F-contentRevealStart),0.F,1.F):1.F);
     m_attachedContentClipNode->setPosition(clip.x,clip.y);
     m_attachedContentClipNode->setFrameSize(clip.width,clip.height);
     const float padding=m_activePanel && m_activePanel->hasDecoration()
@@ -3112,7 +3249,8 @@ void PanelManager::onConfigReloaded() {
       m_attachedRevealProgress=m_closing?0.F:1.F;
       if (m_closing) {
         const auto generation=++m_destroyGeneration;
-        DeferredCall::callLater([this,generation]{if(m_destroyGeneration==generation)destroyPanel();});
+        const std::weak_ptr<void> alive = m_alive;
+        DeferredCall::callLater([this,generation,alive]{if(!alive.expired()&&m_destroyGeneration==generation)destroyPanel();});
       }
     }
     // Defer shape/blur/input changes to the retained frame layout. A placement

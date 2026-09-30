@@ -1,4 +1,6 @@
 #include "shell/bar/bar_island_morph_geometry.h"
+#include "shell/bar/bar_dynamic_section_geometry.h"
+#include "shell/bar/bar_corner_shape.h"
 #include "shell/bar/bar_section_geometry.h"
 #include "shell/panel/attached_panel_layout.h"
 #include "shell/panel/attached_panel_morph.h"
@@ -9,6 +11,19 @@
 #include <cmath>
 
 int main() {
+  {
+    BarConfig notch;
+    notch.position = "top";
+    notch.thickness = 36;
+    notch.marginEdge = 0;
+    notch.marginEnds = 0;
+    notch.concaveEdgeCorners = true;
+    notch.radiusBottomLeft = notch.radiusBottomRight = 20;
+    const auto shape = barConcaveShape(notch);
+    TEST_CHECK(shape.corners.bl == CornerShape::Concave && shape.corners.br == CornerShape::Concave);
+    TEST_CHECK(shape.innerBulge == 18.0F && shape.logicalInset.bottom == 18.0F);
+    TEST_CHECK(shape.radii.bl == 18.0F && shape.radii.br == 18.0F);
+  }
   {
     ShellConfig shell;
     shell.desktopFrame.enabled = true;
@@ -34,9 +49,21 @@ int main() {
   }
   {
     const attached_panel::BodyRect bar{0,10,1920,34};
-    const AttachedPanelSource media{.section=AttachedPanelSourceSection::Start,.x=873,.y=10,.width=34,.height=34};
-    const AttachedPanelSource clock{.section=AttachedPanelSourceSection::Center,.x=918,.y=10,.width=84,.height=34};
-    const AttachedPanelSource quick{.section=AttachedPanelSourceSection::End,.x=1013,.y=10,.width=34,.height=34};
+    // Exercise the same named-section source builder used by the bar, including
+    // its placement role and content offset, before feeding panel placement.
+    BarSectionConfig startSection; startSection.id="media"; startSection.anchor=BarCenterAlignment::Start;
+    BarSectionConfig centerSection; centerSection.id="clock"; centerSection.anchor=BarCenterAlignment::Center;
+    BarSectionConfig endSection; endSection.id="status"; endSection.anchor=BarCenterAlignment::End;
+    const auto media=noctalia::bar::dynamic_sections::compactSource(
+        startSection,{873,907},34,16,16,Radii{17},false);
+    const auto clock=noctalia::bar::dynamic_sections::compactSource(
+        centerSection,{918,1002},34,66,24,Radii{17},false);
+    const auto quick=noctalia::bar::dynamic_sections::compactSource(
+        endSection,{1013,1047},34,16,16,Radii{17},false);
+    TEST_CHECK(media.section==AttachedPanelSourceSection::Start
+        && clock.section==AttachedPanelSourceSection::Center
+        && quick.section==AttachedPanelSourceSection::End);
+    TEST_CHECK(media.contentOffset && media.contentOffset->x==9 && media.contentOffset->y==9);
     const auto place = [&](const AttachedPanelSource& source,int w,int h) {
       return attached_panel::fitOutwardIsland(AttachedRevealDirection::Down,bar,source,1920,1080,w,h,8,7);
     };

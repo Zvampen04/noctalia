@@ -77,6 +77,7 @@ CompactHomeTab::~CompactHomeTab() = default;
 std::unique_ptr<Flex> CompactHomeTab::create() {
   const float s = contentScale();
   m_materialRegistrations.clear();
+  m_cardSurfaces.clear();
   m_layoutBlocks.clear();
   m_layoutScroll = nullptr;
   m_mediaRoot = nullptr;
@@ -121,6 +122,7 @@ std::unique_ptr<Flex> CompactHomeTab::create() {
     const auto path = std::vector<std::string>{"panel", "control-center", "control-center.home",
         "control-center.home.compact", "control-center.home.compact.tile", targetId};
     row->setMaterialIdentityPath("surface", "card", path);
+    m_cardSurfaces.push_back(row.get());
     m_materialRegistrations.push_back(Style::MaterialTargetCatalog::instance().registerInstance(
         control_center_material::descriptor(targetId, std::string("Compact Quick Settings: ") + title, "card", path)));
     row->addChild(ui::button({.out = toggle, .glyph = icon, .glyphSize = 20.0F * s,
@@ -163,6 +165,7 @@ std::unique_ptr<Flex> CompactHomeTab::create() {
     const auto path = std::vector<std::string>{"panel", "control-center", "control-center.home",
         "control-center.home.compact", "control-center.home.compact.slider-card", targetId};
     card->setMaterialIdentityPath("surface", "card", path);
+    m_cardSurfaces.push_back(card.get());
     m_materialRegistrations.push_back(Style::MaterialTargetCatalog::instance().registerInstance(
         control_center_material::descriptor(targetId, std::string("Compact Quick Settings: ") + title, "card", path)));
     card->addChild(ui::row({.align = FlexAlign::Center, .justify = FlexJustify::SpaceBetween, .paddingH = 5.0F * s},
@@ -171,10 +174,25 @@ std::unique_ptr<Flex> CompactHomeTab::create() {
             .variant = ButtonVariant::Ghost, .padding = 0.0F, .onClick = [context] { openSection(context); }})));
     card->addChild(ui::slider({.out = slider, .minValue = 0.0, .maxValue = 100.0, .step = 1.0,
         .trackHeight = 24.0F * s, .thumbSize = 0.0F, .controlHeight = 24.0F * s,
-        .onValueChanged = std::move(change)}));
-    (*slider)->addChild(ui::glyph({.out = std::string(context) == "monitor" ? &m_brightnessGlyph : &m_volumeGlyph, .glyph = std::string(context) == "monitor" ? "sun" : "volume",
-        .glyphSize = 14.F * s, .color = colorSpecFromRole(ColorRole::OnPrimary),
-        .configure = [s](Glyph& icon) { icon.setParticipatesInLayout(false); icon.setHitTestVisible(false); icon.setPosition(10.F * s, 5.F * s); }}));
+        .onValueChanged = [this, change = std::move(change)](double value) {
+          change(value);
+          updateSliderGlyphClips();
+        }}));
+    const bool brightness = std::string(context) == "monitor";
+    const char* glyph = brightness ? "sun" : "volume";
+    (*slider)->addChild(ui::glyph({.out = brightness ? &m_brightnessGlyph : &m_volumeGlyph, .glyph = glyph,
+        .glyphSize = 14.F * s, .color = colorSpecFromRole(ColorRole::OnSurface),
+        .configure = [](Glyph& icon) { icon.setParticipatesInLayout(false); icon.setHitTestVisible(false); }}));
+    auto iconClip = ui::node({});
+    iconClip->setParticipatesInLayout(false);
+    iconClip->setHitTestVisible(false);
+    iconClip->setClipChildren(true);
+    if (brightness) m_brightnessGlyphClip = iconClip.get();
+    else m_volumeGlyphClip = iconClip.get();
+    iconClip->addChild(ui::glyph({.out = brightness ? &m_brightnessFilledGlyph : &m_volumeFilledGlyph,
+        .glyph = glyph, .glyphSize = 14.F * s, .color = colorSpecFromRole(ColorRole::OnPrimary),
+        .configure = [](Glyph& icon) { icon.setParticipatesInLayout(false); icon.setHitTestVisible(false); }}));
+    (*slider)->addChild(std::move(iconClip));
     blocks[std::string(context) == "monitor" ? "brightness" : "volume"] = card.get();
     return card;
   };
@@ -189,6 +207,7 @@ std::unique_ptr<Flex> CompactHomeTab::create() {
   auto notifications = ui::column({.align = FlexAlign::Stretch, .gap = 4.0F * s, .paddingV = 8.0F * s, .paddingH = 14.0F * s,
       .fill = colorSpecFromRole(ColorRole::SurfaceVariant, panelCardOpacity()),
       .radius = compactRadius(19.0F, Style::radiusLg, 9.0F, s), .flexGrow = 1.0F});
+  m_cardSurfaces.push_back(notifications.get());
   notifications->addChild(ui::button({.text = "Notifications", .fontSize = 13.0F * s,
       .controlHeight = 22.0F * s, .contentAlign = ButtonContentAlign::Start, .variant = ButtonVariant::Ghost,
       .padding = 0.0F, .onClick = [] { openSection("notifications"); }}));
@@ -345,9 +364,7 @@ void CompactHomeTab::doLayout(Renderer& renderer, float width, float height) {
       if (block.cell.kind == "tray" && m_tray)
         m_tray->layout(renderer, w, h);
     }
-    for (auto* icon : {m_brightnessGlyph, m_volumeGlyph})
-      if (icon)
-        icon->layout(renderer);
+    layoutSliderGlyphs(renderer);
     if (m_mediaRoot)
       m_media.layout(renderer, m_mediaRoot->width(), m_mediaRoot->height());
     m_notifications.layout(renderer, m_notificationRoot->width(), m_notificationRoot->height());
@@ -360,7 +377,7 @@ void CompactHomeTab::doLayout(Renderer& renderer, float width, float height) {
   if (m_tray)
     m_tray->layout(renderer, width, 36.0F * contentScale());
   m_root->layout(renderer);
-  for (auto* icon : {m_brightnessGlyph, m_volumeGlyph}) if (icon) icon->layout(renderer);
+  layoutSliderGlyphs(renderer);
   if (m_mediaRoot != nullptr) m_media.layout(renderer, m_mediaRoot->width(), m_mediaRoot->height());
   m_notifications.layout(renderer, m_notificationRoot->width(), m_notificationRoot->height());
 }
@@ -394,6 +411,7 @@ void CompactHomeTab::doUpdate(Renderer& renderer) {
   }
   m_brightness->setEnabled(display && display->controllable);
   if (display && !m_brightness->dragging()) m_brightness->setValue(display->brightness * 100.0);
+  updateSliderGlyphClips();
   for (auto& action : m_actions) {
     if (!action.shortcut || !action.button) continue;
     action.button->setEnabled(action.shortcut->enabled());
@@ -407,6 +425,52 @@ void CompactHomeTab::doUpdate(Renderer& renderer) {
   if (m_tray)
     m_tray->update(renderer);
 }
+void CompactHomeTab::layoutSliderGlyphs(Renderer& renderer) {
+  const auto layoutGlyph = [this, &renderer](Slider* slider, Glyph* icon, Glyph* filledIcon) {
+    if (!slider || !icon || !filledIcon) return;
+    icon->layout(renderer);
+    filledIcon->layout(renderer);
+    const float trackInset = Style::sliderHorizontalPadding;
+    const float trackHeight = 24.0F * contentScale();
+    const float x = std::clamp(trackInset + (trackHeight - icon->width()) * 0.5F,
+        0.0F, std::max(0.0F, slider->width() - icon->width()));
+    const float y = std::max(0.0F, (slider->height() - icon->height()) * 0.5F);
+    icon->setPosition(x, y);
+    filledIcon->setPosition(x, y);
+  };
+  layoutGlyph(m_brightness, m_brightnessGlyph, m_brightnessFilledGlyph);
+  layoutGlyph(m_volume, m_volumeGlyph, m_volumeFilledGlyph);
+  updateSliderGlyphClips();
+}
+
+void CompactHomeTab::updateSliderGlyphClips() {
+  const auto clipGlyph = [](Slider* slider, Node* clip, Glyph* icon, Glyph* filledIcon) {
+    if (!slider || !clip || !icon || !filledIcon) return;
+    const double span = slider->maxValue() - slider->minValue();
+    const float progress = span > 0.0
+        ? static_cast<float>(std::clamp((slider->value() - slider->minValue()) / span, 0.0, 1.0)) : 0.0F;
+    const float inset = Style::sliderHorizontalPadding;
+    const float trackWidth = std::max(0.0F, slider->width() - inset * 2.0F);
+    const float fillWidth = progress * trackWidth;
+    const float clipX = Style::rtl() ? inset + trackWidth - fillWidth : 0.0F;
+    const float clipWidth = Style::rtl() ? fillWidth : inset + fillWidth;
+    clip->setPosition(clipX, 0.0F);
+    clip->setFrameSize(clipWidth, slider->height());
+    filledIcon->setPosition(icon->x() - clipX, icon->y());
+    clip->setVisible(slider->enabled() && fillWidth > 0.0F
+        && clipX < icon->x() + icon->width() && clipX + clipWidth > icon->x());
+  };
+  clipGlyph(m_brightness, m_brightnessGlyphClip, m_brightnessGlyph, m_brightnessFilledGlyph);
+  clipGlyph(m_volume, m_volumeGlyphClip, m_volumeGlyph, m_volumeFilledGlyph);
+}
+
+void CompactHomeTab::onPanelCardOpacityChanged(float opacity) {
+  for (Flex* card : m_cardSurfaces) {
+    if (card) card->setFill(colorSpecFromRole(ColorRole::SurfaceVariant, opacity));
+  }
+  m_media.setPanelCardOpacity(opacity);
+  m_notifications.setPanelCardOpacity(opacity);
+}
 void CompactHomeTab::setActive(bool active) {
   if (m_showMedia) m_media.setActive(active);
   m_notifications.setActive(active);
@@ -417,12 +481,14 @@ void CompactHomeTab::onFrameTick(float dt) {
 }
 void CompactHomeTab::onClose() {
   m_tray.reset();
-  m_brightnessGlyph = nullptr; m_volumeGlyph = nullptr;
+  m_brightnessGlyph = m_volumeGlyph = m_brightnessFilledGlyph = m_volumeFilledGlyph = nullptr;
+  m_brightnessGlyphClip = m_volumeGlyphClip = nullptr;
   if (m_showMedia) m_media.onClose();
   m_notifications.onClose();
   for (auto& action : m_actions) if (action.shortcut) action.shortcut->onPanelClose();
   m_actions.clear();
   m_materialRegistrations.clear();
+  m_cardSurfaces.clear();
   m_layoutBlocks.clear();
   m_layoutScroll = nullptr;
   m_root = m_top = m_connections = m_mediaRoot = m_notificationRoot = m_brightnessCard = nullptr;

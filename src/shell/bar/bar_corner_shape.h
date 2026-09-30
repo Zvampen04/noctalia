@@ -89,6 +89,13 @@ struct BarConcaveShape {
       bulge = std::max(bulge, cappedRadius(cfg.radiusBottomRight));
     }
     g.innerBulge = bulge;
+    // The paint shader and region tessellator cap concave radii to half the
+    // body thickness. Store that effective radius too, so the shape metadata
+    // agrees with the inset reserved for the painted shoulder.
+    if (inner.topLeft) g.radii.tl = cappedRadius(cfg.radiusTopLeft);
+    if (inner.topRight) g.radii.tr = cappedRadius(cfg.radiusTopRight);
+    if (inner.bottomRight) g.radii.br = cappedRadius(cfg.radiusBottomRight);
+    if (inner.bottomLeft) g.radii.bl = cappedRadius(cfg.radiusBottomLeft);
 
     const std::string_view pos = cfg.position;
     if (pos == "bottom") {

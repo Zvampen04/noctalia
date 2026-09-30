@@ -441,7 +441,8 @@ void ControlCenterPanel::doLayout(Renderer& renderer, float width, float height)
   };
 
   if (m_tabTransitionActive) {
-    layoutTab(m_tabTransitionOutgoing);
+    for (std::size_t i=0;i<kTabCount;++i)
+      if (static_cast<TabId>(i)!=m_activeTab) layoutTab(static_cast<TabId>(i));
   }
   layoutTab(m_activeTab);
 }
@@ -690,14 +691,8 @@ void ControlCenterPanel::layoutTabContainers(float bodyWidth, float bodyHeight) 
     float opacity = 1.0F;
     const auto tabId = static_cast<TabId>(i);
     if (m_tabTransitionActive && travel > 0.0F) {
-      const auto direction = static_cast<float>(m_tabTransitionDirection);
-      if (tabId == m_tabTransitionOutgoing) {
-        offsetY = -direction * travel * m_tabTransitionProgress;
-        opacity = 1.0F - 0.3F * m_tabTransitionProgress;
-      } else if (tabId == m_activeTab) {
-        offsetY = direction * travel * (1.0F - m_tabTransitionProgress);
-        opacity = 0.7F + 0.3F * m_tabTransitionProgress;
-      }
+      offsetY=travel*std::lerp(m_tabStartOffsets[i],m_tabEndOffsets[i],m_tabTransitionProgress);
+      opacity=std::lerp(m_tabStartOpacities[i],tabId==m_activeTab?1.0F:0.7F,m_tabTransitionProgress);
     }
 
     container->setPosition(0.0F, offsetY);
@@ -749,22 +744,28 @@ void ControlCenterPanel::startTabTransition(TabId from, TabId to) {
     return;
   }
 
-  m_tabTransitionActive = true;
-  m_tabTransitionOutgoing = from;
-  m_tabTransitionProgress = 0.0F;
-
   const int fromOrdinal = visibleTabOrdinal(from);
   const int toOrdinal = visibleTabOrdinal(to);
   m_tabTransitionDirection = toOrdinal >= fromOrdinal ? 1 : -1;
+  const float direction=static_cast<float>(m_tabTransitionDirection);
+  const float height=std::max(1.0F,m_tabBodies->height());
 
   for (const auto& meta : kTabs) {
     const std::size_t idx = tabIndex(meta.id);
     if (m_tabContainers[idx] == nullptr || !isTabVisible(meta.id)) {
       continue;
     }
-    const bool show = meta.id == from || meta.id == to;
+    const bool wasVisible=m_tabContainers[idx]->visible();
+    const bool show = wasVisible || meta.id == from || meta.id == to;
+    m_tabStartOffsets[idx]=wasVisible?m_tabContainers[idx]->y()/height:direction;
+    m_tabStartOpacities[idx]=wasVisible?m_tabContainers[idx]->opacity():0.7F;
+    m_tabEndOffsets[idx]=meta.id==to?0.0F:-direction;
     m_tabContainers[idx]->setVisible(show);
   }
+
+  m_tabTransitionActive = true;
+  m_tabTransitionOutgoing = from;
+  m_tabTransitionProgress = 0.0F;
 
   applyTabTransitionLayout();
   PanelManager::instance().requestLayout();
@@ -842,11 +843,14 @@ void ControlCenterPanel::selectTab(TabId tab, bool animated) {
 
   const TabId previousTab = m_activeTab;
   const bool tabChanged = tab != previousTab;
+  // An acknowledged request for the currently arriving page must not settle
+  // an in-flight transition early. A new page retargets its painted transforms.
+  if (!tabChanged && animated && m_tabTransitionActive) return;
 
   if (m_tabTransitionAnimId != 0 && m_animations != nullptr) {
     m_animations->cancel(m_tabTransitionAnimId);
     m_tabTransitionAnimId = 0;
-    finishTabTransition();
+    if (!animated || !tabChanged) finishTabTransition();
   }
 
   m_activeTab = tab;

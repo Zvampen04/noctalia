@@ -392,6 +392,8 @@ namespace {
       ));
     }
 
+    void setCardOpacity(float opacity) { applyNotificationCardStyle(*this, m_scale, opacity); }
+
     void bind(
         Renderer& renderer, const NotificationHistoryEntry& entry, float width, bool expanded, bool showHistoryActions,
         IconResolver& iconResolver, std::function<void(uint32_t)> onToggleExpanded,
@@ -580,6 +582,8 @@ class NotificationHistoryAdapter final : public VirtualListAdapter {
 public:
   NotificationHistoryAdapter(NotificationsTab& owner, float scale, float fillOpacity)
       : m_owner(owner), m_scale(scale), m_fillOpacity(fillOpacity) {}
+
+  void setFillOpacity(float opacity) { m_fillOpacity = opacity; }
 
   [[nodiscard]] std::size_t itemCount() const override { return m_owner.m_filtered.size(); }
 
@@ -1117,5 +1121,17 @@ std::optional<std::size_t> NotificationsTab::filteredIndexForId(uint32_t id) con
 void NotificationsTab::onPanelCardOpacityChanged(float opacity) {
   if (m_filter != nullptr) {
     m_filter->setSurfaceOpacity(opacity);
+  }
+  if (m_adapter != nullptr) m_adapter->setFillOpacity(opacity);
+  if (m_emptyCard != nullptr && !m_embedded) {
+    applyNotificationCardStyle(*m_emptyCard, contentScale(), opacity);
+    m_emptyCard->setPadding(Style::spaceLg * contentScale(), Style::spaceMd * contentScale());
+  }
+  if (m_list != nullptr) {
+    const auto updateRows = [opacity](const auto& self, Node& node) -> void {
+      if (auto* row = dynamic_cast<NotificationHistoryRow*>(&node)) row->setCardOpacity(opacity);
+      for (const auto& child : node.children()) self(self, *child);
+    };
+    updateRows(updateRows, *m_list);
   }
 }

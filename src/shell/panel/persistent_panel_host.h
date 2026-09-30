@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -89,6 +90,13 @@ private:
     bool fillWidth = false;
     bool fillHeight = false;
     bool pointerInside = false;
+    bool closing = false;
+    float reveal = 0.0F;
+    AnimationManager::Id revealAnimId = 0;
+    std::uint64_t closeEpoch = 0;
+    std::optional<std::string> reopenContext;
+    wl_output* reopenOutput = nullptr;
+    std::shared_ptr<void> alive = std::make_shared<int>(0);
   };
 
   void buildScene(Instance& instance, std::uint32_t width, std::uint32_t height);

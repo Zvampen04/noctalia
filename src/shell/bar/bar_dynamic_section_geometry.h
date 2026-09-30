@@ -1,11 +1,25 @@
 #pragma once
 
+#include "config/config_types.h"
+#include "shell/panel/attached_panel_context.h"
+
 #include <algorithm>
 #include <cstddef>
 #include <numeric>
 #include <vector>
 
 namespace noctalia::bar::dynamic_sections {
+
+  // Named-section anchors also determine which side an outward attached panel
+  // expands toward. Keep the stable section id for source lookup separately.
+  [[nodiscard]] inline AttachedPanelSourceSection sourceSection(BarCenterAlignment anchor) {
+    switch (anchor) {
+    case BarCenterAlignment::Start: return AttachedPanelSourceSection::Start;
+    case BarCenterAlignment::End: return AttachedPanelSourceSection::End;
+    case BarCenterAlignment::Center: return AttachedPanelSourceSection::Center;
+    }
+    return AttachedPanelSourceSection::Center;
+  }
 
   enum class LayoutRole { Free, Start, Center, End };
   enum class EdgePolicy { FollowCenter, Equidistant, Edge };
@@ -22,6 +36,22 @@ namespace noctalia::bar::dynamic_sections {
     float start = 0.0F;
     float end = 0.0F;
   };
+
+  [[nodiscard]] inline AttachedPanelSource compactSource(
+      const BarSectionConfig& section, Extent extent, float slotCross,
+      float contentWidth, float contentHeight, Radii radii, bool vertical
+  ) {
+    const float length = std::max(0.0F, extent.end - extent.start);
+    const float width = vertical ? slotCross : length;
+    const float height = vertical ? length : slotCross;
+    return {
+        .section = sourceSection(section.anchor), .sectionId = section.id,
+        .x = vertical ? section.crossOffset : extent.start,
+        .y = vertical ? extent.start : section.crossOffset,
+        .width = width, .height = height, .radii = radii,
+        .contentOffset = AttachedPanelSource::ContentOffset{
+            (width - contentWidth) * 0.5F, (height - contentHeight) * 0.5F}};
+  }
 
   // Opted-in named sections can use the same three-lane placement semantics
   // as the legacy bar. Free sections retain their explicit request verbatim.

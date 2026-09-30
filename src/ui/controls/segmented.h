@@ -5,6 +5,7 @@
 #include "ui/controls/segmented_indicator.h"
 #include "ui/palette.h"
 
+#include <array>
 #include <cstddef>
 #include <functional>
 #include <memory>
@@ -80,7 +81,7 @@ private:
   float m_scale = 1.0F;
   bool m_equalSegmentWidths = false;
   bool m_compact = false;
-  float m_outerPadding = 0.0F;
+  std::array<float, 4> m_outerPadding{};
   float m_surfaceOpacity = 1.0F;
   ColorRole m_surfaceRole = ColorRole::SurfaceVariant;
   bool m_enabled = true;

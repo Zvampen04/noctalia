@@ -45,6 +45,7 @@ private:
   RectNode* m_track = nullptr;
   RectNode* m_fill = nullptr;
   RectNode* m_thumb = nullptr;
+  RectNode* m_focusRing = nullptr;
   InputArea* m_inputArea = nullptr;
 
   std::function<void(double)> m_onValueChanged;

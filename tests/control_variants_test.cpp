@@ -1,12 +1,15 @@
 #include "ui/controls/button.h"
 #include "ui/controls/box.h"
 #include "ui/controls/scroll_view.h"
+#include "ui/controls/segmented.h"
+#include "ui/controls/slider.h"
 #include "ui/controls/checkbox.h"
 #include "ui/controls/toggle.h"
 #include "ui/controls/input.h"
 #include "ui/style.h"
 #include "render/animation/animation_manager.h"
 #include "render/scene/rect_node.h"
+#include "render/scene/input_area.h"
 #include <cmath>
 #include <cassert>
 int main() {
@@ -61,6 +64,49 @@ int main() {
       if (dynamic_cast<RectNode*>(child.get()) && child->width() == 120)
         finalEndpointVisible = child->x() == 30;
     assert(finalEndpointVisible);
+  }
+  {
+    Slider slider;
+    RectNode* track = nullptr;
+    RectNode* thumb = nullptr;
+    RectNode* focusRing = nullptr;
+    InputArea* inputArea = nullptr;
+    int rectIndex = 0;
+    for (const auto& child : slider.children()) {
+      if (auto* rect = dynamic_cast<RectNode*>(child.get())) {
+        if (rectIndex == 0) track = rect;
+        else if (rectIndex == 2) thumb = rect;
+        else if (rectIndex == 3) focusRing = rect;
+        ++rectIndex;
+      }
+      if (auto* area = dynamic_cast<InputArea*>(child.get())) inputArea = area;
+    }
+    assert(track != nullptr && thumb != nullptr && focusRing != nullptr && inputArea != nullptr);
+    slider.setThumbSize(0.0F);
+    assert(thumb->width() == 0.0F && !thumb->visible());
+    assert(inputArea->focusable() && inputArea->width() == slider.width());
+    inputArea->dispatchFocusGain();
+    assert(focusRing->visible() && focusRing->style().borderWidth == Style::focusRingWidth);
+    inputArea->dispatchFocusLoss();
+    assert(!focusRing->visible());
+    slider.setThumbSize(6.0F);
+    assert(thumb->width() == 6.0F && thumb->visible());
+  }
+  {
+    Segmented segmented;
+    segmented.setPadding(3.0F, 7.0F, 5.0F, 11.0F);
+    const auto original = Style::controls();
+    auto changed = original;
+    changed.segmented_indicator_inset += 1.0F;
+    Style::setControls(changed);
+    assert(segmented.paddingTop() == 3.0F && segmented.paddingRight() == 7.0F);
+    assert(segmented.paddingBottom() == 5.0F && segmented.paddingLeft() == 11.0F);
+    segmented.setPadding(4.0F, 8.0F);
+    changed.segmented_indicator_inset += 1.0F;
+    Style::setControls(changed);
+    assert(segmented.paddingTop() == 4.0F && segmented.paddingRight() == 8.0F);
+    assert(segmented.paddingBottom() == 4.0F && segmented.paddingLeft() == 8.0F);
+    Style::setControls(original);
   }
   {
     Button button;

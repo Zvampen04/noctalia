@@ -7,6 +7,7 @@
 #include "render/scene/node.h"
 #include "shell/bar/widget.h"
 #include "shell/bar/bar_island_morph_geometry.h"
+#include "shell/activity/transient_activity.h"
 #include "shell/panel/attached_panel_context.h"
 #include "ui/signal.h"
 #include "wayland/layer_surface.h"
@@ -67,6 +68,7 @@ struct DynamicBarSection {
   Node* activityContent = nullptr;
   Glyph* activityGlyph = nullptr;
   Label* activityTitle = nullptr;
+  Label* activityBody = nullptr;
   Label* activityValue = nullptr;
   ProgressBar* activityProgress = nullptr;
   Slider* activitySlider = nullptr;
@@ -77,6 +79,8 @@ struct DynamicBarSection {
   bool activityInheritsMaterial = true;
   bool activityMotionEnabled = false;
   std::uint64_t activitySerial = 0;
+  TransientActivityKind activityKind = TransientActivityKind::VolumeOutput;
+  TransientActivityRoute activityRoute;
 };
 
 struct BarInstance {
@@ -149,6 +153,7 @@ struct BarInstance {
 
   Signal<>::ScopedConnection paletteConn;
   std::optional<AttachedPanelGeometry> attachedPanelGeometry;
+  bool attachedPanelClosing = false;
   // Output of the current attached-panel reflow, in contentClip-local main-axis
   // coordinates. Paint, blur and input consume the same retained extents.
   std::array<AttachedPanelSource, 3> compactPanelSources{};
