@@ -32,6 +32,8 @@ The resulting fixes address:
   month layout. The recipe uses a single calendar card instead of squeezing an
   events column into the same space. Session action labels can wrap onto two
   centered lines rather than truncating the action name.
+- Settings titles use the space left by their controls and wrap onto two lines,
+  so long labels do not overlap override badges or reset actions.
 
 ## Verification
 

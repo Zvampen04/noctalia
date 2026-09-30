@@ -52,9 +52,19 @@ def backend(command, payload=None):
 def wait_panel(panel=None, context=None):
     requested_context = context
     context = {"calendar-strip": "calendar", "calendar-month": "calendar"}.get(context, context)
-    deadline = time.monotonic() + 60
+    deadline = time.monotonic() + 90
+    status = None
+    last_error = None
     while time.monotonic() < deadline:
-        status = json.loads(shell("status"))
+        try:
+            # Cold software rendering can stall the IPC server for many seconds.
+            # Bound each request and retry malformed or empty transient replies.
+            status = json.loads(user("timeout", "10s", "noctalia", "msg", "status"))
+            last_error = None
+        except Exception as error:
+            last_error = repr(error)
+            time.sleep(.25)
+            continue
         if status["activePanelId"] == panel and (context is None or status["activePanelContext"] == context):
             if requested_context == "calendar-strip":
                 layer = panel_layer()
@@ -67,7 +77,7 @@ def wait_panel(panel=None, context=None):
             else:
                 return
         time.sleep(.05)
-    raise AssertionError(status)
+    raise AssertionError(("panel did not settle", panel, requested_context, status, last_error))
 
 captures = []
 def capture(name):
@@ -151,10 +161,12 @@ def pointer(x, y, click=False):
 
 # These background fixtures distract from shell pixels. Stop them only in this
 # disposable guest; they remain part of the normal production configuration.
-user("systemctl", "--user", "stop", "hyprland-canvas-app-codex.service",
-     "codex-wallpaper-terminal-theme.path")
-user("hyprctl-lua", "keyword", "monitor", "Virtual-1,1600x1000@60,0x0,1")
+user("systemctl", "--user", "mask", "--runtime", "--now",
+     "hyprland-canvas-app-codex.service", "codex-wallpaper-terminal-theme.path",
+     "chatgpt-background.service", "chatgpt-theme-watch.service")
+machine.succeed("systemctl mask --runtime --now chatgpt-root.service")
 user("hyprctl-lua", "keyword", "monitor", "DVI-I-1,1024x768@60,1600x0,1")
+user("hyprctl-lua", "keyword", "monitor", "Virtual-1,1600x1000@60,0x0,1")
 user("hyprctl-lua", "dispatch", "focusmonitor", "Virtual-1")
 user("hyprctl-lua", "dispatch", "movecursor", "800", "500")
 user("pactl", "load-module", "module-null-sink", "sink_name=project1_vm",
@@ -171,6 +183,21 @@ assert not gallery["dirty"], "VM baseline has uncommitted appearance edits"
 backend("theme-preview", {"token": gallery["token"], "selected": "Project 1"})
 backend("theme-finish", {"token": gallery["token"], "action": "commit"})
 time.sleep(2)
+
+# Render the first attached panel before recording, so a cold virgl frame does
+# not make the review pass race a mapped but unpainted surface.
+shell("panel-open", "launcher")
+wait_panel("launcher")
+prewarm_deadline = time.monotonic() + 60
+while time.monotonic() < prewarm_deadline:
+    prewarm_layer = panel_layer()
+    if prewarm_layer is not None and prewarm_layer["h"] >= 150:
+        break
+    time.sleep(.2)
+else:
+    raise AssertionError(("launcher did not map during prewarm", prewarm_layer))
+time.sleep(1.5)
+close()
 
 # Record the ordinary feature pass and close tails, plus a bounded interrupted
 # replacement check. Keep real elapsed times; do not alter animation speed.
@@ -263,12 +290,14 @@ try:
     # Test theme-only transactions and usable-area round trips using the real
     # backend; every commit must leave the gallery clean.
     initial_camera = wait_camera_settled()
+    print("Project 1 camera baseline", initial_camera, flush=True)
     for name in ("Canvas", "Neumorphism", "Coder", "Sonder", "Project 1"):
         gallery = backend("theme-gallery")
         assert not gallery["dirty"], (name, gallery)
         backend("theme-preview", {"token": gallery["token"], "selected": name})
         backend("theme-finish", {"token": gallery["token"], "action": "commit"})
         camera = wait_camera_settled()
+        print("Theme camera", name, camera, flush=True)
         assert abs(camera["width"] / camera["height"] - 1.6) < .001, (name, camera)
         capture("theme-roundtrip-" + name.replace(" ", "-"))
     assert all(abs(camera[key] - initial_camera[key]) < 1 for key in initial_camera), (initial_camera, camera)

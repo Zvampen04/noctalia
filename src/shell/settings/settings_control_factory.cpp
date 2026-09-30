@@ -308,9 +308,13 @@ namespace settings {
         .gap = Style::spaceSm * scale,
         .fillWidth = true,
     });
-    titleRow->addChild(
-        makeLabel(entry.title, Style::fontSizeBody * scale, colorSpecFromRole(ColorRole::OnSurface), FontWeight::Bold)
-    );
+    auto title = makeLabel(entry.title, Style::fontSizeBody * scale,
+        colorSpecFromRole(ColorRole::OnSurface), FontWeight::Bold);
+    // The actions have fixed width. Give the title the remaining width and a
+    // two-line budget so long labels cannot paint through Override/Reset.
+    title->setFlexGrow(1.0F);
+    title->setMaxLines(2);
+    titleRow->addChild(std::move(title));
     if (entry.advanced) {
       titleRow->addChild(makeAdvancedBadge());
     }
@@ -325,8 +329,6 @@ namespace settings {
           colorSpecFromRole(ColorRole::OnSurfaceVariant), false
       ));
     }
-    titleRow->addChild(ui::spacer());
-
     ui::FlexProps copyProps{.align = FlexAlign::Start, .flexGrow = 1.0F};
     if (!isTemplateEnableTogglePath(entry.path)) {
       copyProps.gap = Style::spaceXs * scale;
