@@ -1909,6 +1909,11 @@ namespace settings {
         {"control_center", "calendar", "week_strip"}, ToggleSetting{cfg.controlCenter.calendarTab.weekStrip}, "compact week calendar"
     ));
     entries.push_back(makeEntry(
+        SettingsSection::ControlCenter, "calendar", "Events card", "Show the event list beside the month calendar.",
+        {"control_center", "calendar", "show_events_card"},
+        ToggleSetting{cfg.controlCenter.calendarTab.showEventsCard}, "calendar month events"
+    ));
+    entries.push_back(makeEntry(
         SettingsSection::ControlCenter, "calendar", "Compact panel width", "Logical panel width.",
         {"control_center", "calendar", "width"}, SliderSetting{cfg.controlCenter.calendarTab.width, 64, 1600, 1, true}, "compact dimension"
     ));

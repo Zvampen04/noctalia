@@ -23,10 +23,12 @@
 #include "render/scene/input_area.h"
 #include "shell/settings/settings_window.h"
 #include "core/deferred_call.h"
+#include "core/timer_manager.h"
 #include <xkbcommon/xkbcommon-keysyms.h>
 
 #include <algorithm>
 #include <cerrno>
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -37,6 +39,7 @@
 #include <print>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -424,6 +427,12 @@ void settingsCurveAndGroupedReset() {
       .isResetConfirmationPending = [](const auto&) { return true; },
   };
   settings::SettingsControlFactory factory(context);
+  const auto advancePreviewTimer = [] {
+    // SettingPreview coalesces pointer/key bursts on a 16 ms timer. Advance
+    // the same main-loop timer that production runs before checking live state.
+    std::this_thread::sleep_for(std::chrono::milliseconds(90));
+    TimerManager::instance().tick();
+  };
   // A real slider drag reaches the config before pointer release. Setting a
   // controlled value outside a drag must remain callback-free for persistence.
   {
@@ -443,6 +452,7 @@ void settingsCurveAndGroupedReset() {
     area->setFrameSize(200, 30);
     area->dispatchPress(10, 15, BTN_LEFT, true);
     slider->setValue(3.0);
+    advancePreviewTimer();
     check(slider->dragging() && service.config().shell.animation.speed == 3.0F,
         "Slider did not preview while the pointer is held");
     area->dispatchPress(10, 15, BTN_LEFT, false);
@@ -457,7 +467,8 @@ void settingsCurveAndGroupedReset() {
   auto control = factory.makeCurve(curve);
   auto* editor = dynamic_cast<BezierEditor*>(control.get());
   check(editor != nullptr, "Curve setting did not create the production BezierEditor");
-  const auto drainCurvePreview = [] {
+  const auto drainCurvePreview = [&] {
+    advancePreviewTimer();
     for (int pass = 0; pass < 4; ++pass) {
       auto callbacks = DeferredCall::takePending();
       if (callbacks.empty()) return;
@@ -1126,6 +1137,11 @@ void controlCenterPresentationOwnership() {
     paths.push_back({"control_center", field});
     check(noctalia::profile::owns(paths.back()), "Control-center presentation field is not profile-owned");
   }
+  const std::vector<std::string> calendarFields{"show_events_card", "month_width", "month_height"};
+  for (const auto& field : calendarFields) {
+    paths.push_back({"control_center", "calendar", field});
+    check(noctalia::profile::owns(paths.back()), "Calendar presentation field is not profile-owned");
+  }
   check(!noctalia::profile::owns({"control_center"})
       && !noctalia::profile::owns({"control_center", "calendar", "show_week_numbers"})
       && !noctalia::profile::owns({"control_center", "account"})
@@ -1138,6 +1154,9 @@ void controlCenterPresentationOwnership() {
       {{"control_center", "hidden_tabs"}, std::vector<std::string>{"media"}},
       {{"control_center", "show_shortcut_labels"}, false},
       {{"control_center", "show_session_button"}, false},
+      {{"control_center", "calendar", "show_events_card"}, false},
+      {{"control_center", "calendar", "month_width"}, std::int64_t{300}},
+      {{"control_center", "calendar", "month_height"}, std::int64_t{320}},
   };
   check(service.setOverrides(edits), service.lastMutationError());
   check(service.profilePreviewDirty(), "Control-center edit did not start a dirty preview");
@@ -1145,14 +1164,22 @@ void controlCenterPresentationOwnership() {
   for (const auto& field : fields)
     check(snapshot(service, "committed")["control_center"][field] == baseline[field],
         "Control-center preview persisted before Save");
+  for (const auto& field : calendarFields)
+    check(snapshot(service, "committed")["control_center"]["calendar"][field] == baseline["calendar"][field],
+        "Calendar presentation preview persisted before Save");
   check(draft["shortcuts"].empty() && draft["show_shortcut_labels"] == false
-      && draft["show_session_button"] == false && draft["width"] == 900,
+      && draft["show_session_button"] == false && draft["width"] == 900
+      && draft["calendar"]["show_events_card"] == false
+      && draft["calendar"]["month_width"] == 300 && draft["calendar"]["month_height"] == 320,
       "Control-center preview discarded explicit empty/false values");
   // This independent calendar option is written while presentation is a draft.
   check(service.setOverride({"control_center", "calendar", "show_week_numbers"}, true), service.lastMutationError());
   service.cancelProfilePreview();
   for (const auto& field : fields)
     check(snapshot(service)["control_center"][field] == baseline[field], "Cancel did not restore control-center presentation");
+  for (const auto& field : calendarFields)
+    check(snapshot(service)["control_center"]["calendar"][field] == baseline["calendar"][field],
+        "Cancel did not restore calendar presentation");
   check(service.config().controlCenter.calendarTab.showWeekNumbers, "Cancel reverted independent calendar data");
   check(service.setOverrides(edits), service.lastMutationError());
   check(service.commitProfilePreview(), service.lastMutationError());
@@ -1160,18 +1187,30 @@ void controlCenterPresentationOwnership() {
     ConfigService reopened;
     for (const auto& field : fields)
       check(snapshot(reopened)["control_center"][field] == draft[field], "Saved control-center presentation did not survive reopen");
+    for (const auto& field : calendarFields)
+      check(snapshot(reopened)["control_center"]["calendar"][field] == draft["calendar"][field],
+          "Saved calendar presentation did not survive reopen");
   }
   bool changed = false;
   check(service.clearOverrides(paths, &changed) && changed, "Cannot preview control-center Reset");
   for (const auto& field : fields)
     check(snapshot(service)["control_center"][field] == baseline[field], "Reset failed to reveal the control-center default");
+  for (const auto& field : calendarFields)
+    check(snapshot(service)["control_center"]["calendar"][field] == baseline["calendar"][field],
+        "Reset failed to reveal the calendar default");
   service.cancelProfilePreview();
   for (const auto& field : fields)
     check(snapshot(service)["control_center"][field] == draft[field], "Cancel Reset lost saved presentation");
+  for (const auto& field : calendarFields)
+    check(snapshot(service)["control_center"]["calendar"][field] == draft["calendar"][field],
+        "Cancel Reset lost saved calendar presentation");
   check(service.clearOverrides(paths, &changed) && service.commitProfilePreview(), service.lastMutationError());
   ConfigService reopened;
   for (const auto& field : fields)
     check(snapshot(reopened)["control_center"][field] == baseline[field], "Saved Reset did not persist inherited presentation");
+  for (const auto& field : calendarFields)
+    check(snapshot(reopened)["control_center"]["calendar"][field] == baseline["calendar"][field],
+        "Saved Reset did not persist inherited calendar presentation");
   check(reopened.config().controlCenter.calendarTab.showWeekNumbers, "Saved Reset discarded independent calendar data");
 }
 

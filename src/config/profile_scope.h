@@ -39,7 +39,8 @@ inline bool owns(const Path& path) {
   }
   if (path[0] == "control_center") {
     if (path[1] == "calendar") {
-      constexpr std::array fields{"week_strip", "center_today", "fade_edges", "width", "height"};
+      constexpr std::array fields{"week_strip", "center_today", "fade_edges", "width", "height",
+          "show_events_card", "month_width", "month_height"};
       return path.size() == 3 && std::ranges::find(fields, path[2]) != fields.end();
     }
     if (path[1] == "media") {
