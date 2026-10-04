@@ -3,10 +3,10 @@
 #include "compositors/compositor_detect.h"
 #include "config/atomic_file.h"
 #include "config/config_export.h"
-#include "config/profile_scope.h"
 #include "config/config_merge.h"
 #include "config/config_migrations.h"
 #include "config/config_validate.h"
+#include "config/profile_scope.h"
 #include "config/schema/config_schema.h"
 #include "config/schema/config_sections.h"
 #include "config/schema/engine.h"
@@ -14,6 +14,7 @@
 #include "core/build_info.h"
 #include "core/deferred_call.h"
 #include "core/log.h"
+#include "core/process/process.h"
 #include "core/scoped_timer.h"
 #include "i18n/i18n.h"
 #include "ipc/ipc_service.h"
@@ -1502,6 +1503,7 @@ void ConfigService::loadAll() {
     kLog.info("no config files found, using defaults");
     m_lastChange = ConfigChangeSet{};
     m_config = makeDefaultConfig();
+    process::setSystemdApplicationScopesEnabled(m_config.shell.launchAppsAsSystemdServices);
     m_configFileBarNames.clear();
     m_configFileMonitorOverrideNames.clear();
     m_configFileCalendarAccountNames.clear();
@@ -1560,6 +1562,7 @@ void ConfigService::loadAll() {
   if (semanticError.empty()) {
     m_lastChange = computeConfigChangeSet(m_config, nextConfig);
     m_config = std::move(nextConfig);
+    process::setSystemdApplicationScopesEnabled(m_config.shell.launchAppsAsSystemdServices);
     m_configFileBarNames = std::move(configFileBarNames);
     m_configFileMonitorOverrideNames = std::move(configFileMonitorOverrideNames);
     m_configFileCalendarAccountNames = std::move(configFileCalendarAccountNames);
@@ -1577,6 +1580,7 @@ void ConfigService::loadAll() {
   } else if (m_config.bars.empty()) {
     m_lastChange = ConfigChangeSet{};
     m_config = makeDefaultConfig();
+    process::setSystemdApplicationScopesEnabled(m_config.shell.launchAppsAsSystemdServices);
     m_configFileBarNames.clear();
     m_configFileMonitorOverrideNames.clear();
     m_configFileCalendarAccountNames.clear();

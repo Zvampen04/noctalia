@@ -48,6 +48,9 @@ namespace process {
     std::shared_ptr<std::atomic<bool>> cancel;
     // Child-only environment changes. `nullopt` unsets the variable.
     std::vector<EnvOverride> env;
+    // Internal service launchers already create an independent application
+    // unit. Ordinary async helpers use the configured application scope.
+    bool applicationScope = true;
   };
 
   [[nodiscard]] bool commandExists(const char* name);
@@ -99,6 +102,13 @@ namespace process {
   // Whether this process itself is managed by the systemd user manager, i.e. started as a user
   // unit (uwsm, a home-manager/NixOS service) rather than as a child of a login session scope.
   [[nodiscard]] bool runningUnderSystemdUserManager();
+  // Updated from the effective shell launch setting; synchronous core probes
+  // retain their existing process contract.
+  void setSystemdApplicationScopesEnabled(bool enabled) noexcept;
+  [[nodiscard]] bool systemdApplicationScopesEnabled() noexcept;
+  [[nodiscard]] std::vector<std::string>
+  prepareApplicationCommand(const std::vector<std::string>& args, bool enabled, bool userManaged);
+  [[nodiscard]] std::vector<std::string> prepareApplicationCommand(const std::vector<std::string>& args);
   [[nodiscard]] bool runAsyncAsSystemdService(
       const std::vector<std::string>& args, const std::string& appName, const std::string& activationToken = {},
       const std::string& workingDir = {}

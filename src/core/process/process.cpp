@@ -32,6 +32,7 @@ namespace {
 
   constexpr std::chrono::milliseconds kProcessPollInterval{100};
   constexpr std::chrono::milliseconds kProcessCommandLineCacheTtl{250};
+  std::atomic<bool> applicationScopesEnabled{false};
 
   void writePipeOrIgnore(int fd, const void* data, size_t len) {
     auto p = reinterpret_cast<const char*>(data);
@@ -675,6 +676,7 @@ namespace {
     systemdArgs.emplace_back("systemd-run");
     systemdArgs.emplace_back("--user");
     systemdArgs.emplace_back("--slice=app.slice");
+    systemdArgs.emplace_back("--expand-environment=no");
     // Only end the service when all subprocesses have exited. Otherwise, apps using a launcher
     // script, e.g. vscode, would end prematurely when the script exits, and the actual app process
     // is still running.
@@ -695,6 +697,7 @@ namespace {
     }
 
     process::RunOptions runOptions;
+    runOptions.applicationScope = false;
 
     if (!activationToken.empty()) {
       systemdArgs.emplace_back("-E");
@@ -792,7 +795,7 @@ namespace process {
     if (args.empty() || args.front().empty()) {
       return false;
     }
-    return doubleForkExecDetached(args, nullptr, activationToken, workingDir);
+    return doubleForkExecDetached(prepareApplicationCommand(args), nullptr, activationToken, workingDir);
   }
 
   bool runAsync(const std::vector<std::string>& args, RunCallbacks callbacks, RunOptions options) {
@@ -801,7 +804,8 @@ namespace process {
     }
 
     try {
-      std::thread([args, callbacks = std::move(callbacks), options]() mutable {
+      auto command = options.applicationScope ? prepareApplicationCommand(args) : args;
+      std::thread([args = std::move(command), callbacks = std::move(callbacks), options]() mutable {
         if (!callbacks.onExit) {
           options.maxOutputBytes = 0;
         }
@@ -993,6 +997,44 @@ namespace process {
 #else
     return false;
 #endif
+  }
+
+  void setSystemdApplicationScopesEnabled(bool enabled) noexcept {
+    applicationScopesEnabled.store(enabled, std::memory_order_relaxed);
+  }
+
+  bool systemdApplicationScopesEnabled() noexcept { return applicationScopesEnabled.load(std::memory_order_relaxed); }
+
+  std::vector<std::string>
+  prepareApplicationCommand(const std::vector<std::string>& args, bool enabled, bool userManaged) {
+    if (!enabled || !userManaged || args.empty() || args.front().empty()) {
+      return args;
+    }
+    // Scopes keep the caller's environment, working directory, argv and stdio.
+    // Reset inherited kernel-OOM protection before entering the ordinary app
+    // domain. Disable systemd's extra dollar expansion so argv stays literal.
+    // The scope executes the command and preserves its exit status.
+    std::vector<std::string> command = {
+        "choom",
+        "-n",
+        "200",
+        "--",
+        "systemd-run",
+        "--user",
+        "--scope",
+        "--collect",
+        "--quiet",
+        "--slice=app.slice",
+        "--expand-environment=no",
+        "--",
+    };
+    command.insert(command.end(), args.begin(), args.end());
+    return command;
+  }
+
+  std::vector<std::string> prepareApplicationCommand(const std::vector<std::string>& args) {
+    const bool enabled = systemdApplicationScopesEnabled();
+    return prepareApplicationCommand(args, enabled, enabled && runningUnderSystemdUserManager());
   }
 
   bool runAsyncAsSystemdService(

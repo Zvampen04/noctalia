@@ -241,6 +241,172 @@ namespace {
     );
   }
 
+  bool applicationScopePreservesArgvAndOptIn() {
+    const std::vector<std::string> args = {
+        "browser", "--unit=literal", "two words; $(literal)", "line\nbreak", "$1/$PWD/${NOCTALIA_LITERAL}/$$",
+    };
+    bool ok = expect(
+        process::prepareApplicationCommand(args, false, true) == args,
+        "disabled application isolation must preserve the original command"
+    );
+    ok = expect(
+             process::prepareApplicationCommand(args, true, false) == args,
+             "a shell outside the user manager must preserve its original launch path"
+         )
+        && ok;
+    auto expected = std::vector<std::string>{
+        "choom",
+        "-n",
+        "200",
+        "--",
+        "systemd-run",
+        "--user",
+        "--scope",
+        "--collect",
+        "--quiet",
+        "--slice=app.slice",
+        "--expand-environment=no",
+        "--",
+    };
+    expected.insert(expected.end(), args.begin(), args.end());
+    ok = expect(
+             process::prepareApplicationCommand(args, true, true) == expected,
+             "app scope must reset inherited protection and retain exact argument boundaries"
+         )
+        && ok;
+    ok = expect(process::prepareApplicationCommand({}, true, true).empty(), "empty argv must stay invalid") && ok;
+    process::setSystemdApplicationScopesEnabled(true);
+    ok = expect(
+             process::prepareApplicationCommand(args)
+                 == process::prepareApplicationCommand(args, true, process::runningUnderSystemdUserManager()),
+             "effective application policy must also require a managed user session"
+         )
+        && ok;
+    process::setSystemdApplicationScopesEnabled(false);
+    return ok;
+  }
+
+  bool scopedAsyncPreservesOutputAndExit() {
+    char directory[] = "/tmp/noctalia-app-scope-XXXXXX";
+    if (mkdtemp(directory) == nullptr) {
+      return expect(false, "could not create app scope fixture");
+    }
+    const std::filesystem::path fixture(directory);
+    const auto writeFixture = [&](const char* name, const char* script) {
+      const auto path = fixture / name;
+      std::ofstream(path) << script;
+      std::filesystem::permissions(path, std::filesystem::perms::owner_all);
+    };
+    // Broker fixtures validate the external CLI contract and then exec the
+    // untouched child. They need no real user bus or memory pressure.
+    writeFixture("choom", R"(#!/bin/sh
+test "$1" = -n && test "$2" = 200 && test "$3" = -- || exit 91
+shift 3
+exec "$@"
+)");
+    writeFixture("systemd-run", R"(#!/bin/sh
+for expected in --user --scope --collect --quiet --slice=app.slice --expand-environment=no --; do
+  test "$1" = "$expected" || exit 92
+  shift
+done
+exec "$@"
+)");
+    const char* oldPathRaw = std::getenv("PATH");
+    const bool hadOldPath = oldPathRaw != nullptr;
+    const std::string oldPath = hadOldPath ? oldPathRaw : "";
+    const std::string fixturePath = fixture.string() + ":" + oldPath;
+    const std::string payload = "--unit=literal; $(not executed)\n$1/$PWD/${NOCTALIA_LITERAL}/$$";
+    const auto command = process::prepareApplicationCommand(
+        {"/bin/sh", "-c", "printf '%s' \"$1\"; printf error >&2; exit 7", "--", payload}, true, true
+    );
+    std::mutex mutex;
+    std::condition_variable ready;
+    std::optional<process::RunResult> result;
+    std::string output;
+    std::string error;
+    process::RunCallbacks callbacks;
+    callbacks.stdOut = [&](std::string_view chunk) {
+      std::scoped_lock lock(mutex);
+      output.append(chunk);
+    };
+    callbacks.stdErr = [&](std::string_view chunk) {
+      std::scoped_lock lock(mutex);
+      error.append(chunk);
+    };
+    callbacks.onExit = [&](process::RunResult value) {
+      std::scoped_lock lock(mutex);
+      result = std::move(value);
+      ready.notify_one();
+    };
+    process::RunOptions options;
+    options.timeout = std::chrono::seconds(2);
+    options.maxOutputBytes = 5;
+    options.env.push_back({"PATH", fixturePath});
+    bool ok = expect(process::runAsync(command, std::move(callbacks), options), "scoped async command was rejected");
+    {
+      std::unique_lock lock(mutex);
+      ok = expect(
+               ready.wait_for(lock, std::chrono::seconds(5), [&] { return result.has_value(); }),
+               "scoped async result callback did not run"
+           )
+          && ok;
+      ok = expect(output == payload && error == "error", "scope wrapper changed stdout/stderr or argv") && ok;
+      if (result) {
+        ok = expect(result->exitCode == 7 && !result->timedOut, "scope wrapper changed the child exit status") && ok;
+        ok = expect(result->out == "--uni" && result->outTruncated, "scope wrapper lost the output limit") && ok;
+        ok = expect(result->err == "error" && !result->errTruncated, "scope wrapper changed stderr capture") && ok;
+      }
+    }
+
+    const auto detachedOutput = fixture / "launch-environment";
+    ::setenv("PATH", fixturePath.c_str(), 1);
+    const auto syncResult = process::runSyncWithTimeoutAndOutputLimit(command, std::chrono::seconds(2), 5);
+    ok = expect(
+             syncResult.exitCode == 7
+                 && syncResult.out == "--uni"
+                 && syncResult.outTruncated
+                 && syncResult.err == "error"
+                 && !syncResult.timedOut,
+             "scoped synchronous helper lost its exit status or output limit"
+         )
+        && ok;
+    const auto timeoutCommand =
+        process::prepareApplicationCommand({"/bin/sh", "-c", "printf abcdefgh; exec sleep 10"}, true, true);
+    const auto timeoutResult = process::runSyncWithTimeoutAndOutputLimit(timeoutCommand, std::chrono::seconds(1), 5);
+    ok = expect(
+             timeoutResult.timedOut && timeoutResult.out == "abcde" && timeoutResult.outTruncated,
+             "scoped synchronous helper lost its timeout or output limit"
+         )
+        && ok;
+    const auto detachedCommand = process::prepareApplicationCommand(
+        {"/bin/sh", "-c",
+         "printf '%s/%s/%s' \"$XDG_ACTIVATION_TOKEN\" \"$DESKTOP_STARTUP_ID\" \"$PWD\" > launch-environment"},
+        true, true
+    );
+    ok = expect(
+             process::runAsync(detachedCommand, "launch token", fixture.string()), "scoped detached launch was rejected"
+         )
+        && ok;
+    if (hadOldPath) {
+      ::setenv("PATH", oldPath.c_str(), 1);
+    } else {
+      ::unsetenv("PATH");
+    }
+    std::string environment;
+    const std::string expectedEnvironment = "launch token/launch token/" + fixture.string();
+    for (int attempt = 0; attempt < 100; ++attempt) {
+      std::ifstream input(detachedOutput);
+      environment.assign(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+      if (environment == expectedEnvironment) {
+        break;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    ok = expect(environment == expectedEnvironment, "scope wrapper lost activation tokens or working directory") && ok;
+    std::filesystem::remove_all(fixture);
+    return ok;
+  }
+
 } // namespace
 
 int main() {
@@ -254,5 +420,7 @@ int main() {
   ok = detachedMissingBinaryReturnsFalse() && ok;
   ok = commandExistsRejectsDirectories() && ok;
   ok = cgroupDetectsSystemdUserManager() && ok;
+  ok = applicationScopePreservesArgvAndOptIn() && ok;
+  ok = scopedAsyncPreservesOutputAndExit() && ok;
   return ok ? 0 : 1;
 }

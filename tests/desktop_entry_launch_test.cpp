@@ -2,6 +2,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <gio/gdesktopappinfo.h>
 #include <print>
 #include <string>
 #include <sys/stat.h>
@@ -78,6 +79,52 @@ namespace {
 
 int main() {
   bool ok = true;
+
+  GKeyFile* keyFile = g_key_file_new();
+  const std::string desktopData = "[Desktop Entry]\nType=Application\nName=Test Calendar\n"
+                                  "Exec=/bin/sh -c \"printf calendar\" -- %U\nTerminal=true\n"
+                                  "Path=/tmp\nDBusActivatable=true\n";
+  g_key_file_load_from_data(keyFile, desktopData.data(), desktopData.size(), G_KEY_FILE_NONE, nullptr);
+  GDesktopAppInfo* appInfo = g_desktop_app_info_new_from_keyfile(keyFile);
+  g_key_file_unref(keyFile);
+  const auto defaultEntry = desktop_entry_launch::desktopEntryForAppInfo(G_APP_INFO(appInfo));
+  if (appInfo != nullptr) {
+    g_object_unref(appInfo);
+  }
+  ok = expect(defaultEntry.has_value(), "default MIME handler should resolve to an entry") && ok;
+  if (defaultEntry) {
+    ok = expect(defaultEntry->terminal, "default handler's terminal requirement was lost") && ok;
+    ok = expect(defaultEntry->workingDir == "/tmp", "default handler's working directory was lost") && ok;
+    ok = expect(defaultEntry->dbusActivatable, "default handler's D-Bus handoff metadata was lost") && ok;
+    ok =
+        expectArgs(
+            desktop_entry_launch::prepareCommand(defaultEntry->exec, false), {"/bin/sh", "-c", "printf calendar", "--"},
+            "default handler's Exec quoting and field codes should use normal desktop-entry preparation"
+        )
+        && ok;
+  }
+
+  const std::string dbusOnlyPath = makeExecutableFixtureNamed("org.example.TestCalendar.desktop");
+  if (FILE* file = std::fopen(dbusOnlyPath.c_str(), "w")) {
+    std::fputs("[Desktop Entry]\nType=Application\nName=Test Calendar\nDBusActivatable=true\n", file);
+    std::fclose(file);
+  }
+  GDesktopAppInfo* dbusOnlyInfo = g_desktop_app_info_new_from_filename(dbusOnlyPath.c_str());
+  const auto dbusOnlyEntry = desktop_entry_launch::desktopEntryForAppInfo(G_APP_INFO(dbusOnlyInfo));
+  if (dbusOnlyInfo != nullptr) {
+    g_object_unref(dbusOnlyInfo);
+  }
+  ok = expect(dbusOnlyEntry.has_value(), "a D-Bus-only MIME handler must retain its handoff entry") && ok;
+  if (dbusOnlyEntry) {
+    ok = expect(
+             dbusOnlyEntry->id == "org.example.TestCalendar" && dbusOnlyEntry->dbusActivatable,
+             "a D-Bus-only MIME handler lost its bus identity or activation flag"
+         )
+        && ok;
+    ok = expect(dbusOnlyEntry->exec.empty(), "a D-Bus-only MIME handler must not invent an Exec command") && ok;
+  }
+  std::remove(dbusOnlyPath.c_str());
+  rmdir(dirnameOf(dbusOnlyPath).c_str());
 
   ok = expectArgs(
            desktop_entry_launch::prepareCommand("Telegram -- %U", false), {"Telegram", "--"},

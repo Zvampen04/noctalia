@@ -18,6 +18,7 @@
   libxkbcommon,
   sdbus-cpp_2,
   systemd,
+  util-linux,
   pipewire,
   pam,
   curl,
@@ -71,7 +72,13 @@ lib.warnIf cudaSupport
 
     postFixup = ''
       wrapProgram $out/bin/noctalia \
-        --prefix PATH : ${lib.makeBinPath [ git ]} \
+        --prefix PATH : ${
+          lib.makeBinPath [
+            git
+            systemd
+            util-linux
+          ]
+        } \
         --prefix XDG_DATA_DIRS : "${glib.getSchemaDataDirPath gsettings-desktop-schemas}"
 
       $out/bin/noctalia completions bash | install -D /dev/stdin $out/share/bash-completion/completions/noctalia
@@ -132,7 +139,7 @@ lib.warnIf cudaSupport
     buildPhase = ''
       runHook preBuild
       if ninja -t targets all | grep '^material_preview_test:' >/dev/null; then
-        ninja -j"$NIX_BUILD_CORES" noctalia slider_preview_test material_preview_test
+        ninja -j"$NIX_BUILD_CORES" noctalia slider_preview_test material_preview_test process_test plugin_process_test desktop_entry_launch_test
       else
         # The greeter derives this package with the shell test suite disabled.
         ninja -j"$NIX_BUILD_CORES"
@@ -142,7 +149,7 @@ lib.warnIf cudaSupport
     doCheck = true;
     checkPhase = ''
       runHook preCheck
-      meson test --no-rebuild --print-errorlogs slider_preview material_preview
+      meson test --no-rebuild --print-errorlogs slider_preview material_preview process plugin_process desktop_entry_launch
       runHook postCheck
     '';
     installPhase = ''

@@ -1,12 +1,14 @@
 #pragma once
 
+#include "system/desktop_entry.h"
+
+#include <gio/gio.h>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 
 struct DesktopAction;
-struct DesktopEntry;
 
 namespace desktop_entry_launch {
 
@@ -36,6 +38,9 @@ namespace desktop_entry_launch {
 
   // Launches the configured MIME handler without passing a file or URI.
   [[nodiscard]] bool launchDefaultForMimeType(std::string_view mimeType);
+  // Retain the default handler's Exec, Terminal, Path and D-Bus metadata when
+  // routing it through the same application policy as launcher entries.
+  [[nodiscard]] std::optional<DesktopEntry> desktopEntryForAppInfo(GAppInfo* appInfo);
 
   [[nodiscard]] bool launchEntry(const DesktopEntry& entry, const LaunchOptions& options = {});
 

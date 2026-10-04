@@ -81,6 +81,7 @@ xkbcommon_dep       = dependency('xkbcommon')
 glib_dep            = dependency('glib-2.0')
 gobject_dep         = dependency('gobject-2.0')
 gio_dep             = dependency('gio-2.0')
+gio_unix_dep        = dependency('gio-unix-2.0')
 libsecret_dep       = dependency('libsecret-1', version: '>=0.20')
 libsodium_dep       = dependency('libsodium', version: '>=1.0.18')
 polkit_agent_dep    = dependency('polkit-agent-1')
@@ -1071,6 +1072,7 @@ _noctalia_system_dependencies = [
   glib_dep,
   gobject_dep,
   gio_dep,
+  gio_unix_dep,
   libsecret_dep,
   libsodium_dep,
   polkit_agent_dep,

@@ -7,6 +7,7 @@
 #include "util/file_utils.h"
 
 #include <chrono>
+#include <gio/gdesktopappinfo.h>
 #include <gio/gio.h>
 #include <map>
 #include <mutex>
@@ -305,12 +306,60 @@ namespace desktop_entry_launch {
     return PreparedCommand{std::move(args)};
   }
 
+  std::optional<DesktopEntry> desktopEntryForAppInfo(GAppInfo* appInfo) {
+    if (appInfo == nullptr) {
+      return std::nullopt;
+    }
+    const char* command = g_app_info_get_commandline(appInfo);
+    DesktopEntry entry;
+    if (command != nullptr) {
+      entry.exec = command;
+    }
+    if (const char* id = g_app_info_get_id(appInfo)) {
+      entry.id = id;
+      if (entry.id.ends_with(".desktop")) {
+        entry.id.resize(entry.id.size() - std::string_view(".desktop").size());
+      }
+    }
+    if (const char* name = g_app_info_get_display_name(appInfo)) {
+      entry.name = name;
+    }
+    if (G_IS_DESKTOP_APP_INFO(appInfo)) {
+      auto* desktopInfo = G_DESKTOP_APP_INFO(appInfo);
+      entry.terminal = g_desktop_app_info_get_boolean(desktopInfo, "Terminal");
+      entry.dbusActivatable = g_desktop_app_info_get_boolean(desktopInfo, "DBusActivatable");
+      if (const char* path = g_desktop_app_info_get_filename(desktopInfo)) {
+        entry.path = path;
+      }
+      if (char* workingDir = g_desktop_app_info_get_string(desktopInfo, "Path")) {
+        entry.workingDir = workingDir;
+        g_free(workingDir);
+      }
+    }
+    // An already-running D-Bus-only handler can still accept Activate. Keep
+    // its identity so launchEntry tries that handoff before preparing Exec.
+    if (entry.exec.empty() && !entry.dbusActivatable) {
+      return std::nullopt;
+    }
+    return entry;
+  }
+
   bool launchDefaultForMimeType(std::string_view mimeType) {
     const std::string mimeTypeText(mimeType);
     GAppInfo* appInfo = g_app_info_get_default_for_type(mimeTypeText.c_str(), FALSE);
     if (appInfo == nullptr) {
       kLog.warn("no default application set for MIME type '{}'", mimeType);
       return false;
+    }
+
+    if (process::systemdApplicationScopesEnabled() && process::runningUnderSystemdUserManager()) {
+      auto entry = desktopEntryForAppInfo(appInfo);
+      g_object_unref(appInfo);
+      if (!entry) {
+        kLog.warn("default application for MIME type '{}' has no launch command", mimeType);
+        return false;
+      }
+      return launchEntry(*entry, LaunchOptions{.runAsSystemdService = true});
     }
 
     GError* error = nullptr;

@@ -70,8 +70,8 @@ void DmenuProvider::ensureLoaded() const {
   if (m_entry.command.empty()) {
     return;
   }
-  const auto result =
-      process::runSyncWithTimeoutAndOutputLimit({"/bin/sh", "-lc", m_entry.command}, kCommandTimeout, kMaxOutputBytes);
+  const auto command = process::prepareApplicationCommand({"/bin/sh", "-lc", m_entry.command});
+  const auto result = process::runSyncWithTimeoutAndOutputLimit(command, kCommandTimeout, kMaxOutputBytes);
   if (!result) {
     kLog.warn("[{}] command failed (exit {})", m_entry.id, result.exitCode);
     return;

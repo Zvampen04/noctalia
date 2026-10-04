@@ -2019,6 +2019,7 @@ bool LuauHost::startAsyncProcess(std::vector<std::string> args, int callbackRef,
     return false;
   }
   try {
+    args = process::prepareApplicationCommand(args);
     std::thread([hostId = m_hostId, callbackRef, args = std::move(args), timeout,
                  handler = std::move(handler)]() mutable {
       auto result = process::runSyncWithTimeoutAndOutputLimit(args, timeout, kMaxAsyncCommandOutputBytes);
