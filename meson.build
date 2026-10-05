@@ -1144,6 +1144,21 @@ noctalia_exe = executable('noctalia',
   install: true,
 )
 
+# Keep IPC command startup independent of the shell's dynamic-library closure.
+# These are the same parser, help renderer and socket implementation used above.
+noctalia_msg_exe = executable('noctalia-msg',
+  sources: files(
+    'src/ipc/msg_main.cpp',
+    'src/ipc/cli.cpp',
+    'src/ipc/ipc_client.cpp',
+    'src/cli/help.cpp',
+  ),
+  dependencies: [nlohmann_dep],
+  include_directories: include_directories('src'),
+  cpp_args: ['-Wall', '-Wextra', '-Wno-missing-field-initializers', '-Wpedantic', '-Wconversion', '-Wshadow'],
+  install: true,
+)
+
 install_subdir('assets',
   install_dir: get_option('datadir') / 'noctalia',
   exclude_files: ['dev.noctalia.Noctalia.desktop'],
@@ -1389,6 +1404,18 @@ if build_tests
     depends: noctalia_exe,
     workdir: meson.current_source_dir(),
     env: config_validate_env,
+  )
+
+  python_program = find_program('python3')
+  test('ipc_msg_client',
+    python_program,
+    args: [
+      meson.current_source_dir() / 'tests/ipc_msg_client_test.py',
+      noctalia_msg_exe.full_path(),
+      noctalia_exe.full_path(),
+    ],
+    depends: [noctalia_msg_exe, noctalia_exe],
+    timeout: 30,
   )
 
   bash_program = find_program('bash')

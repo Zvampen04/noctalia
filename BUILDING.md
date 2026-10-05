@@ -202,10 +202,20 @@ Meson installs the binary and shipped assets using the normal prefix layout:
 
 ```text
 /usr/local/bin/noctalia
+/usr/local/bin/noctalia-msg
 /usr/local/share/noctalia/assets/...
 ```
 
 Noctalia needs the shipped `assets/` tree at runtime. Copying only the `noctalia` binary is not enough.
+
+`noctalia-msg status` and `noctalia-msg panel-toggle launcher` provide the same IPC commands as
+`noctalia msg status` and `noctalia msg panel-toggle launcher`. The small executable shares the existing parser,
+help renderer and socket code, but links only the C++ runtime and header-only JSON dependency, so shortcuts
+do not load the shell's graphics, audio and service libraries. The full `noctalia msg` interface remains available.
+Build this target explicitly with `meson compile -C build noctalia-msg` when building selected targets.
+The `ipc_msg_client` test compares both clients through private Unix sockets, including command payloads,
+caller working directory, replies and the existing two-second socket timeout. This reduces startup work;
+it does not guarantee latency when the kernel or storage stalls.
 
 Firefox theming uses the built-in template `post_action = "firefox-theme"` (same pattern as
 `kde-color-scheme`) plus the [Pywalfox](https://addons.mozilla.org/en-US/firefox/addon/pywalfox/)
