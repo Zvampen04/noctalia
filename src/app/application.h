@@ -360,6 +360,8 @@ private:
   ColorPickerDialogPopup m_colorPickerDialogPopup;
   GlyphPickerDialogPopup m_glyphPickerDialogPopup;
   FileDialogPopup m_fileDialogPopup;
+  // Disconnect publication updates before the UI owners are destroyed.
+  Signal<>::ScopedConnection m_desktopEntriesConn;
 
   // Poll sources (must outlive MainLoop)
   std::unique_ptr<SessionBusPollSource> m_busPollSource;

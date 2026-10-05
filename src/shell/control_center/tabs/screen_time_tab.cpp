@@ -757,7 +757,8 @@ void ScreenTimeTab::syncContent(Renderer& renderer) {
       !m_detailDayKey.empty() ? m_screenTime->snapshotForDay(m_detailDayKey) : m_screenTime->snapshot(m_rangeDays);
   assignSnapshotColors(snapshot);
   m_bucketDayKeys = snapshot.bucketDayKeys;
-  const std::string key = snapshotKey(m_rangeDays, snapshot) + '|' + m_detailDayKey;
+  const std::string key =
+      snapshotKey(m_rangeDays, snapshot) + '|' + m_detailDayKey + '|' + std::to_string(desktopEntriesVersion());
   if (key == m_lastSnapshotKey) {
     return;
   }

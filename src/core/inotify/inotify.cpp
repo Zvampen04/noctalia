@@ -24,7 +24,7 @@ Inotify::~Inotify() {
   ::close(m_inotifyFd);
 }
 
-std::optional<int> Inotify::watch(const std::filesystem::path& path, Inotify::WatchMask mask) noexcept {
+std::optional<int> Inotify::watch(const std::filesystem::path& path, Inotify::WatchMask mask) {
   if (m_inotifyFd < 0)
     return std::nullopt;
 
@@ -35,7 +35,14 @@ std::optional<int> Inotify::watch(const std::filesystem::path& path, Inotify::Wa
     kLog.warn("failed to watch directory '{}'", dir);
     return std::nullopt;
   }
-  m_watchDescriptors.insert(wd);
+  try {
+    m_watchDescriptors.insert(wd);
+  } catch (...) {
+    // A successful kernel watch must not become untracked when allocation of
+    // its userspace descriptor fails. Let the caller retain its last good data.
+    (void)::inotify_rm_watch(m_inotifyFd, wd);
+    throw;
+  }
 
   return wd;
 }
@@ -64,9 +71,8 @@ void Inotify::drain(std::optional<Callback> global_callback) noexcept {
       if ((event->mask & IN_IGNORED) != 0) {
         // watch was removed somehow => remove watch id
         m_watchDescriptors.erase(event->wd);
-      } else if (
-          global_callback.has_value() && ((event->mask & IN_Q_OVERFLOW) != 0 || m_watchDescriptors.contains(event->wd))
-      ) {
+      } else if (global_callback.has_value()
+                 && ((event->mask & IN_Q_OVERFLOW) != 0 || m_watchDescriptors.contains(event->wd))) {
         (*global_callback)(event);
       }
 

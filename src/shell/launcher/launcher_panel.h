@@ -3,7 +3,7 @@
 #include "launcher/launcher_provider.h"
 #include "launcher/usage_tracker.h"
 #include "shell/panel/panel.h"
-#include "system/icon_resolver.h"
+#include "system/async_icon_resolver.h"
 #include "ui/signal.h"
 
 #include <cstddef>
@@ -106,7 +106,7 @@ private:
   std::vector<LauncherResult> m_results;
   std::vector<LauncherResult> m_allResults;
   UsageTracker m_usageTracker;
-  IconResolver m_iconResolver;
+  AsyncIconResolver m_iconResolver;
 
   Flex* m_container = nullptr;
   Input* m_input = nullptr;
@@ -141,5 +141,7 @@ private:
   AsyncTextureCache* m_asyncTextures = nullptr;
   std::unique_ptr<ContextMenuPopup> m_actionsMenu;
   Signal<>::ScopedConnection m_appIconColorizeConn;
+  Signal<>::ScopedConnection m_desktopEntriesConn;
+  std::shared_ptr<int> m_lifetime = std::make_shared<int>(0);
   std::function<void()> m_onCopiedActivation;
 };

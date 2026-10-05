@@ -90,6 +90,31 @@ The plugin system is available for user-installed extensions. Features that are 
 to the core shell can live there: extra bar widgets, launcher providers, desktop widgets, panels, shortcuts, background
 services, compositor-specific extras, hardware-specific controls, and third-party service integrations.
 
+Application catalog updates and launcher icon metadata run on owned background workers. Opening the launcher uses the
+last published catalog immediately, with text and fallback glyphs while icon lookup completes. Visible tiles and
+overscan request icons; the icon worker retains at most 128 current-generation pending requests (including completed
+results awaiting adoption), plus at most one obsolete executing lookup, and 512 cached positive or negative results.
+Theme and catalog updates invalidate this cache. Closing the launcher cancels pending adoption, and callbacks cannot
+access a destroyed view. Catalog refresh requests coalesce, and
+Nix profile changes, desktop-file filtering and language changes remain part of background catalog refresh.
+Missing absolute icon paths can be retried on a later visible-tile bind after one second, including when a generic
+application icon was used as their fallback. Failed metadata lookups also retry on a later bind after one second;
+ordinary missing named icons stay cached until theme or catalog invalidation.
+
+Launcher usage history also loads and saves on one owned worker. Getters read cached state; early activations merge
+aggregated count changes and at most 20 recent identifiers per provider with the original history before saving.
+Clearing history suppresses late initial data. Saves retain one active and one latest pending snapshot; shutdown
+attempts to flush the latest accepted state before joining. Existing unreadable history is retained rather than
+replaced with an empty baseline. Each JSON file is replaced atomically with private permissions; the two files are
+not a joint transaction, and failed IO can still prevent persistence.
+
+Periodic icon-theme metadata checks also run off the main event loop. Shared theme state is published under a short
+lock after filesystem work completes. Each check owns a separate GSettings instance and private event context;
+cleanup dispatches outstanding settings callbacks until the instance is finalized before releasing that context.
+Workers are joined during shutdown; an already executing kernel filesystem operation can delay that join. These
+changes keep catalog refresh and launcher icon lookup off the main event loop, but do not guarantee responsiveness
+during every kernel, compositor or storage failure.
+
 ## Build from source
 
 Source dependencies, distro-specific package commands, build modes, and install layouts live in

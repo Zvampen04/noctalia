@@ -5,17 +5,17 @@
 
 class DesktopEntryPollSource final : public PollSource {
 public:
-  // Prime the cache on the main thread and refresh it eagerly on change, so
-  // worker-thread desktopEntriesSnapshot() readers see a populated, current
-  // list even when no main-thread widget consumes desktopEntries().
+  // Construct the catalog and queue its initial scan. The first snapshot may
+  // be empty; completed scans are adopted here without filesystem I/O.
   DesktopEntryPollSource() { desktopEntries(); }
 
   void dispatch(const std::vector<pollfd>& fds, std::size_t startIdx) override {
-    if (desktopEntryWatchFd() >= 0 && (fds[startIdx].revents & POLLIN) != 0) {
+    if (desktopEntryWatchFd() < 0 || (fds[startIdx].revents & POLLIN) != 0) {
       checkDesktopEntryReload();
-      desktopEntries();
     }
   }
+
+  [[nodiscard]] int pollTimeoutMs() const override { return desktopEntryWatchFd() < 0 ? 250 : -1; }
 
 protected:
   void doAddPollFds(std::vector<pollfd>& fds) override {

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <!-- Private native-test schema. The test process uses the memory backend. -->
+  <schema id="org.gnome.desktop.interface" path="/org/gnome/desktop/interface/">
+    <key name="icon-theme" type="s">
+      <default>'hicolor'</default>
+    </key>
+  </schema>
+</schemalist>

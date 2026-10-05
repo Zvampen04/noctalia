@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ui/signal.h"
+
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -63,7 +65,7 @@ const std::vector<DesktopEntry>& desktopEntries();
 
 // Shared snapshot of the current entry list, safe to call from non-main
 // threads (e.g. plugin script workers). Does not trigger a refresh —
-// freshness is owned by the main thread's reload path.
+// freshness is owned by the main thread's completion-adoption path.
 std::shared_ptr<const std::vector<DesktopEntry>> desktopEntriesSnapshot();
 
 std::uint64_t desktopEntriesVersion();
@@ -71,7 +73,9 @@ void setDesktopEntryLanguage(std::string_view language);
 int desktopEntryWatchFd() noexcept;
 void checkDesktopEntryReload();
 
-// Cheaply re-stat the resolved XDG application source directories and mark the
-// cache dirty only if they changed. Catches Nix profile-generation symlink
-// swaps that inotify cannot see (the watched store path is immutable).
+// Main-thread publication notification. Keep a ScopedConnection in subscribers.
+Signal<>& desktopEntriesChanged();
+
+// Queue a coalesced background source check, including resolved Nix profile
+// directories. Getters keep the last completed snapshot while I/O is pending.
 void refreshDesktopEntriesIfSourcesChanged();

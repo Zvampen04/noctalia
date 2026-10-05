@@ -803,6 +803,13 @@ void Application::reconcileOutputSurfaces() {
 void Application::initWaylandCallbacks() {
   auto shouldRefreshControlCenter = [this]() { return m_panelManager.isOpenPanel("control-center"); };
 
+  m_desktopEntriesConn = desktopEntriesChanged().connect([this]() {
+    // Idle surfaces must observe the newly published catalog version too.
+    m_bar.refresh();
+    m_dock.refresh();
+    m_panelManager.refresh();
+  });
+
   m_wayland.setOutputChangeCallback([this]() {
     if (m_syncScriptApiOutputs) {
       m_syncScriptApiOutputs();

@@ -1,17 +1,30 @@
 #pragma once
 
-#include <deque>
+#include <cstddef>
+#include <functional>
+#include <memory>
 #include <string>
 #include <string_view>
-#include <unordered_map>
 
-// Tracks how many times each launcher result has been activated.
-// Providers that opt in via LauncherProvider::trackUsage() get their results
-// score-boosted based on activation history, surfacing frequently used entries.
+// Main-thread usage/ranking state. One owned worker reads the initial history
+// and coalesces saves into one active and one latest pending immutable snapshot.
 class UsageTracker {
 public:
-  UsageTracker();
+  struct IoHooks {
+    // Private-instance native tests may gate the real read/write. Production
+    // leaves these empty; no process-global or user-state test hook is installed.
+    std::function<void()> beforeLoad;
+    std::function<void()> beforeSave;
+  };
 
+  UsageTracker();
+  explicit UsageTracker(std::string stateDirectory, IoHooks hooks = {});
+  ~UsageTracker();
+  UsageTracker(const UsageTracker&) = delete;
+  UsageTracker& operator=(const UsageTracker&) = delete;
+
+  void setLoadedCallback(std::function<void()> callback);
+  [[nodiscard]] bool loaded() const;
   void record(std::string_view providerId, std::string_view resultId);
   void clear();
   [[nodiscard]] int getCount(std::string_view providerId, std::string_view resultId);
@@ -19,13 +32,6 @@ public:
   [[nodiscard]] std::size_t getRecentlyUsedCount(std::string_view providerId);
 
 private:
-  void ensureLoaded();
-  void save() const;
-
-  std::string m_usageCountsPath;
-  std::string m_recentlyUsedPath;
-  bool m_loaded = false;
-  std::unordered_map<std::string, std::unordered_map<std::string, int>> m_counts;
-  std::unordered_map<std::string, std::deque<std::string>> m_recentlyUsed;
-  std::unordered_map<std::string, std::unordered_map<std::string, int>> m_recentlyUsedIndex;
+  struct Impl;
+  std::unique_ptr<Impl> m_impl;
 };

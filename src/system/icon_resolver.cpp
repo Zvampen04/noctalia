@@ -5,6 +5,7 @@
 #include "util/string_utils.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono> // IWYU pragma: keep
 #include <cstdlib>
 #include <filesystem>
@@ -190,50 +191,71 @@ namespace {
     return signature;
   }
 
-  struct GSettingsDeleter {
-    void operator()(GSettings* settings) const {
-      if (settings != nullptr) {
-        g_object_unref(settings);
-      }
-    }
-  };
-
-  GSettings* iconSettings() {
-    static std::unique_ptr<GSettings, GSettingsDeleter> settings = []() {
+  // GSettings is not thread-safe. Each check creates and destroys its own
+  // instance in this thread, and dispatches signals only on its private context.
+  // Keep no idle per-thread object that could accumulate queued backend updates.
+  struct IconSettings {
+    IconSettings() {
+      g_main_context_push_thread_default(context);
       GSettingsSchemaSource* source = g_settings_schema_source_get_default();
       if (source == nullptr) {
-        return std::unique_ptr<GSettings, GSettingsDeleter>{nullptr};
+        return;
       }
-
       GSettingsSchema* schema = g_settings_schema_source_lookup(source, "org.gnome.desktop.interface", TRUE);
       if (schema == nullptr) {
-        return std::unique_ptr<GSettings, GSettingsDeleter>{nullptr};
+        return;
       }
-
       const bool hasIconThemeKey = g_settings_schema_has_key(schema, "icon-theme") != FALSE;
       g_settings_schema_unref(schema);
-      if (!hasIconThemeKey) {
-        return std::unique_ptr<GSettings, GSettingsDeleter>{nullptr};
+      if (hasIconThemeKey) {
+        settings = g_settings_new("org.gnome.desktop.interface");
+        g_object_weak_ref(
+            G_OBJECT(settings),
+            [](gpointer data, GObject*) { static_cast<IconSettings*>(data)->finalized.store(true); }, this
+        );
       }
+    }
 
-      return std::unique_ptr<GSettings, GSettingsDeleter>{g_settings_new("org.gnome.desktop.interface")};
-    }();
-    return settings.get();
-  }
+    ~IconSettings() {
+      if (settings != nullptr) {
+        g_object_unref(settings);
+        // A backend can retain its target before attaching the callback source.
+        // Merely draining currently pending sources could orphan that late
+        // callback. Keep this context acquired until the last target ref drops.
+        while (!finalized.load()) {
+          if (!g_main_context_iteration(context, FALSE)) {
+            g_usleep(1000);
+          }
+        }
+      }
+      g_main_context_pop_thread_default(context);
+      g_main_context_unref(context);
+    }
+
+    void dispatchPending() const {
+      while (g_main_context_pending(context)) {
+        (void)g_main_context_iteration(context, FALSE);
+      }
+    }
+
+    GMainContext* context = g_main_context_new();
+    GSettings* settings = nullptr;
+    std::atomic_bool finalized{false};
+  };
 
   std::optional<std::string> readGSettingsIconTheme() {
-    GSettings* settings = iconSettings();
-    if (settings == nullptr) {
+    IconSettings owner;
+    if (owner.settings == nullptr) {
       return std::nullopt;
     }
 
-    gchar* raw = g_settings_get_string(settings, "icon-theme");
+    owner.dispatchPending();
+    std::unique_ptr<gchar, decltype(&g_free)> raw(g_settings_get_string(owner.settings, "icon-theme"), &g_free);
     if (raw == nullptr) {
       return std::nullopt;
     }
 
-    std::string value = trimAndUnquote(raw);
-    g_free(raw);
+    std::string value = trimAndUnquote(raw.get());
     if (value.empty()) {
       return std::nullopt;
     }
@@ -439,24 +461,47 @@ namespace {
     return plan;
   }
 
-  // Requires state.mutex to be held.
-  void ensureThemeStateLocked(IconThemeState& state) {
+  void ensureThemeState(IconThemeState& state) {
+    {
+      std::scoped_lock lock(state.mutex);
+      if (state.initialized) {
+        return;
+      }
+    }
+    // Slow metadata reads must never hold the lock used by UI-thread readers.
+    auto plan = buildThemePlan();
+    std::scoped_lock lock(state.mutex);
     if (!state.initialized) {
-      state.plan = buildThemePlan();
+      state.plan = std::move(plan);
       state.initialized = true;
     }
   }
 
 } // namespace
 
-IconResolver::IconResolver(bool cacheMissing) : m_cacheMissing(cacheMissing) { rebuild(); }
+IconResolver::IconResolver(bool cacheMissing, std::size_t cacheLimit)
+    : m_cacheMissing(cacheMissing), m_cacheLimit(cacheLimit) {
+  rebuild();
+}
 
 IconResolver::IconResolver() : IconResolver(false) {}
 
 bool IconResolver::checkThemeChanged() {
   auto& state = iconThemeState();
-  std::scoped_lock lock(state.mutex);
+  std::uint64_t generation;
+  bool initialized;
+  {
+    std::scoped_lock lock(state.mutex);
+    generation = state.generation;
+    initialized = state.initialized;
+  }
   IconThemePlan next = buildThemePlan();
+  std::scoped_lock lock(state.mutex);
+  // Another initialization/check won while metadata was being read. Do not
+  // overwrite its newer published plan with this potentially stale result.
+  if (state.generation != generation || state.initialized != initialized) {
+    return false;
+  }
   if (!state.initialized) {
     state.plan = std::move(next);
     state.initialized = true;
@@ -473,22 +518,22 @@ bool IconResolver::checkThemeChanged() {
 
 std::uint64_t IconResolver::themeGeneration() {
   auto& state = iconThemeState();
+  ensureThemeState(state);
   std::scoped_lock lock(state.mutex);
-  ensureThemeStateLocked(state);
   return state.generation;
 }
 
 std::string IconResolver::activeThemeName() {
   auto& state = iconThemeState();
+  ensureThemeState(state);
   std::scoped_lock lock(state.mutex);
-  ensureThemeStateLocked(state);
   return state.plan.activeTheme;
 }
 
 void IconResolver::rebuild() {
   auto& state = iconThemeState();
+  ensureThemeState(state);
   std::scoped_lock lock(state.mutex);
-  ensureThemeStateLocked(state);
   m_baseDirs = state.plan.baseDirs;
   m_searchDirs = state.plan.searchDirs;
   m_pixmapDirs = state.plan.pixmapDirs;
@@ -518,6 +563,10 @@ const std::string& IconResolver::resolve(const std::string& iconName, int target
     return m_empty;
   }
   auto icon = findIcon(iconName, targetSize);
+  if (m_cacheLimit != 0 && m_cache.size() + m_missingCache.size() >= m_cacheLimit) {
+    m_cache.clear();
+    m_missingCache.clear();
+  }
   if (icon.empty()) {
     if (canCacheMissing) {
       m_missingCache.emplace(key);

@@ -196,8 +196,8 @@ namespace {
 
   class LauncherResultRow final : public Node {
   public:
-    LauncherResultRow(LauncherListStyle style, AsyncTextureCache* asyncTextures)
-        : m_style(style), m_asyncTextures(asyncTextures) {
+    LauncherResultRow(LauncherListStyle style, AsyncTextureCache* asyncTextures, AsyncIconResolver* icons)
+        : m_style(style), m_asyncTextures(asyncTextures), m_icons(icons) {
       const float iconSize = launcherIconSize(m_style);
       const float gap = (m_style.compact ? Style::spaceSm : Style::spaceMd) * m_style.scale;
       const float paddingV = (m_style.compact ? Style::spaceXs * 0.5F : Style::spaceXs) * m_style.scale;
@@ -311,6 +311,9 @@ namespace {
       const float iconSize = launcherIconSize(m_style);
       m_iconTargetSize = static_cast<int>(std::round(iconSize));
       m_badgeVisible = !result.badge.empty();
+      if (m_iconPath.empty() && m_style.showIcons && !m_badgeVisible && m_icons != nullptr) {
+        m_iconPath = m_icons->resolveOrRequest(result.iconName, m_iconTargetSize);
+      }
       m_rowHeight = height;
 
       setSize(width, height);
@@ -453,6 +456,7 @@ namespace {
     Glyph* m_pinnedGlyph = nullptr;
     Glyph* m_originGlyph = nullptr;
     AsyncTextureCache* m_asyncTextures = nullptr;
+    AsyncIconResolver* m_icons = nullptr;
     std::string m_iconPath;
     std::string m_fallbackGlyph;
     int m_iconTargetSize = 0;
@@ -462,8 +466,8 @@ namespace {
 
   class LauncherAppGridTile final : public Node {
   public:
-    LauncherAppGridTile(LauncherListStyle style, AsyncTextureCache* asyncTextures)
-        : m_style(style), m_asyncTextures(asyncTextures) {
+    LauncherAppGridTile(LauncherListStyle style, AsyncTextureCache* asyncTextures, AsyncIconResolver* icons)
+        : m_style(style), m_asyncTextures(asyncTextures), m_icons(icons) {
       const float gap = Style::spaceXs * m_style.scale;
       const float padding = Style::spaceSm * m_style.scale;
       auto col = ui::column({
@@ -552,6 +556,9 @@ namespace {
       m_fallbackGlyph = result.glyphName.empty() ? "app-window" : result.glyphName;
       const float iconSize = launcherIconSize(m_style);
       m_iconTargetSize = static_cast<int>(std::round(iconSize));
+      if (m_iconPath.empty() && m_style.showIcons && m_icons != nullptr) {
+        m_iconPath = m_icons->resolveOrRequest(result.iconName, m_iconTargetSize);
+      }
 
       setSize(width, height);
       m_col->setSize(width, height);
@@ -674,6 +681,7 @@ namespace {
     Glyph* m_originGlyph = nullptr;
     Label* m_title = nullptr;
     AsyncTextureCache* m_asyncTextures = nullptr;
+    AsyncIconResolver* m_icons = nullptr;
     std::string m_iconPath;
     std::string m_fallbackGlyph;
     int m_iconTargetSize = 0;
@@ -688,7 +696,8 @@ public:
   using SecondaryActivateCallback = std::function<void(std::size_t, float, float)>;
   using ReorderCallback = std::function<void(std::size_t, std::size_t)>;
 
-  LauncherResultAdapter(LauncherListStyle style, AsyncTextureCache* cache) : m_style(style), m_cache(cache) {}
+  LauncherResultAdapter(LauncherListStyle style, AsyncTextureCache* cache, AsyncIconResolver* icons)
+      : m_style(style), m_cache(cache), m_icons(icons) {}
 
   void setListStyle(LauncherListStyle style) { m_style = style; }
   void setResults(const std::vector<LauncherResult>* results) { m_results = results; }
@@ -707,7 +716,7 @@ public:
   [[nodiscard]] std::size_t itemCount() const override { return m_results == nullptr ? 0U : m_results->size(); }
 
   [[nodiscard]] std::unique_ptr<Node> createTile() override {
-    return std::make_unique<LauncherResultRow>(m_style, m_cache);
+    return std::make_unique<LauncherResultRow>(m_style, m_cache, m_icons);
   }
 
   void bindTile(Node& tile, std::size_t index, bool selected, bool hovered) override {
@@ -821,6 +830,7 @@ private:
 
   LauncherListStyle m_style{};
   AsyncTextureCache* m_cache = nullptr;
+  AsyncIconResolver* m_icons = nullptr;
   Renderer* m_renderer = nullptr;
   const std::vector<LauncherResult>* m_results = nullptr;
   ActivateCallback m_onActivate;
@@ -838,7 +848,8 @@ public:
   using SecondaryActivateCallback = std::function<void(std::size_t, float, float)>;
   using ReorderCallback = std::function<void(std::size_t, std::size_t)>;
 
-  LauncherAppGridAdapter(LauncherListStyle style, AsyncTextureCache* cache) : m_style(style), m_cache(cache) {}
+  LauncherAppGridAdapter(LauncherListStyle style, AsyncTextureCache* cache, AsyncIconResolver* icons)
+      : m_style(style), m_cache(cache), m_icons(icons) {}
 
   void setListStyle(LauncherListStyle style) { m_style = style; }
   void setResults(const std::vector<LauncherResult>* results) { m_results = results; }
@@ -857,7 +868,7 @@ public:
   [[nodiscard]] std::size_t itemCount() const override { return m_results == nullptr ? 0U : m_results->size(); }
 
   [[nodiscard]] std::unique_ptr<Node> createTile() override {
-    return std::make_unique<LauncherAppGridTile>(m_style, m_cache);
+    return std::make_unique<LauncherAppGridTile>(m_style, m_cache, m_icons);
   }
 
   void bindTile(Node& tile, std::size_t index, bool selected, bool hovered) override {
@@ -968,6 +979,7 @@ private:
 
   LauncherListStyle m_style{};
   AsyncTextureCache* m_cache = nullptr;
+  AsyncIconResolver* m_icons = nullptr;
   Renderer* m_renderer = nullptr;
   const std::vector<LauncherResult>* m_results = nullptr;
   ActivateCallback m_onActivate;
@@ -980,9 +992,31 @@ private:
 };
 
 LauncherPanel::LauncherPanel(ConfigService* config, AsyncTextureCache* asyncTextures)
-    : m_iconResolver(true), m_config(config), m_asyncTextures(asyncTextures) {}
+    : m_config(config), m_asyncTextures(asyncTextures) {
+  m_iconResolver.setReadyCallback([this]() {
+    if (m_input != nullptr) {
+      refreshResults();
+    }
+  });
+  const std::weak_ptr<int> alive = m_lifetime;
+  m_usageTracker.setLoadedCallback([this, alive]() {
+    if (!alive.expired() && m_input != nullptr) {
+      reapplyCurrentQuery();
+    }
+  });
+  m_desktopEntriesConn = desktopEntriesChanged().connect([this, alive]() {
+    if (!alive.expired() && m_input != nullptr) {
+      reapplyCurrentQuery();
+    }
+  });
+}
 
-LauncherPanel::~LauncherPanel() = default;
+LauncherPanel::~LauncherPanel() {
+  m_lifetime.reset();
+  m_desktopEntriesConn.disconnect();
+  m_usageTracker.setLoadedCallback({});
+  m_iconResolver.setReadyCallback({});
+}
 
 PanelPlacement LauncherPanel::panelPlacement() const noexcept {
   return m_config != nullptr ? m_config->config().shell.panel.launcherPlacement : PanelPlacement::Floating;
@@ -1112,8 +1146,8 @@ void LauncherPanel::create() {
   });
 
   const LauncherListStyle initialStyle = launcherListStyleFrom(m_config, scale, panelCardOpacity());
-  m_listAdapter = std::make_unique<LauncherResultAdapter>(initialStyle, m_asyncTextures);
-  m_gridAdapter = std::make_unique<LauncherAppGridAdapter>(initialStyle, m_asyncTextures);
+  m_listAdapter = std::make_unique<LauncherResultAdapter>(initialStyle, m_asyncTextures, &m_iconResolver);
+  m_gridAdapter = std::make_unique<LauncherAppGridAdapter>(initialStyle, m_asyncTextures, &m_iconResolver);
   m_listAdapter->setResults(&m_results);
   m_gridAdapter->setResults(&m_results);
   const auto onActivate = [this](std::size_t index) { activateAt(index); };
@@ -1380,8 +1414,8 @@ void LauncherPanel::onOpen(std::string_view context) {
     applyProviderConfig(*provider);
   }
 
-  // Pick up apps installed since the last scan (notably Nix profile swaps that
-  // inotify cannot observe). Cheap stat-only check; only rescans on real change.
+  // Queue a background source check (including Nix profile symlink swaps).
+  // Text and glyphs use the published catalog immediately while IO completes.
   refreshDesktopEntriesIfSourcesChanged();
 
   m_categoryFilterVisible = m_config != nullptr && m_config->config().shell.launcher.categories;
@@ -1410,6 +1444,7 @@ void LauncherPanel::onOpen(std::string_view context) {
 }
 
 void LauncherPanel::onClose() {
+  m_iconResolver.cancelPending();
   if (m_actionsMenu != nullptr && m_actionsMenu->isOpen()) {
     m_actionsMenu->close();
   }
@@ -1455,7 +1490,12 @@ void LauncherPanel::onClose() {
   clearReleasedRoot();
 }
 
-void LauncherPanel::onIconThemeChanged() { reapplyCurrentQuery(); }
+void LauncherPanel::onIconThemeChanged() {
+  m_iconResolver.invalidate();
+  if (m_input != nullptr) {
+    reapplyCurrentQuery();
+  }
+}
 
 void LauncherPanel::clearUsage() {
   m_usageTracker.clear();
@@ -1544,8 +1584,10 @@ bool LauncherPanel::handleGlobalKey(std::uint32_t sym, std::uint32_t modifiers, 
 void LauncherPanel::onInputChanged(const std::string& text) {
   const auto desktopVersion = desktopEntriesVersion();
   if (desktopVersion != m_desktopEntriesVersion) {
-    m_iconResolver.invalidateMissingCache();
+    m_iconResolver.invalidate();
     m_desktopEntriesVersion = desktopVersion;
+  } else {
+    m_iconResolver.cancelPending();
   }
 
   m_query = text;
@@ -1651,23 +1693,9 @@ void LauncherPanel::onInputChanged(const std::string& text) {
     }
   }
 
-  const int iconTargetSize = static_cast<int>(
-      std::round(launcherIconSize(launcherListStyleFrom(m_config, contentScale(), panelCardOpacity())))
-  );
-  for (auto& result : m_allResults) {
-    if (result.iconPath.empty() && !result.iconName.empty()) {
-      const std::string& resolved = m_iconResolver.resolve(result.iconName, iconTargetSize);
-      if (!resolved.empty()) {
-        result.iconPath = resolved;
-      } else if (result.iconName != "application-x-executable") {
-        const std::string& fallback = m_iconResolver.resolve("application-x-executable", iconTargetSize);
-        if (!fallback.empty()) {
-          result.iconPath = fallback;
-        }
-      }
-      result.iconName.clear();
-    }
-  }
+  // Virtualized row/grid binding requests metadata only for visible tiles and
+  // overscan. Keep names on results so theme/catalog invalidation can re-resolve
+  // them; cached metadata or fallback glyphs render without filesystem lookup.
 
   updatePinnedApplicationState();
 
@@ -1962,7 +1990,7 @@ void LauncherPanel::refreshResults() {
   }
   bindDetailResult();
   applyEmptyState();
-  if(PanelManager::instance().isOpenPanel("launcher"))
+  if (PanelManager::instance().isOpenPanel("launcher"))
     PanelManager::instance().relayoutActivePanelPreferredSize();
 }
 

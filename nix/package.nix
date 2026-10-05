@@ -90,6 +90,7 @@ lib.warnIf cudaSupport
       meson
       ninja
       pkg-config
+      (lib.getDev glib)
       wayland-scanner
       jemalloc
       makeWrapper
@@ -139,7 +140,7 @@ lib.warnIf cudaSupport
     buildPhase = ''
       runHook preBuild
       if ninja -t targets all | grep '^material_preview_test:' >/dev/null; then
-        ninja -j"$NIX_BUILD_CORES" noctalia slider_preview_test material_preview_test process_test plugin_process_test desktop_entry_launch_test
+        ninja -j"$NIX_BUILD_CORES" noctalia slider_preview_test material_preview_test process_test plugin_process_test desktop_entry_launch_test desktop_entry_async_test desktop_entry_localization_test launcher_async_metadata_test launcher_usage_async_test gschemas.compiled
       else
         # The greeter derives this package with the shell test suite disabled.
         ninja -j"$NIX_BUILD_CORES"
@@ -149,7 +150,7 @@ lib.warnIf cudaSupport
     doCheck = true;
     checkPhase = ''
       runHook preCheck
-      meson test --no-rebuild --print-errorlogs slider_preview material_preview process plugin_process desktop_entry_launch
+      meson test --no-rebuild --print-errorlogs --num-processes 1 slider_preview material_preview process plugin_process desktop_entry_launch desktop_entry_async desktop_entry_localization launcher_async_metadata launcher_usage_async
       runHook postCheck
     '';
     installPhase = ''

@@ -3,15 +3,33 @@
 #include "system/desktop_entry.h"
 #include "tests/test_check.h"
 
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <poll.h>
 #include <ranges>
 #include <string>
 #include <string_view>
 #include <unistd.h>
 
 namespace {
+
+  template <typename Predicate> void waitForCatalog(Predicate ready) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (!ready() && std::chrono::steady_clock::now() < deadline) {
+      pollfd completion{.fd = desktopEntryWatchFd(), .events = POLLIN, .revents = 0};
+      (void)::poll(&completion, 1, 20);
+      checkDesktopEntryReload();
+    }
+    TEST_CHECK(ready());
+  }
+
+  void setLanguageAndWait(std::string_view language) {
+    const auto version = desktopEntriesVersion();
+    setDesktopEntryLanguage(language);
+    waitForCatalog([version] { return desktopEntriesVersion() > version; });
+  }
 
   const DesktopEntry& findEntry(std::string_view id) {
     const auto& entries = desktopEntries();
@@ -65,9 +83,14 @@ int main(int argc, char* argv[]) {
   TEST_CHECK(i18n::Service::instance().language() == "zh-Hans");
   TEST_CHECK(i18n::Service::instance().requestedLanguage() == "zh-CN");
   setDesktopEntryLanguage(i18n::Service::instance().requestedLanguage());
+  waitForCatalog([] {
+    const auto& entries = desktopEntries();
+    const auto match = std::ranges::find(entries, "noctalia-locale-probe", &DesktopEntry::id);
+    return match != entries.end() && match->name == "软件";
+  });
   TEST_CHECK(findEntry("noctalia-locale-probe").name == "软件");
 
-  setDesktopEntryLanguage("en");
+  setLanguageAndWait("en");
   TEST_CHECK(findEntry("noctalia-locale-probe").name == "Disk Locale Probe");
 
   AppProvider provider(nullptr, nullptr);
@@ -76,14 +99,14 @@ int main(int argc, char* argv[]) {
   TEST_CHECK(findResult(translatedSearch, "Disk Locale Probe").id == (applications / "noctalia-locale-probe.desktop"));
 
   const std::uint64_t englishVersion = desktopEntriesVersion();
-  setDesktopEntryLanguage("ru");
+  setLanguageAndWait("ru");
   const DesktopEntry& russian = findEntry("noctalia-locale-probe");
   TEST_CHECK(desktopEntriesVersion() > englishVersion);
   TEST_CHECK(russian.name == "Диски Locale Probe");
   TEST_CHECK(russian.genericName == "Дисковая утилита");
   TEST_CHECK(russian.keywords == "диск;хранилище;");
 
-  setDesktopEntryLanguage("pt-BR");
+  setLanguageAndWait("pt-BR");
   TEST_CHECK(findEntry("noctalia-locale-probe").name == "Discos Locale Probe");
 
   fs::remove_all(root);

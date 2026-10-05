@@ -3,11 +3,15 @@
 #include "core/inotify/inotify.h"
 #include "core/log.h"
 #include "i18n/language_tag.h"
+#include "system/desktop_entry_cache.h"
 #include "util/string_utils.h"
 
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cerrno>
+#include <chrono>
+#include <condition_variable>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -15,7 +19,10 @@
 #include <mutex>
 #include <optional>
 #include <string_view>
+#include <sys/eventfd.h>
 #include <sys/stat.h>
+#include <system_error>
+#include <thread>
 #include <unistd.h>
 #include <unordered_map>
 #include <unordered_set>
@@ -25,13 +32,14 @@ namespace fs = std::filesystem;
 namespace {
 
   constexpr Logger kLog("desktop_entry");
+  using noctalia::detail::DesktopEntryEnvironment;
 
-  bool isUserDesktopEntry(const fs::path& filepath) {
+  bool isUserDesktopEntry(const fs::path& filepath, const DesktopEntryEnvironment& environment) {
     fs::path dataHome;
-    if (const char* configured = std::getenv("XDG_DATA_HOME"); configured != nullptr && configured[0] != '\0') {
-      dataHome = configured;
-    } else if (const char* home = std::getenv("HOME"); home != nullptr && home[0] != '\0') {
-      dataHome = fs::path(home) / ".local/share";
+    if (!environment.dataHome.empty()) {
+      dataHome = environment.dataHome;
+    } else if (!environment.home.empty()) {
+      dataHome = fs::path(environment.home) / ".local/share";
     } else {
       return false;
     }
@@ -42,18 +50,17 @@ namespace {
     return mismatch.in1 == applications.end();
   }
 
-  fs::path resolveExecutable(std::string_view executable) {
+  fs::path resolveExecutable(std::string_view executable, const DesktopEntryEnvironment& environment) {
     const fs::path path(executable);
     if (path.has_parent_path()) {
       return path;
     }
 
-    const char* pathEnv = std::getenv("PATH");
-    if (pathEnv == nullptr || pathEnv[0] == '\0') {
+    if (environment.path.empty()) {
       return {};
     }
 
-    const std::string_view searchPath(pathEnv);
+    const std::string_view searchPath(environment.path);
     std::size_t start = 0;
     while (start <= searchPath.size()) {
       const std::size_t end = searchPath.find(':', start);
@@ -72,7 +79,7 @@ namespace {
     return {};
   }
 
-  bool executableIsAppImage(std::string_view exec, bool resolveFromPath) {
+  bool executableIsAppImage(std::string_view exec, bool resolveFromPath, const DesktopEntryEnvironment& environment) {
     const auto start = exec.find_first_not_of(' ');
     if (start == std::string_view::npos) {
       return false;
@@ -92,7 +99,7 @@ namespace {
 
     const fs::path resolved = executable.has_parent_path()
         ? executable
-        : (resolveFromPath ? resolveExecutable(executable.string()) : fs::path{});
+        : (resolveFromPath ? resolveExecutable(executable.string(), environment) : fs::path{});
     std::ifstream file(resolved, std::ios::binary);
     std::array<char, 10> header{};
     if (!file.read(header.data(), static_cast<std::streamsize>(header.size()))) {
@@ -107,7 +114,7 @@ namespace {
         && header[9] == 'I';
   }
 
-  DesktopEntryOrigin detectOrigin(const fs::path& filepath, bool appImage) {
+  DesktopEntryOrigin detectOrigin(const fs::path& filepath, bool appImage, const DesktopEntryEnvironment& environment) {
     const std::string path = filepath.lexically_normal().string();
     if (path.contains("/flatpak/") && path.contains("/exports/share/applications/")) {
       return DesktopEntryOrigin::Flatpak;
@@ -121,8 +128,8 @@ namespace {
     if (appImage) {
       return DesktopEntryOrigin::AppImage;
     }
-    if (const char* home = std::getenv("HOME"); home != nullptr && home[0] != '\0') {
-      const std::string userApplications = std::string(home) + "/.local/share/applications/";
+    if (!environment.home.empty()) {
+      const std::string userApplications = environment.home + "/.local/share/applications/";
       if (path.starts_with(userApplications)) {
         return DesktopEntryOrigin::User;
       }
@@ -151,14 +158,15 @@ namespace {
     }
   }
 
-  bool
-  shouldShowOnCurrentDesktop(const std::vector<std::string>& onlyShowIn, const std::vector<std::string>& notShowIn) {
+  bool shouldShowOnCurrentDesktop(
+      const std::vector<std::string>& onlyShowIn, const std::vector<std::string>& notShowIn,
+      const DesktopEntryEnvironment& environment
+  ) {
     const auto visibleByDefault = onlyShowIn.empty();
-    const char* currentDesktop = std::getenv("XDG_CURRENT_DESKTOP");
-    if (currentDesktop == nullptr || currentDesktop[0] == '\0') {
+    if (environment.currentDesktop.empty()) {
       return visibleByDefault;
     }
-    std::string_view desktops(currentDesktop);
+    std::string_view desktops(environment.currentDesktop);
     std::size_t start = 0;
     while (start <= desktops.size()) {
       const auto delimiter = desktops.find(':', start);
@@ -240,7 +248,10 @@ namespace {
     return std::string(defaultValue);
   }
 
-  void parseDesktopFile(const fs::path& filepath, std::string_view language, std::vector<DesktopEntry>& entries) {
+  void parseDesktopFile(
+      const fs::path& filepath, std::string_view language, const DesktopEntryEnvironment& environment,
+      std::vector<DesktopEntry>& entries
+  ) {
     std::ifstream file(filepath);
     if (!file.is_open()) {
       kLog.debug("failed to open desktop entry file '{}'", filepath.string());
@@ -406,7 +417,7 @@ namespace {
         || entry.noDisplay
         || entry.hidden
         || entry.name.empty()
-        || !shouldShowOnCurrentDesktop(onlyShowIn, notShowIn)) {
+        || !shouldShowOnCurrentDesktop(onlyShowIn, notShowIn, environment)) {
       return;
     }
 
@@ -438,8 +449,11 @@ namespace {
     entry.startupWmClassLower = StringUtils::toLower(entry.startupWmClass);
     entry.idLower = StringUtils::toLower(entry.id);
     entry.execLower = StringUtils::toLower(entry.exec);
-    entry.origin =
-        detectOrigin(filepath, hasAppImageMetadata || executableIsAppImage(entry.exec, isUserDesktopEntry(filepath)));
+    entry.origin = detectOrigin(
+        filepath,
+        hasAppImageMetadata || executableIsAppImage(entry.exec, isUserDesktopEntry(filepath, environment), environment),
+        environment
+    );
 
     // Build actions in the declared order.
     for (const auto& id : actionOrder) {
@@ -460,7 +474,7 @@ namespace {
     entries.push_back(std::move(entry));
   }
 
-  std::vector<std::string> xdgDataDirs() {
+  std::vector<std::string> xdgDataDirs(const DesktopEntryEnvironment& environment) {
     std::vector<std::string> dirs;
     std::unordered_set<std::string> seen;
 
@@ -473,19 +487,14 @@ namespace {
       }
     };
 
-    const char* home = std::getenv("XDG_DATA_HOME");
-    if (home != nullptr && home[0] != '\0') {
-      appendDir(home);
-    } else {
-      const char* userHome = std::getenv("HOME");
-      if (userHome != nullptr) {
-        appendDir(std::string(userHome) + "/.local/share");
-      }
+    if (!environment.dataHome.empty()) {
+      appendDir(environment.dataHome);
+    } else if (!environment.home.empty()) {
+      appendDir(environment.home + "/.local/share");
     }
 
-    const char* dataDirs = std::getenv("XDG_DATA_DIRS");
-    if (dataDirs != nullptr && dataDirs[0] != '\0') {
-      std::string_view sv(dataDirs);
+    if (!environment.dataDirs.empty()) {
+      std::string_view sv(environment.dataDirs);
       std::size_t start = 0;
       while (start < sv.size()) {
         auto colon = sv.find(':', start);
@@ -505,165 +514,168 @@ namespace {
     return dirs;
   }
 
-  class DesktopEntryCache {
-  public:
-    DesktopEntryCache() = default;
+  std::vector<DesktopEntry> scanInEnvironment(const DesktopEntryEnvironment& environment, std::string_view language) {
+    std::vector<DesktopEntry> entries;
 
-    ~DesktopEntryCache() { clearWatches(); }
+    // Track seen IDs to deduplicate (first occurrence wins per XDG spec).
+    // Hidden/NoDisplay files still claim their ID so user-local overrides can
+    // suppress lower-priority system entries.
+    std::unordered_set<std::string> seenIds;
 
-    const std::vector<DesktopEntry>& entries() {
-      refreshIfNeeded();
-      return *m_entries;
-    }
-
-    // Worker-thread-safe shared snapshot. Deliberately non-refreshing:
-    // freshness stays driven by the main thread's poll/reload path; this only
-    // synchronizes against the reload swap.
-    std::shared_ptr<const std::vector<DesktopEntry>> entriesSnapshot() const {
-      std::scoped_lock lock(m_entriesMutex);
-      return m_entries;
-    }
-
-    std::uint64_t version() {
-      refreshIfNeeded();
-      return m_version;
-    }
-
-    int watchFd() const noexcept { return m_inotify.fd(); }
-
-    void checkSourcesChanged() {
-      if (computeSourceSignature() != m_sourceSignature) {
-        kLog.debug("desktop entry source signature changed; marking cache dirty");
-        m_dirty = true;
-      }
-    }
-
-    void checkReload() {
-      if (m_inotify.fd() < 0) {
-        return;
+    for (const auto& dataDir : xdgDataDirs(environment)) {
+      fs::path appDir = fs::path(dataDir) / "applications";
+      std::error_code ec;
+      if (!fs::is_directory(appDir, ec)) {
+        continue;
       }
 
-      bool changed = false;
-      m_inotify.drain([this, &changed](const inotify_event* event) {
-        if ((event->mask & IN_IGNORED) != 0) {
-          m_watches.erase(event->wd);
-        } else {
-          changed = true;
+      constexpr auto options = fs::directory_options::skip_permission_denied;
+      for (fs::recursive_directory_iterator it(appDir, options, ec), end; it != end; it.increment(ec)) {
+        if (ec) {
+          ec.clear();
+          continue;
         }
-      });
-
-      if (changed) {
-        kLog.debug("desktop entry inotify detected filesystem changes; marking cache dirty");
-        m_dirty = true;
-      }
-    }
-
-    void setLanguage(std::string_view language) {
-      const std::string normalized = i18n::detail::normalizeLanguageTag(language);
-      if (normalized == m_language) {
-        return;
-      }
-      m_language = normalized;
-      m_dirty = true;
-    }
-
-  private:
-    void refreshIfNeeded() {
-      if (!m_dirty) {
-        return;
-      }
-
-      auto scanned = std::make_shared<const std::vector<DesktopEntry>>(scanDesktopEntries(m_language));
-      {
-        std::scoped_lock lock(m_entriesMutex);
-        m_entries = std::move(scanned);
-      }
-      rebuildWatches();
-      m_sourceSignature = computeSourceSignature();
-      m_dirty = false;
-      ++m_version;
-      kLog.debug("refreshed desktop entries: {} apps (version {})", m_entries->size(), m_version);
-    }
-
-    // Signature of the resolved application source directories: canonical path
-    // plus device/inode/mtime. The canonical path and inode change when a Nix
-    // profile generation is swapped; the directory mtime changes when entries
-    // are added or removed in place.
-    std::string computeSourceSignature() const {
-      std::string sig;
-      const char* currentDesktop = std::getenv("XDG_CURRENT_DESKTOP");
-      sig += "xdg_current_desktop=";
-      sig += (currentDesktop != nullptr && currentDesktop[0] != '\0') ? currentDesktop : "<unset>";
-      sig += '\n';
-
-      for (const auto& dataDir : xdgDataDirs()) {
-        const fs::path appDir = fs::path(dataDir) / "applications";
-        std::error_code ec;
-        const fs::path resolved = fs::weakly_canonical(appDir, ec);
-        const std::string path = ec ? appDir.string() : resolved.string();
-
-        sig += path;
-        struct ::stat st{};
-        if (::stat(path.c_str(), &st) == 0) {
-          sig += ':';
-          sig += std::to_string(static_cast<unsigned long long>(st.st_dev));
-          sig += ':';
-          sig += std::to_string(static_cast<unsigned long long>(st.st_ino));
-          sig += ':';
-          sig += std::to_string(static_cast<long long>(st.st_mtim.tv_sec));
-          sig += ':';
-          sig += std::to_string(static_cast<long long>(st.st_mtim.tv_nsec));
-        } else {
-          sig += ":missing";
+        if (!it->is_regular_file(ec)) {
+          ec.clear();
+          continue;
         }
-        sig += '\n';
-      }
-      return sig;
-    }
-
-    void clearWatches() {
-      if (m_inotify.fd() >= 0) {
-        for (const auto& [wd, _] : m_watches)
-          m_inotify.unwatch(wd);
-      }
-      m_watches.clear();
-      m_watchedPaths.clear();
-    }
-
-    void rebuildWatches() {
-      clearWatches();
-
-      if (m_inotify.fd() < 0) {
-        return;
-      }
-
-      for (const auto& dataDir : xdgDataDirs()) {
-        const fs::path appDir = fs::path(dataDir) / "applications";
-        std::error_code ec;
-        if (!fs::is_directory(appDir, ec)) {
+        if (it->path().extension() != ".desktop") {
           continue;
         }
 
-        addWatch(appDir);
-        for (fs::recursive_directory_iterator it(appDir, ec), end; it != end; it.increment(ec)) {
-          if (ec) {
-            ec.clear();
-            continue;
-          }
-          if (it->is_directory(ec) && !ec) {
-            addWatch(it->path());
-          }
+        std::string id = it->path().stem().string();
+        if (!seenIds.insert(id).second) {
+          continue;
         }
+
+        parseDesktopFile(it->path(), language, environment, entries);
       }
     }
 
-    void addWatch(const fs::path& path) {
-      const auto key = path.string();
-      if (!m_watchedPaths.insert(key).second) {
+    // Sort by name for consistent ordering
+    std::ranges::sort(entries, {}, &DesktopEntry::nameLower);
+
+    return entries;
+  }
+
+} // namespace
+
+noctalia::detail::DesktopEntryEnvironment noctalia::detail::DesktopEntryEnvironment::capture() {
+  const auto copy = [](const char* name) {
+    const char* value = std::getenv(name);
+    return value != nullptr ? std::string(value) : std::string{};
+  };
+  return {
+      .home = copy("HOME"),
+      .path = copy("PATH"),
+      .dataHome = copy("XDG_DATA_HOME"),
+      .dataDirs = copy("XDG_DATA_DIRS"),
+      .currentDesktop = copy("XDG_CURRENT_DESKTOP"),
+  };
+}
+
+struct noctalia::detail::DesktopEntryCache::Impl {
+  struct Request {
+    DesktopEntryEnvironment environment;
+    std::string language;
+    std::uint64_t generation = 1;
+    bool force = true;
+  };
+  struct Result {
+    std::shared_ptr<const std::vector<DesktopEntry>> entries;
+    std::uint64_t generation;
+  };
+
+  Impl(DesktopEntryEnvironment environment, std::string_view language, std::function<void()> beforeRefresh)
+      : latest{std::move(environment), i18n::detail::normalizeLanguageTag(language)}, pending(latest),
+        notifyFd(::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC)), beforeRefresh(std::move(beforeRefresh)),
+        worker([this] { workerLoop(); }) {}
+
+  ~Impl() {
+    {
+      std::scoped_lock lock(requestMutex);
+      stopping = true;
+    }
+    wake.notify_one();
+    // A filesystem syscall can block in the kernel. Join ensures the worker
+    // never outlives its state; the service manager still bounds process stop.
+    worker.join();
+    if (notifyFd >= 0) {
+      ::close(notifyFd);
+    }
+  }
+
+  void requestRefresh(DesktopEntryEnvironment environment, bool force) {
+    {
+      std::scoped_lock lock(requestMutex);
+      latest.environment = std::move(environment);
+      queueLocked(force);
+    }
+    wake.notify_one();
+  }
+
+  void setLanguage(std::string_view language) {
+    const auto normalized = i18n::detail::normalizeLanguageTag(language);
+    {
+      std::scoped_lock lock(requestMutex);
+      if (latest.language == normalized) {
         return;
       }
+      latest.language = normalized;
+      queueLocked(true);
+    }
+    wake.notify_one();
+  }
 
-      constexpr std::uint32_t kMask = IN_CREATE
+  void queueLocked(bool force) {
+    ++latest.generation;
+    latest.force = force || (pending.has_value() && pending->force);
+    pending = latest; // replace, never append: one latest request is enough
+  }
+
+  static std::string sourceSignature(const DesktopEntryEnvironment& environment) {
+    std::string signature = "xdg_current_desktop=" + environment.currentDesktop + '\n';
+    for (const auto& dataDir : xdgDataDirs(environment)) {
+      const fs::path appDir = fs::path(dataDir) / "applications";
+      std::error_code ec;
+      const fs::path resolved = fs::weakly_canonical(appDir, ec);
+      const std::string path = ec ? appDir.string() : resolved.string();
+      signature += path;
+      struct ::stat st{};
+      if (::stat(path.c_str(), &st) == 0) {
+        signature += ':' + std::to_string(static_cast<unsigned long long>(st.st_dev));
+        signature += ':' + std::to_string(static_cast<unsigned long long>(st.st_ino));
+        signature += ':' + std::to_string(static_cast<long long>(st.st_mtim.tv_sec));
+        signature += ':' + std::to_string(static_cast<long long>(st.st_mtim.tv_nsec));
+      } else {
+        signature += ":missing";
+      }
+      signature += '\n';
+    }
+    return signature;
+  }
+
+  static bool drainChanges(Inotify& inotify) {
+    bool changed = false;
+    inotify.drain([&changed](const inotify_event*) { changed = true; });
+    return changed;
+  }
+
+  static void rebuildWatches(Inotify& inotify, std::vector<int>& watches, const DesktopEntryEnvironment& environment) {
+    for (const auto wd : watches) {
+      inotify.unwatch(wd);
+    }
+    watches.clear();
+    if (inotify.fd() < 0) {
+      return;
+    }
+    std::unordered_set<std::string> watchedPaths;
+    const auto add = [&](const fs::path& path) {
+      const auto key = path.string();
+      if (!watchedPaths.insert(key).second) {
+        return;
+      }
+      constexpr std::uint32_t mask = IN_CREATE
           | IN_DELETE
           | IN_MOVED_FROM
           | IN_MOVED_TO
@@ -671,86 +683,209 @@ namespace {
           | IN_DELETE_SELF
           | IN_MOVE_SELF
           | IN_ATTRIB;
-      const auto wd = m_inotify.watch(key.c_str(), kMask);
-      if (wd.has_value()) {
-        m_watches[wd.value()] = key;
+      if (const auto wd = inotify.watch(path, mask)) {
+        watches.push_back(*wd);
       } else {
         kLog.warn("failed to watch desktop entry directory '{}'", key);
       }
+    };
+    for (const auto& dataDir : xdgDataDirs(environment)) {
+      const fs::path appDir = fs::path(dataDir) / "applications";
+      std::error_code ec;
+      if (!fs::is_directory(appDir, ec)) {
+        continue;
+      }
+      add(appDir);
+      constexpr auto options = fs::directory_options::skip_permission_denied;
+      for (fs::recursive_directory_iterator it(appDir, options, ec), end; it != end; it.increment(ec)) {
+        if (ec) {
+          ec.clear();
+          continue;
+        }
+        if (it->is_directory(ec) && !ec) {
+          add(it->path());
+        }
+        ec.clear();
+      }
     }
-
-    std::shared_ptr<const std::vector<DesktopEntry>> m_entries = std::make_shared<std::vector<DesktopEntry>>();
-    mutable std::mutex m_entriesMutex; // guards the m_entries swap against entriesSnapshot() readers
-    std::uint64_t m_version = 0;
-    Inotify m_inotify;
-    bool m_dirty = true;
-    std::unordered_map<int, std::string> m_watches;
-    std::unordered_set<std::string> m_watchedPaths;
-    std::string m_sourceSignature;
-    std::string m_language;
-  };
-
-  DesktopEntryCache& cache() {
-    static DesktopEntryCache instance;
-    return instance;
   }
 
+  void notify() const {
+    if (notifyFd < 0) {
+      return;
+    }
+    const std::uint64_t value = 1;
+    while (::write(notifyFd, &value, sizeof(value)) < 0 && errno == EINTR) {
+    }
+  }
+
+  void workerLoop() {
+    // Inotify creation, watch mutations and event draining all stay here. The
+    // main poll source watches only our completion eventfd.
+    Inotify inotify;
+    std::vector<int> watches;
+    std::shared_ptr<const std::vector<DesktopEntry>> scanned;
+    DesktopEntryEnvironment scannedEnvironment;
+    std::string scannedLanguage;
+    std::string signature;
+    bool needsScan = true;
+    for (;;) {
+      std::optional<Request> request;
+      {
+        std::unique_lock lock(requestMutex);
+        wake.wait_for(lock, std::chrono::milliseconds(250), [this] { return stopping || pending.has_value(); });
+        if (stopping) {
+          return;
+        }
+        request = std::move(pending);
+        pending.reset();
+      }
+      try {
+        if (!request) {
+          if (drainChanges(inotify)) {
+            std::scoped_lock lock(requestMutex);
+            queueLocked(true);
+          }
+          continue;
+        }
+        if (beforeRefresh) {
+          beforeRefresh();
+        }
+        // Never hold requestMutex or entriesMutex across filesystem work.
+        const auto before = sourceSignature(request->environment);
+        const bool changed = drainChanges(inotify);
+        if (needsScan
+            || request->force
+            || changed
+            || before != signature
+            || request->environment != scannedEnvironment
+            || request->language != scannedLanguage) {
+          rebuildWatches(inotify, watches, request->environment);
+          // Discard notifications caused by removing/replacing old watches.
+          // New watches are installed before the scan to catch in-place edits.
+          (void)drainChanges(inotify);
+          auto entries = std::make_shared<const std::vector<DesktopEntry>>(
+              scanInEnvironment(request->environment, request->language)
+          );
+          const auto after = sourceSignature(request->environment);
+          if (before != after || drainChanges(inotify)) {
+            std::scoped_lock lock(requestMutex);
+            queueLocked(true);
+            continue; // an application source changed during the scan
+          }
+          scanned = std::move(entries);
+          scannedEnvironment = request->environment;
+          scannedLanguage = request->language;
+          signature = after;
+          needsScan = false;
+        }
+        {
+          std::scoped_lock lock(requestMutex);
+          if (stopping || request->generation != latest.generation) {
+            continue;
+          }
+          completed = Result{scanned, request->generation};
+        }
+        notify();
+      } catch (const std::exception& error) {
+        needsScan = true;
+        try {
+          kLog.warn("desktop entry refresh failed; retaining last catalog: {}", error.what());
+        } catch (...) {
+          // Diagnostics must not turn a recoverable allocation failure fatal.
+        }
+      } catch (...) {
+        needsScan = true;
+        try {
+          kLog.warn("desktop entry refresh failed; retaining last catalog");
+        } catch (...) {
+        }
+      }
+      // Failed scans retry on the next request/event, rather than spinning.
+    }
+  }
+
+  void adopt() {
+    if (notifyFd >= 0) {
+      std::uint64_t value;
+      while (::read(notifyFd, &value, sizeof(value)) > 0 || errno == EINTR) {
+      }
+    }
+    {
+      // Keep generation validation and publication one short transaction. A
+      // worker watch event cannot invalidate the result between these steps.
+      std::scoped_lock requestLock(requestMutex);
+      if (!completed || completed->generation != latest.generation) {
+        completed.reset();
+        return;
+      }
+      auto result = std::move(*completed);
+      completed.reset();
+      std::scoped_lock entriesLock(entriesMutex);
+      if (published == result.entries) {
+        return;
+      }
+      published = std::move(result.entries);
+      ++version;
+    }
+    // Subscribers may request another refresh; no cache mutex is held here.
+    changed.emit();
+  }
+
+  mutable std::mutex entriesMutex;
+  std::shared_ptr<const std::vector<DesktopEntry>> published = std::make_shared<const std::vector<DesktopEntry>>();
+  std::uint64_t version = 0; // main thread only, like published reference getters
+  Signal<> changed;          // main thread only
+  std::mutex requestMutex;
+  std::condition_variable wake;
+  Request latest;
+  std::optional<Request> pending;
+  std::optional<Result> completed;
+  bool stopping = false;
+  int notifyFd;
+  std::function<void()> beforeRefresh;
+  std::thread worker;
+};
+
+namespace noctalia::detail {
+  DesktopEntryCache::DesktopEntryCache(
+      DesktopEntryEnvironment environment, std::string_view language, std::function<void()> beforeRefresh
+  )
+      : m_impl(std::make_unique<Impl>(std::move(environment), language, std::move(beforeRefresh))) {}
+  DesktopEntryCache::~DesktopEntryCache() = default;
+  const std::vector<DesktopEntry>& DesktopEntryCache::entries() const { return *m_impl->published; }
+  std::shared_ptr<const std::vector<DesktopEntry>> DesktopEntryCache::entriesSnapshot() const {
+    std::scoped_lock lock(m_impl->entriesMutex);
+    return m_impl->published;
+  }
+  std::uint64_t DesktopEntryCache::version() const { return m_impl->version; }
+  int DesktopEntryCache::watchFd() const noexcept { return m_impl->notifyFd; }
+  void DesktopEntryCache::checkReload() { m_impl->adopt(); }
+  void DesktopEntryCache::checkSourcesChanged(DesktopEntryEnvironment environment) {
+    m_impl->requestRefresh(std::move(environment), false);
+  }
+  void DesktopEntryCache::setLanguage(std::string_view language) { m_impl->setLanguage(language); }
+  Signal<>& DesktopEntryCache::changed() { return m_impl->changed; }
+} // namespace noctalia::detail
+
+namespace {
+  noctalia::detail::DesktopEntryCache& cache() {
+    static noctalia::detail::DesktopEntryCache instance(DesktopEntryEnvironment::capture());
+    return instance;
+  }
 } // namespace
 
 std::vector<DesktopEntry> scanDesktopEntries(std::string_view language) {
-  std::vector<DesktopEntry> entries;
-
-  // Track seen IDs to deduplicate (first occurrence wins per XDG spec).
-  // Hidden/NoDisplay files still claim their ID so user-local overrides can
-  // suppress lower-priority system entries.
-  std::unordered_set<std::string> seenIds;
-
-  for (const auto& dataDir : xdgDataDirs()) {
-    fs::path appDir = fs::path(dataDir) / "applications";
-    std::error_code ec;
-    if (!fs::is_directory(appDir, ec)) {
-      continue;
-    }
-
-    constexpr auto options = fs::directory_options::skip_permission_denied;
-    for (fs::recursive_directory_iterator it(appDir, options, ec), end; it != end; it.increment(ec)) {
-      if (ec) {
-        ec.clear();
-        continue;
-      }
-      if (!it->is_regular_file(ec)) {
-        ec.clear();
-        continue;
-      }
-      if (it->path().extension() != ".desktop") {
-        continue;
-      }
-
-      std::string id = it->path().stem().string();
-      if (!seenIds.insert(id).second) {
-        continue;
-      }
-
-      parseDesktopFile(it->path(), language, entries);
-    }
-  }
-
-  // Sort by name for consistent ordering
-  std::ranges::sort(entries, {}, &DesktopEntry::nameLower);
-
-  return entries;
+  return scanInEnvironment(DesktopEntryEnvironment::capture(), language);
 }
-
 const std::vector<DesktopEntry>& desktopEntries() { return cache().entries(); }
-
 std::shared_ptr<const std::vector<DesktopEntry>> desktopEntriesSnapshot() { return cache().entriesSnapshot(); }
-
 std::uint64_t desktopEntriesVersion() { return cache().version(); }
-
-void setDesktopEntryLanguage(std::string_view language) { cache().setLanguage(language); }
-
+void setDesktopEntryLanguage(std::string_view language) {
+  cache().checkSourcesChanged(DesktopEntryEnvironment::capture());
+  cache().setLanguage(language);
+}
 int desktopEntryWatchFd() noexcept { return cache().watchFd(); }
-
 void checkDesktopEntryReload() { cache().checkReload(); }
-
-void refreshDesktopEntriesIfSourcesChanged() { cache().checkSourcesChanged(); }
+Signal<>& desktopEntriesChanged() { return cache().changed(); }
+void refreshDesktopEntriesIfSourcesChanged() { cache().checkSourcesChanged(DesktopEntryEnvironment::capture()); }

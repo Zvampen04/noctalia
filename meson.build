@@ -845,6 +845,7 @@ _noctalia_sources = files(
   'src/system/disk_mounts.cpp',
   'src/system/format_units.cpp',
   'src/system/hardware_info.cpp',
+  'src/system/async_icon_resolver.cpp',
   'src/system/icon_resolver.cpp',
   'src/system/internal_app_metadata.cpp',
   'src/system/easyeffects_service.cpp',
@@ -1159,6 +1160,13 @@ install_data(
 )
 
 if build_tests
+  async_metadata_schemas = custom_target('async_metadata_schemas',
+    input: 'tests/async_metadata_schemas/org.gnome.desktop.interface.gschema.xml',
+    output: 'gschemas.compiled',
+    command: [find_program('glib-compile-schemas', required: true),
+      '--strict', '--targetdir=@OUTDIR@',
+      meson.project_source_root() / 'tests/async_metadata_schemas'],
+  )
   _cpp_test_names = [
     'slider_preview',
     'material_preview',
@@ -1197,6 +1205,7 @@ if build_tests
     'cpu_stat',
     'cpu_temp_sensor',
     'desktop_entry_launch',
+    'desktop_entry_async',
     'desktop_entry_localization',
     'disk_mounts',
     'dock_edge_overlap',
@@ -1223,6 +1232,8 @@ if build_tests
     'input_password_mode',
     'input_readline_shortcuts',
     'ipc_service',
+    'launcher_async_metadata',
+    'launcher_usage_async',
     'jxl_decoder',
     'kde_color_scheme',
     'keyboard_layout_label',
@@ -1318,7 +1329,15 @@ if build_tests
     elif test_name == 'i18n_supported_languages'
       test_args = [meson.project_source_root() / 'assets' / 'translations']
     endif
-    test(test_name, test_exe, args: test_args)
+    if test_name == 'launcher_async_metadata'
+      metadata_env = environment()
+      metadata_env.set('GSETTINGS_SCHEMA_DIR', meson.current_build_dir())
+      metadata_env.set('GSETTINGS_BACKEND', 'memory')
+      test(test_name, test_exe, args: test_args, env: metadata_env,
+        depends: async_metadata_schemas)
+    else
+      test(test_name, test_exe, args: test_args)
+    endif
   endforeach
 
   custom_effect_gl_exe = executable('custom_effect_gl_test',

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <unordered_map>
@@ -17,7 +18,7 @@ struct IconSearchDir {
 class IconResolver {
 public:
   IconResolver();
-  explicit IconResolver(bool cacheMissing);
+  explicit IconResolver(bool cacheMissing, std::size_t cacheLimit = 0);
 
   // targetSize is the intended on-screen pixel size. When > 0, a vector (SVG)
   // icon is preferred and, among bitmaps, the smallest theme size that is still
@@ -44,4 +45,5 @@ private:
   std::string m_empty;
   std::uint64_t m_generation = 0;
   bool m_cacheMissing = false;
+  std::size_t m_cacheLimit = 0; // zero preserves the existing unlimited cache
 };
