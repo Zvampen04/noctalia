@@ -1306,6 +1306,7 @@ if build_tests
     'string_utils',
     'surface_blur_region',
     'system_monitor_service',
+    'system_update_status',
     'taskbar_widget',
     'template_apply_notify',
     'transient_activity',

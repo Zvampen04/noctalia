@@ -1,4 +1,5 @@
 #include "shell/bar/widgets/control_center_widget.h"
+#include "shell/bar/widgets/system_update_status.h"
 
 #include "core/files/file_watcher.h"
 #include "dbus/network/inetwork_service.h"
@@ -34,25 +35,6 @@ namespace {
     if (!input) return nlohmann::json::object();
     try { return nlohmann::json::parse(input); } catch (...) { return nlohmann::json::object(); }
   }
-
-  bool sourceRequiresReboot(const nlohmann::json& source) {
-    return source.is_object() && (source.value("reboot_required", false)
-        || (source.contains("activation") && source["activation"].is_object()
-            && source["activation"].value("reboot_required", false)));
-  }
-
-  bool hasActionableItems(const nlohmann::json& source, bool settled) {
-    if (!source.contains("items") || !source["items"].is_array()) return false;
-    const auto now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
-    for (const auto& item : source["items"]) {
-      if (!item.is_object()) continue;
-      const auto state = item.value("status", std::string{});
-      if (state == "deferred" && item.value("deferred_until_epoch", std::int64_t{now + 1}) <= now) return true;
-      if (!settled && (state == "available" || state == "selected" || state == "accepted" || state == "staged"))
-        return true;
-    }
-    return false;
-  }
 }
 
 ControlCenterWidget::ControlCenterWidget(
@@ -87,24 +69,8 @@ void ControlCenterWidget::create() {
 
   setRoot(std::move(area));
   if (consumesSystemUpdates(m_iconSource, m_glyph != nullptr)) {
-    const auto* cache = std::getenv("XDG_CACHE_HOME");
-    const auto* home = std::getenv("HOME");
-    m_updateColorsPath = std::string(
-                             cache && *cache ? cache
-                                 : home      ? std::string(home) + "/.cache"
-                                             : "/tmp"
-                         )
-        + "/noctalia/system-updates-colors.json";
     refreshSystemUpdateState();
     if (m_fileWatcher != nullptr) {
-      m_updateWatchIds[3] = m_fileWatcher->watch(
-          m_updateColorsPath,
-          [this] {
-            refreshSystemUpdateState();
-            requestUpdate();
-          },
-          FileWatcher::WatchTrigger::WriteCompleted
-      );
       for (std::size_t i = 0; i < kSystemUpdatePaths.size(); ++i) {
         m_updateWatchIds[i] = m_fileWatcher->watch(
             std::filesystem::path(kSystemUpdatePaths[i]), [this] { refreshSystemUpdateState(); requestUpdate(); },
@@ -119,17 +85,8 @@ void ControlCenterWidget::refreshSystemUpdateState() {
   const auto status = readJsonFile(kSystemUpdatePaths[0]);
   const auto session = readJsonFile(kSystemUpdatePaths[1]);
   const auto prompt = readJsonFile(kSystemUpdatePaths[2]);
-  const auto colors = readJsonFile(m_updateColorsPath);
-  if (colors.contains("success") && colors["success"].is_string())
-    m_updateSuccessColor = colorSpecFromConfigString(colors["success"].get<std::string>(), "system-update success");
-  const auto state = status.value("status", std::string{});
-  const auto phase = status.value("phase", std::string{});
-  const bool settled = state == "success"
-      && (phase == "up-to-date" || phase == "no-changes" || phase == "switched" || phase == "completed");
-  const bool attention = state == "failed" || sourceRequiresReboot(status) || sourceRequiresReboot(session)
-      || !prompt.empty() || (state == "success" && (phase == "staged" || phase == "scheduled"))
-      || hasActionableItems(status, settled) || (!status.contains("items") && hasActionableItems(session, settled));
-  m_updateState = state == "running" ? UpdateState::Unknown : attention ? UpdateState::Attention : state == "success" ? UpdateState::Current : UpdateState::Unknown;
+  const auto now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+  m_updateState = m_updateTracker.update(status, session, prompt, now);
 }
 
 void ControlCenterWidget::doLayout(Renderer& renderer, float /*containerWidth*/, float /*containerHeight*/) {
@@ -159,9 +116,7 @@ void ControlCenterWidget::doUpdate(Renderer& /*renderer*/) {
     m_glyph->setGlyph("refresh");
     // Dynamic status colors must not be replaced by a static capsule foreground.
     m_glyph->setColor(
-        m_updateState == UpdateState::Current
-            ? m_updateSuccessColor
-            : colorSpecFromRole(m_updateState == UpdateState::Attention ? ColorRole::Error : ColorRole::OnSurface)
+        colorSpecFromConfigString(std::string(system_update_status::color(m_updateState)), "system updates")
     );
   }
 }

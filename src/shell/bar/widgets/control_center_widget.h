@@ -2,6 +2,7 @@
 
 #include "shell/bar/widget.h"
 #include "shell/bar/widget_custom_image.h"
+#include "shell/bar/widgets/system_update_status.h"
 
 #include <cstdint>
 #include <array>
@@ -53,11 +54,9 @@ private:
   IconSource m_iconSource = IconSource::Static;
   INetworkService* m_network = nullptr;
   FileWatcher* m_fileWatcher = nullptr;
-  std::array<std::uint64_t, 4> m_updateWatchIds{};
-  std::string m_updateColorsPath;
-  ColorSpec m_updateSuccessColor = colorSpecFromRole(ColorRole::Primary);
-  enum class UpdateState : std::uint8_t { Unknown, Current, Attention };
-  UpdateState m_updateState = UpdateState::Unknown;
+  std::array<std::uint64_t, 3> m_updateWatchIds{};
+  system_update_status::Tracker m_updateTracker;
+  system_update_status::State m_updateState = system_update_status::State::Unknown;
   Glyph* m_glyph = nullptr;
   Image* m_image = nullptr;
 };
